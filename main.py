@@ -3,7 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from database import SessionLocal, SystemConfig
 from providers import MeiliSearchProvider, QdrantProvider
+from llm_provider import LLMFactory, OpenAIProvider
+import os
 import logging
+
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # Loglama ayarları
 logging.basicConfig(level=logging.INFO)
@@ -20,17 +26,19 @@ app.add_middleware(
 )
 
 MEILI_PROVIDER = MeiliSearchProvider(
-    url='http://localhost:7700', 
-    master_key='masterKey123', 
+    url=os.getenv("MEILI_URL"), 
+    master_key=os.getenv("MEILI_MASTER_KEY"), 
     index_name='auzef_qna_index'
 )
 
 QDRANT_PROVIDER = QdrantProvider(
     host="localhost", 
-    port=6333, 
+    port=int(os.getenv("QDRANT_PORT")), 
     collection_name="auzef_qna_vectors",
     model_name="nezahatkorkmaz/turkce-embedding-bge-m3"
 )
+
+LLM_PROVIDER = LLMFactory.create_provider(os.getenv("LLM_PROVIDER"))
 
 # DB Dependency
 def get_db():
@@ -48,7 +56,7 @@ import time
 
 # Circuit Breaker Durumu
 MEILI_STATUS = {"healthy": True, "last_check": 0}
-CIRCUIT_BREAKER_TIME = 30  # 30 saniye boyunca deneme
+CIRCUIT_BREAKER_TIME = int(os.getenv("CIRCUIT_BREAKER_TIME"))
 
 @app.get("/search")
 async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db)):
@@ -79,11 +87,12 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
             # Devre kesici aktif, Meili'yi pas geç
             logger.info("⚡ Circuit Breaker aktif: MeiliSearch atlanıyor...")
 
+
         # --- ADIM 2: QDRANT (SEMANTIC SEARCH) ---
-        # MeiliSearch zayıf kaldıysa VEYA devre kesici devreye girdiyse buraya gelir.
         try:
             qdrant_hits = QDRANT_PROVIDER.search(q, limit=3)
-            if qdrant_hits and qdrant_hits[0]['score'] > 0.50:
+            # Yüksek güvenli (0.75+) sonuç bulursa LLM'e gitme, direkt cevapla
+            if qdrant_hits and qdrant_hits[0]['score'] > 0.75:
                 return {
                     "source": "qdrant_vector",
                     "status": "success",
@@ -95,16 +104,20 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
             logger.error(f"Qdrant hatası: {str(e)}")
             qdrant_hits = []
 
-        # --- ADIM 3: LLM FALLBACK (OPSİYONEL) ---
-        if is_llm_enabled(db):
-            # Buraya mimarideki LLM Prompt + Context Retrieval mantığı gelecek.
-            # Şimdilik placeholder dönüyoruz.
-            return {
-                "source": "llm",
-                "status": "processing",
-                "message": "Cevap üretiliyor (LLM yakında aktif edilecek)...",
-                "context_used": [h['question'] for h in (meili_hits + qdrant_hits)[:3]]
-            }
+        # --- ADIM 3: LLM FALLBACK (RAG) ---
+        if is_llm_enabled(db) and qdrant_hits:
+            try:
+                answer = LLM_PROVIDER.ask(q, qdrant_hits)
+                return {
+                    "source": "llm",
+                    "status": "success",
+                    "answer": answer,
+                    "question": q,
+                    "context_used": [h['question'] for h in qdrant_hits]
+                }
+            except Exception as e:
+                logger.error(f"LLM Hatası: {str(e)}")
+
 
         # --- ADIM 4: SUGGESTIONS ---
         suggestions = []

@@ -6,3 +6,5 @@ pandas
 openpyxl
 meilisearch
 qdrant-client
+openai
+python-dotenv

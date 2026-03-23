@@ -45,7 +45,7 @@ class QnATag(Base):
 class SystemConfig(Base):                                                                                                                  
     __tablename__ = "system_config"                                                                                                       
     key = Column(String(50), primary_key=True)                                                                                             
-    value = Column(String(255), nullable=False)                                                                                            
+    value = Column(String(255), nullable=True)                                                                                            
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())                                                          
                                                                                                                                            
 # Veritabanı tablolarını oluştur
