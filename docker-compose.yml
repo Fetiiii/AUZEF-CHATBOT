@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL: Verinin asıl sahibi
+  db:
+    image: postgres:15
+    container_name: auzef_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: auzef_bot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2. pgAdmin
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: auzef_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@mail.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+
+  # 3. MeiliSearch: Hızlı anahtar kelime araması
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: auzef_meili
+    restart: always
+    environment:
+      - MEILI_MASTER_KEY=masterKey123 # Production'da bunu güçlendirin
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+
+  # 4. Qdrant: Vektör veri tabanı (Semantic Search)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: auzef_qdrant
+    restart: always
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  meili_data:
+  qdrant_data:
