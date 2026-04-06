@@ -1,0 +1,98 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "defaultProject": "chatbot-web",
+  "projects": {
+    "chatbot-web": {
+      "projectType": "application",
+      "schematics": {
+        "@schematics/angular:component": {
+          "standalone": true
+        }
+      },
+      "root": "",
+      "sourceRoot": "src",
+      "prefix": "app",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:browser",
+          "options": {
+            "outputPath": "dist/chatbot-web",
+            "index": "src/index.html",
+            "main": "src/main.ts",
+            "polyfills": [
+              "zone.js"
+            ],
+            "tsConfig": "tsconfig.app.json",
+            "assets": [
+              "src/assets",
+              "src/favicon.ico"
+            ],
+            "styles": [
+              "src/styles.css",
+              "node_modules/froala-editor/css/froala_editor.pkgd.min.css",
+              "node_modules/froala-editor/css/froala_style.min.css"
+            ],
+            "scripts": [
+              "node_modules/froala-editor/js/froala_editor.pkgd.min.js"
+            ],
+            "allowedCommonJsDependencies": [
+              "froala-editor",
+              "froala-editor/js/froala_editor.pkgd.min.js"
+            ]
+          },
+          "configurations": {
+            "development": {
+              "optimization": false,
+              "buildOptimizer": false,
+              "vendorChunk": true,
+              "extractLicenses": false,
+              "sourceMap": true
+            },
+            "production": {
+              "optimization": true,
+              "buildOptimizer": true,
+              "vendorChunk": false,
+              "extractLicenses": true,
+              "namedChunks": false,
+              "sourceMap": false,
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "2mb",
+                  "maximumError": "5mb"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "6kb",
+                  "maximumError": "10kb"
+                }
+              ],
+              "outputHashing": "all"
+            }
+          },
+          "defaultConfiguration": "development"
+        },
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "options": {
+            "buildTarget": "chatbot-web:build:development",
+            "proxyConfig": "src/proxy.conf.json"
+          },
+          "configurations": {
+            "production": {
+              "buildTarget": "chatbot-web:build:production"
+            },
+            "development": {
+              "buildTarget": "chatbot-web:build:development"
+            }
+          },
+          "defaultConfiguration": "development"
+        }
+      }
+    }
+  },
+  "cli": {
+    "analytics": false
+  }
+}

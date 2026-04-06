@@ -1,0 +1,46 @@
+{
+  "name": "chatbot-web",
+  "version": "4.0.0",
+  "private": true,
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve -o --proxy-config proxy.conf.json",
+    "start:https": "ng serve -o --ssl true --proxy-config proxy.conf.json",
+    "build": "ng build",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test"
+  },
+  "dependencies": {
+    "@angular/animations": "19.2.15",
+    "@angular/cdk": "19.2.15",
+    "@angular/common": "19.2.15",
+    "@angular/compiler": "19.2.15",
+    "@angular/core": "19.2.15",
+    "@angular/forms": "^19.2.15",
+    "@angular/platform-browser": "19.2.15",
+    "@angular/platform-browser-dynamic": "19.2.15",
+    "@angular/router": "19.2.15",
+    "angular-froala-wysiwyg": "^4.7.1",
+    "chart.js": "4.5.1",
+    "froala-editor": "^4.7.1",
+    "ng2-charts": "8.0.0",
+    "rxjs": "7.8.1",
+    "tslib": "2.6.2",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^19.2.15",
+    "@angular/cli": "^19.2.15",
+    "@angular/compiler-cli": "19.2.15",
+    "@tailwindcss/aspect-ratio": "0.4.2",
+    "@tailwindcss/forms": "0.5.9",
+    "@tailwindcss/typography": "0.5.15",
+    "@types/node": "20.11.20",
+    "autoprefixer": "10.4.20",
+    "http-proxy-middleware": "^3.0.5",
+    "postcss": "8.4.47",
+    "tailwindcss": "3.4.10",
+    "typescript": "5.5.4",
+    "webpack-dev-server": "^5.2.2"
+  }
+}

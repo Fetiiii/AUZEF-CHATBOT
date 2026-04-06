@@ -1,0 +1,1 @@
+# AUZEF Çözüm Merkezi — Modern v4\nKurulum: npm install && npm start\n

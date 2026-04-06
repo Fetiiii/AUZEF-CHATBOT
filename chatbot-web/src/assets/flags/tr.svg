@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="14" viewBox="0 0 20 14">
+  <!-- Arka plan -->
+  <rect width="20" height="14" rx="2" fill="#E30A17"></rect>
+
+  <!-- Hilal (beyaz + üstüne kırmızı daire) -->
+  <circle cx="8" cy="7" r="3.5" fill="#FFFFFF"></circle>
+  <circle cx="9" cy="7" r="2.7" fill="#E30A17"></circle>
+
+  <!-- Yıldız -->
+  <polygon fill="#FFFFFF" points="12.8,7 12.2,7.4 12.4,6.7 11.8,6.2 12.6,6.2 12.8,5.5 13.1,6.2 13.9,6.2 13.3,6.7 13.5,7.4"></polygon>
+</svg>

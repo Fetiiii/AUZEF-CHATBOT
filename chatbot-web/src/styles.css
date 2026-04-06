@@ -1,0 +1,1064 @@
+/* ============================================
+   ✅ FROALA (global) — angular.json'a dokunmadan
+   ============================================ */
+@import "froala-editor/css/froala_editor.pkgd.min.css";
+@import "froala-editor/css/froala_style.min.css";
+
+
+/* ================================
+   Global Styles (Tailwind + custom)
+   Modern sidebar + header + utilities
+   ================================ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+
+
+/* ✅ İnce scrollbar – componentlerde ortak kullanım */
+.csm-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, .45) transparent;
+}
+
+.csm-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.csm-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.csm-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, .35);
+  border-radius: 999px;
+}
+
+.csm-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, .55);
+}
+
+/* ---------- CSS Vars ---------- */
+:root {
+  --header-h: 64px;
+  --bottom-nav-h: 60px;
+
+  /* Mor tema tonu (aktif öğeler, light mod segment, fab vb.) */
+  --sidebar-tone: #7c3aed;
+  /* purple-600 */
+}
+
+/* ---------- Base ---------- */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+/* Spacing container */
+.container-p {
+  @apply px-4 py-4 lg:px-8 lg:py-6;
+}
+
+/* Cards */
+.card {
+  @apply bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-100/80 dark:border-gray-700 shadow-card;
+}
+
+/* Links (mobile bottom nav vb.) */
+.link {
+  @apply text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700;
+}
+
+
+
+/* Badges (genel amaçlı) */
+.badge {
+  @apply px-2 py-0.5 rounded text-xs;
+}
+
+.badge-green {
+  @apply bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300;
+}
+
+.badge-yellow {
+  @apply bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300;
+}
+
+.badge-gray {
+  @apply bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200;
+}
+
+.badge-red {
+  @apply bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300;
+}
+
+.badge-blue {
+  @apply bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300;
+}
+
+
+
+
+/* Header yüzeyi */
+.header-surface {
+  @apply bg-white dark:bg-slate-900 shadow-sm border-b border-gray-100 dark:border-slate-800;
+}
+
+/* Sayfa arka planı */
+.content-wrap {
+  @apply bg-gray-50 dark:bg-slate-950;
+}
+
+/* Güvenli boşluklar */
+.safe-main {
+  padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+}
+
+.pt-header {
+  padding-top: calc(var(--header-h) + 24px);
+}
+
+/* Uzun metinler */
+.wrap-any {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+img,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+pre,
+code {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+td,
+th {
+  word-break: break-word;
+}
+
+/* ---------- Theme Segment (header sağ üst) ---------- */
+.segment {
+  @apply inline-flex rounded-lg border border-gray-200 dark:border-slate-700 p-0.5 bg-white dark:bg-slate-900;
+}
+
+.segment button {
+  @apply px-3 py-1.5 text-sm rounded-lg transition;
+}
+
+html:not(.dark) .segment button[aria-pressed="true"] {
+  background: var(--sidebar-tone);
+  color: #fff;
+}
+
+.dark .segment button[aria-pressed="true"] {
+  @apply bg-white text-slate-900;
+}
+
+.segment .icon {
+  @apply h-4 w-4;
+}
+
+/* Dil seçici */
+.langbtn {
+  @apply inline-flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900;
+}
+
+.flag {
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .05);
+}
+
+/* ---------- Scroll-to-top (FAB) ---------- */
+.topbtn {
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, .06);
+  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, .25);
+  transition: background-color .2s ease, color .2s ease, transform .08s ease, filter .2s ease;
+}
+
+html:not(.dark) .topbtn {
+  background: var(--sidebar-tone);
+  color: #fff;
+}
+
+html:not(.dark) .topbtn:hover {
+  filter: brightness(.95);
+}
+
+.dark .topbtn {
+  background: #ffffff;
+  color: #0f172a;
+  border-color: rgba(255, 255, 255, .12);
+}
+
+.dark .topbtn:hover {
+  background: #f1f5f9;
+}
+
+.topbtn:active {
+  transform: scale(.96);
+}
+
+.topbtn:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* ========== SIDEBAR ========== */
+
+/* Arka plan (görsel + mor cam) */
+.sidebar-surface {
+  background-image:
+    linear-gradient(180deg, rgba(88, 28, 135, .92) 0%, rgba(76, 29, 149, .92) 100%),
+    url('/assets/sidebar/istanbul-gate.jpg');
+  background-size: cover;
+  background-position: center;
+  --sidebar-tone: #7c3aed;
+
+  border-right: 1px solid rgba(255, 255, 255, .18);
+}
+
+.dark .sidebar-surface {
+  background-image:
+    linear-gradient(180deg, rgba(2, 6, 23, .90) 0%, rgba(2, 6, 23, .97) 100%),
+    url('/assets/sidebar/istanbul-gate.jpg');
+  background-size: cover;
+  background-position: center;
+
+  border-right: 1px solid rgb(30 41 59);
+}
+
+/* Dar görünümde ikonları tam ortaya al */
+.sidebar-icon-only a,
+.sidebar-icon-only button {
+  justify-content: center !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  gap: 0 !important;
+}
+
+/* Üst kahraman (logo + başlık) */
+.sb-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 16px 22px;
+}
+
+/* LOGO — beyaz boşluk yok, daha büyük */
+.sb-hero-logo {
+  width: 96px;
+  height: 96px;
+  border-radius: 9999px;
+  background: transparent !important;
+  padding: 0 !important;
+  display: block;
+  object-fit: contain;
+  image-rendering: -webkit-optimize-contrast;
+}
+
+/* Collapsed (w-20) modunda otomatik küçült */
+.sb-hero.sb-hero-collapsed .sb-hero-logo {
+  width: 48px;
+  height: 48px;
+}
+
+.sb-hero-title {
+  margin-top: 14px;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: .2px;
+}
+
+.sb-hero.sb-hero-collapsed .sb-hero-title {
+  display: none;
+}
+
+/* === LOGO – no tint (orijinal renk kalsın) === */
+.sb-hero-logo,
+.sb-hero-logo.no-tint {
+  filter: none !important;
+  -webkit-filter: none !important;
+  mix-blend-mode: normal !important;
+  color: initial !important;
+  opacity: 1 !important;
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+}
+
+/* Güvenlik: sidebar içindeki img’lere olası global filtreleri ez */
+.sidebar-surface img.sb-hero-logo {
+  filter: none !important;
+  mix-blend-mode: normal !important;
+}
+
+/* Menü item (ikon kutulu, cam efektli) */
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .06);
+  transition: background .18s ease;
+}
+
+.sidebar-item:hover {
+  background: rgba(255, 255, 255, .10);
+}
+
+/* Aktif görünüm — mor bar */
+.active-sb {
+  background: rgba(124, 58, 237, .85) !important;
+  color: #fff !important;
+  box-shadow: 0 12px 24px rgba(107, 33, 168, .25), inset 0 0 0 1px rgba(255, 255, 255, .12);
+}
+
+/* İkon kutusu */
+.icon-box {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, .25);
+  color: #fff;
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+}
+
+.active-sb .icon-box {
+  background: #fff;
+  color: var(--sidebar-tone);
+}
+
+/* Alt açıklama (gri) */
+.sb-subtext {
+  font-size: 11px;
+  color: rgba(255, 255, 255, .75);
+  line-height: 1.15;
+}
+
+/* Rozetler */
+.badge-circle {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #ef4444;
+  color: #fff;
+}
+
+.badge-pill {
+  margin-left: auto;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff;
+  color: #3b0764;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .12), inset 0 0 0 1px rgba(0, 0, 0, .06);
+}
+
+/* Bölücü (noktalı çizgi) */
+.sb-divider {
+  height: 1px;
+  background-image: repeating-linear-gradient(90deg, rgba(255, 255, 255, .25) 0 12px, transparent 12px 16px);
+  opacity: .9;
+}
+
+/* Aktif kullanıcı yeşil nokta */
+.presence-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #9ca3af;
+  border: 2px solid rgba(46, 16, 101, .9);
+}
+
+/* ✅ Alt menü satırlarını biraz daha ince yap (TEK KOPYA) */
+.sidebar-subitem {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .04);
+}
+
+/* ✅ Alt menü ikon kutusu hafif küçük olsun (TEK KOPYA) */
+.sidebar-subitem .icon-box {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+/* // scroll için  */
+@layer utilities {
+
+  /* Scrollbar'ı gizle ama scroll'u bırak */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ===============================
+   BİLDİRİMLER LİSTESİ (8 satır)
+   =============================== */
+.notifications-body {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+/* ============================================
+   USERWAY → SOL ALT + AUZEF SARI TEMA (FINAL)
+   ============================================ */
+#userwayAccessibilityIcon {
+  @apply fixed left-4 bottom-16 lg:bottom-4 z-[99999] h-11 w-11;
+}
+
+/* ============================================
+   DUYURULAR İÇİN → SAĞ TARAF- DASHBOARD
+   ============================================ */
+
+/* İnce scrollbar (genel) */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.8) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.8);
+  border-radius: 9999px;
+}
+
+/* Scrollbar'ı sola taşı (içerik yönünü bozma) */
+.scroll-left {
+  direction: rtl;
+}
+
+.scroll-left>* {
+  direction: ltr;
+}
+
+/* ============================================
+   CSM MODAL (GLOBAL) - dark/light uyumlu
+   ============================================ */
+.csm-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(8px);
+}
+
+.csm-modal {
+  width: min(860px, 100%);
+  max-height: min(82vh, 760px);
+  overflow: auto;
+
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+
+  background: rgba(15, 23, 42, 0.94);
+  color: rgb(226, 232, 240);
+  box-shadow: 0 18px 55px rgba(2, 6, 23, 0.55);
+
+  padding: 14px;
+}
+
+/* Light mod */
+html:not(.dark) .csm-modal {
+  background: rgba(255, 255, 255, 0.98);
+  color: rgb(15, 23, 42);
+  border-color: rgba(148, 163, 184, 0.35);
+  box-shadow: 0 18px 55px rgba(2, 6, 23, 0.18);
+}
+
+.csm-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.csm-modal-title {
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: 0.2px;
+}
+
+.csm-modal-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.95);
+}
+
+html:not(.dark) .csm-modal-subtitle {
+  color: rgba(100, 116, 139, 0.95);
+}
+
+.csm-modal-close {
+  height: 34px;
+  width: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.csm-modal-close:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.csm-modal-close:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.csm-modal-body {
+  margin-top: 10px;
+}
+
+.csm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* Buttons (global, Tailwind yoksa bile çalışır) */
+.csm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  padding: 9px 12px;
+  border-radius: 10px;
+
+  font-size: 12px;
+  font-weight: 700;
+
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: transparent;
+  cursor: pointer;
+
+  transition: background-color .18s ease, border-color .18s ease, transform .06s ease;
+}
+
+.csm-btn:active {
+  transform: scale(.98);
+}
+
+.csm-btn:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+/* Primary tones */
+.csm-btn-emerald {
+  border-color: rgba(16, 185, 129, 0.65);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.csm-btn-emerald:hover {
+  background: rgba(16, 185, 129, 0.18);
+}
+
+.csm-btn-violet {
+  border-color: rgba(167, 139, 250, 0.6);
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.csm-btn-violet:hover {
+  background: rgba(139, 92, 246, 0.18);
+}
+
+.csm-btn-danger {
+  border-color: rgba(244, 63, 94, 0.6);
+  background: rgba(244, 63, 94, 0.12);
+}
+
+.csm-btn-danger:hover {
+  background: rgba(244, 63, 94, 0.18);
+}
+
+/* Permission list inside modal */
+.csm-perm-list {
+  margin-top: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  padding: 10px;
+  max-height: 46vh;
+  overflow: auto;
+  background: rgba(2, 6, 23, 0.18);
+}
+
+html:not(.dark) .csm-perm-list {
+  background: rgba(241, 245, 249, 0.7);
+}
+
+.csm-perm-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 8px;
+  border-radius: 10px;
+}
+
+.csm-perm-item:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.csm-perm-text {
+  font-size: 12.5px;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Form control baseline (modal input) */
+.csm-input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  padding: 10px 12px;
+  font-size: 13px;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+
+.csm-input:focus {
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.25);
+  border-color: rgba(167, 139, 250, 0.55);
+}
+
+/* Small helper text */
+.csm-hint {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.95);
+}
+
+html:not(.dark) .csm-hint {
+  color: rgba(100, 116, 139, 0.95);
+}
+
+/* ✅ Tarayıcı varsayılan mavi focus kenarlarını kapat (global) */
+:where(input,
+  textarea,
+  select,
+  button,
+  a,
+  [role="button"],
+  [tabindex]):focus {
+  outline: none !important;
+}
+
+/* ✅ Özellikle Chrome/Safari'nin mavi glow'u (box-shadow) */
+:where(input,
+  textarea,
+  select,
+  button):focus {
+  box-shadow: none !important;
+}
+
+/* ✅ Checkbox/Radio gibi native kontrollerde görülen mavi ring/outline */
+:where(input[type="checkbox"], input[type="radio"]):focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* ✅ iOS/Safari bazen iç highlight basar */
+:where(input, textarea, select) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ✅ Edge/IE password reveal ikonunu kapatır (2. göz sorununu çözer) */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none;
+}
+
+
+
+
+/* ============================================
+   CSM REPORTS — scoped (only under .cm-reports)
+   ============================================ */
+.cm-reports .icon-pill {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+/* Dark mode: icon-pill arkaplanı daha dengeli */
+.dark .cm-reports .icon-pill {
+  background: rgba(15, 23, 42, 0.65);
+  border-color: rgba(30, 41, 59, 0.9);
+}
+
+.cm-reports .quickBtn {
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 6px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.6);
+  transition: background-color 160ms ease, border-color 160ms ease, filter 160ms ease;
+}
+
+.cm-reports .quickBtn:hover {
+  background: rgba(248, 250, 252, 1);
+}
+
+.dark .cm-reports .quickBtn {
+  background: rgba(15, 23, 42, 0.65);
+  border-color: rgba(30, 41, 59, 0.9);
+}
+
+.dark .cm-reports .quickBtn:hover {
+  background: rgba(30, 41, 59, 0.55);
+}
+
+.cm-reports .kindDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.8);
+}
+
+/* ============================================
+   CSM REPORTS — compact dropdown (only under .cm-reports)
+   ============================================ */
+.cm-reports app-searchable-dropdown.compact-dd label,
+.cm-reports app-searchable-dropdown.compact-dd .label,
+.cm-reports app-searchable-dropdown.compact-dd .dd-label {
+  font-size: 11px !important;
+  margin-bottom: 4px !important;
+}
+
+/* input/select/button küçült */
+.cm-reports app-searchable-dropdown.compact-dd input,
+.cm-reports app-searchable-dropdown.compact-dd select,
+.cm-reports app-searchable-dropdown.compact-dd button {
+  height: 32px !important;
+  /* h-8 */
+  font-size: 12px !important;
+  line-height: 32px !important;
+}
+
+/* padding sıkılaştır */
+.cm-reports app-searchable-dropdown.compact-dd input,
+.cm-reports app-searchable-dropdown.compact-dd select {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+
+/* ✅ Desktop'ta body scroll yapan sebep: safe-main alt padding.
+   Mobil alt bar için gerekli, ama desktop'ta gereksiz.
+*/
+@media (min-width: 1024px) {
+  .safe-main {
+    padding-bottom: 0 !important;
+  }
+}
+
+
+
+
+
+
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, .55) transparent;
+}
+
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, .45);
+  border-radius: 999px;
+}
+
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, .65);
+}
+
+
+
+/* =========================================================
+   CSM CONTACT MODAL (TECHNICAL SUPPORT / İLETİŞİM)
+   - Component SCSS yok
+   - Sadece bu modalı etkiler (csm-contact-*)
+   ========================================================= */
+
+/* Modal içi genel padding/scroll daha stabil */
+.csm-contact-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 2 kolon grid (ekrandaki gibi) */
+.csm-contact-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .csm-contact-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Kart */
+.csm-contact-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+
+  padding: 14px;
+  border-radius: 12px;
+
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 30px -24px rgba(2, 6, 23, 0.18);
+}
+
+.dark .csm-contact-card {
+  border-color: rgba(51, 65, 85, 0.75);
+  background: rgba(2, 6, 23, 0.18);
+  box-shadow: 0 10px 30px -24px rgba(0, 0, 0, 0.55);
+}
+
+/* İkon balonu */
+.csm-contact-ico {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+
+  background: rgba(148, 163, 184, 0.18);
+  color: rgba(71, 85, 105, 0.95);
+}
+
+.dark .csm-contact-ico {
+  background: rgba(148, 163, 184, 0.12);
+  color: rgba(226, 232, 240, 0.95);
+}
+
+.csm-contact-ico svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Başlık + metin */
+.csm-contact-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.1px;
+  color: rgb(15, 23, 42);
+}
+
+.dark .csm-contact-title {
+  color: rgb(226, 232, 240);
+}
+
+.csm-contact-lines {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  font-size: 12.5px;
+  line-height: 1.25rem;
+  color: rgba(100, 116, 139, 0.95);
+}
+
+.dark .csm-contact-lines {
+  color: rgba(148, 163, 184, 0.95);
+}
+
+/* Kart içi aksiyon link */
+.csm-contact-action {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  font-size: 12px;
+  font-weight: 800;
+  color: rgb(37, 99, 235);
+  text-decoration: none;
+}
+
+.csm-contact-action:hover {
+  text-decoration: underline;
+}
+
+/* Sosyal banner (ekrandaki sağ alttaki gibi) */
+.csm-contact-follow {
+  position: relative;
+  overflow: hidden;
+
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+
+  background: linear-gradient(90deg,
+      rgba(148, 163, 184, 0.18),
+      rgba(148, 163, 184, 0.06));
+}
+
+.dark .csm-contact-follow {
+  border-color: rgba(51, 65, 85, 0.75);
+  background: linear-gradient(90deg,
+      rgba(148, 163, 184, 0.18),
+      rgba(148, 163, 184, 0.06));
+}
+
+.csm-contact-follow-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.csm-contact-socials {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.csm-contact-social-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 10px 30px -24px rgba(2, 6, 23, 0.18);
+
+  color: rgba(15, 23, 42, 0.9);
+  text-decoration: none;
+
+  transition: transform 0.12s ease, filter 0.18s ease, background-color 0.18s ease;
+}
+
+.csm-contact-social-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(0.98);
+}
+
+.dark .csm-contact-social-btn {
+  border-color: rgba(51, 65, 85, 0.75);
+  background: rgba(15, 23, 42, 0.65);
+  color: rgba(226, 232, 240, 0.92);
+}
+
+/* Dünya dekor */
+.csm-contact-world {
+  position: absolute;
+  right: -70px;
+  top: -42px;
+  width: 260px;
+  height: 200px;
+  border-radius: 999px;
+  opacity: 0.18;
+  background: radial-gradient(circle at 30% 30%, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0));
+}
+
+.dark .csm-contact-world {
+  opacity: 0.22;
+}
+
+/* Map */
+.csm-contact-map {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.dark .csm-contact-map {
+  border-color: rgba(51, 65, 85, 0.75);
+  background: rgba(2, 6, 23, 0.18);
+}
+
+.csm-contact-map iframe {
+  width: 100%;
+  height: 340px;
+  border: 0;
+  display: block;
+}
+
+@media (max-width: 640px) {
+  .csm-contact-map iframe {
+    height: 280px;
+  }
+}

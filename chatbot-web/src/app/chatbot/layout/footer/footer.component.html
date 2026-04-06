@@ -1,0 +1,92 @@
+<footer class="lg:hidden fixed inset-x-0 bottom-0 z-40">
+    <nav class="border-t border-slate-200 dark:border-slate-800
+           bg-white/95 dark:bg-slate-950/95 backdrop-blur
+           shadow-[0_-8px_30px_rgba(15,23,42,0.55)]">
+        <div class="flex h-[var(--bottom-nav-h)]">
+
+            <!-- Yeni Talep Oluştur -->
+            <a routerLink="/chatbot/request-create" [routerLinkActiveOptions]="{ exact: true }"
+                routerLinkActive="active" #createRla="routerLinkActive" class="relative flex-1 flex flex-col items-center justify-center px-2
+               transition-colors" [ngClass]="createRla.isActive
+          ? 'text-indigo-700 dark:text-indigo-100 font-semibold bg-indigo-50/95 dark:bg-indigo-500/20'
+          : 'text-slate-500 dark:text-slate-300 font-medium'">
+
+                <!-- Aktif üst çizgi -->
+                <span *ngIf="createRla.isActive" class="absolute top-0 h-0.5 w-10 rounded-b-full
+                 bg-indigo-500 dark:bg-indigo-300">
+                </span>
+
+                <!-- İkon -->
+                <span class="inline-flex items-center justify-center h-7 w-7 rounded-full mb-0.5
+                 transition-colors" [ngClass]="createRla.isActive
+            ? 'bg-indigo-100 dark:bg-indigo-600/40'
+            : 'bg-transparent'">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <circle cx="12" cy="12" r="9"></circle>
+                        <path d="M12 8v8M8 12h8" stroke-linecap="round" />
+                    </svg>
+                </span>
+
+                <!-- Metin -->
+                <span class="leading-none text-[13px]">
+                    {{ i18n.t('chatbot.request-create') }}
+                </span>
+            </a>
+
+            <!-- Taleplerim / Talep Görüntüle -->
+            <a routerLink="/chatbot/request-view" [routerLinkActiveOptions]="{ exact: true }" routerLinkActive="active"
+                #viewRla="routerLinkActive" class="relative flex-1 flex flex-col items-center justify-center px-2
+               transition-colors" [ngClass]="viewRla.isActive
+          ? 'text-indigo-700 dark:text-indigo-100 font-semibold bg-indigo-50/95 dark:bg-indigo-500/20'
+          : 'text-slate-500 dark:text-slate-300 font-medium'">
+
+                <span *ngIf="viewRla.isActive" class="absolute top-0 h-0.5 w-10 rounded-b-full
+                 bg-indigo-500 dark:bg-indigo-300">
+                </span>
+
+                <span class="inline-flex items-center justify-center h-7 w-7 rounded-full mb-0.5
+                 transition-colors" [ngClass]="viewRla.isActive
+            ? 'bg-indigo-100 dark:bg-indigo-600/40'
+            : 'bg-transparent'">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <path d="M5 7h10M5 12h10M5 17h6" stroke-linecap="round" />
+                        <circle cx="18" cy="7" r="2"></circle>
+                    </svg>
+                </span>
+
+                <span class="leading-none text-[13px]">
+                    {{ i18n.t('chatbot.request-view') }}
+                </span>
+            </a>
+
+            <!-- Kullanıcı Yönetimi -->
+            <a routerLink="/chatbot/user-management" [routerLinkActiveOptions]="{ exact: true }"
+                routerLinkActive="active" #userRla="routerLinkActive" class="relative flex-1 flex flex-col items-center justify-center px-2
+               transition-colors" [ngClass]="userRla.isActive
+          ? 'text-indigo-700 dark:text-indigo-100 font-semibold bg-indigo-50/95 dark:bg-indigo-500/20'
+          : 'text-slate-500 dark:text-slate-300 font-medium'">
+
+                <span *ngIf="userRla.isActive" class="absolute top-0 h-0.5 w-10 rounded-b-full
+                 bg-indigo-500 dark:bg-indigo-300">
+                </span>
+
+                <span class="inline-flex items-center justify-center h-7 w-7 rounded-full mb-0.5
+                 transition-colors" [ngClass]="userRla.isActive
+            ? 'bg-indigo-100 dark:bg-indigo-600/40'
+            : 'bg-transparent'">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <path d="M9 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3Z" />
+                        <path d="M17 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3Z" />
+                        <path d="M3 19v-1a4 4 0 0 1 4-4h2" stroke-linecap="round" />
+                        <path d="M13 14h1a4 4 0 0 1 4 4v1" stroke-linecap="round" />
+                    </svg>
+                </span>
+
+                <span class="leading-none text-[13px]">
+                    {{ i18n.t('chatbot.user-management') }}
+                </span>
+            </a>
+
+        </div>
+    </nav>
+</footer>

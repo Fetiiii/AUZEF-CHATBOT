@@ -1,0 +1,30 @@
+<div class="min-h-screen w-full flex content-wrap bg-slate-50 dark:bg-slate-950">
+
+    <!-- SIDEBAR -->
+    <app-chatbot-sidebar [collapsed]="sidebarCollapsed()">
+    </app-chatbot-sidebar>
+
+    <!-- CONTENT alanı -->
+    <div class="flex-1 min-h-screen min-w-0 transition-[margin]" [style.marginLeft]="offsetLeft()">
+
+        <!-- HEADER -->
+        <app-chatbot-header [offsetLeft]="offsetLeft()" (toggleSidebar)="toggleSidebar()">
+        </app-chatbot-header>
+
+        
+
+        <!-- Scroll-to-top -->
+        <button *ngIf="showUp()" (click)="goTop()"
+            class="bg-[#7c3aed] text-white fixed right-4 bottom-16 lg:bottom-4 z-40 h-11 w-11 rounded-full shadow-lg"
+            aria-label="Yukarı çık">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 m-auto" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.5">
+                <path d="m6 15 6-6 6 6"></path>
+            </svg>
+        </button>
+
+        <!-- Mobil alt bar (tab bar) -->
+        <app-chatbot-footer></app-chatbot-footer>
+
+    </div>
+</div>

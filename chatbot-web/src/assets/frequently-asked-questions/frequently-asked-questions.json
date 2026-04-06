@@ -1,0 +1,78 @@
+{
+    "common": [
+        {
+            "id": 1,
+            "question": "Arama nasıl çalışır?",
+            "answer": "Arama; soru, cevap ve etiket alanlarında geçen kelimelere göre filtreleme yapar.",
+            "tags": [
+                "Arama"
+            ],
+            "isPinned": true
+        },
+        {
+            "id": 2,
+            "question": "Sık sorulan sorular içerikleri nasıl güncellenir?",
+            "answer": "Backend olmadan bu içerikler assets/frequently-asked-questions/frequently-asked-questions.json dosyası düzenlenerek güncellenir.",
+            "tags": [
+                "Kaynak",
+                "Yönetim"
+            ]
+        }
+    ],
+    "default": [
+        {
+            "id": 100,
+            "question": "Sisteme giriş yapamıyorum, ne yapmalıyım?",
+            "answer": "Kullanıcı adı ve şifre bilgilerinizi kontrol edin. Sorun devam ederse şifre sıfırlama veya destek kaydı oluşturun.",
+            "tags": [
+                "Giriş",
+                "Şifre"
+            ],
+            "isPinned": true
+        }
+    ],
+    "login": [
+        {
+            "id": 1000,
+            "question": "Şifremi unuttum, nasıl sıfırlarım?",
+            "answer": "Giriş ekranındaki şifre sıfırlama bağlantısını kullanarak işlemi tamamlayabilirsiniz.",
+            "tags": [
+                "Login",
+                "Şifre"
+            ],
+            "isPinned": true
+        }
+    ],
+    "dashboard": [
+        {
+            "id": 2000,
+            "question": "Dashboard verileri neden geç yükleniyor?",
+            "answer": "Bağlantı hızı veya tarayıcı önbelleği nedeniyle gecikme olabilir. Sayfayı yenileyip tekrar deneyin.",
+            "tags": [
+                "Dashboard",
+                "Performans"
+            ]
+        }
+    ],
+    "course-detail": [
+        {
+            "id": 3000,
+            "question": "Ders içeriği tamamlandı olarak nasıl işaretlenir?",
+            "answer": "İçerik açıldığında sistem ilerlemeyi otomatik olarak günceller.",
+            "tags": [
+                "Ders",
+                "İlerleme"
+            ],
+            "isPinned": true
+        },
+        {
+            "id": 3001,
+            "question": "Video açılmıyorsa ne yapmalıyım?",
+            "answer": "Sayfayı yenileyin, internet bağlantınızı kontrol edin ve farklı bir tarayıcıda tekrar deneyin.",
+            "tags": [
+                "Video",
+                "Teknik"
+            ]
+        }
+    ]
+}

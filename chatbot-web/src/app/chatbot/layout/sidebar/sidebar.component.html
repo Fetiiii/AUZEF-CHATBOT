@@ -1,0 +1,62 @@
+<aside class="hidden lg:block">
+    <div class="fixed left-0 top-0 h-full transition-[width] duration-300 ease-out sidebar-surface text-white shadow-xl"
+        [ngClass]="collapsed ? 'w-20 sidebar-icon-only' : 'w-72'">
+
+        <!-- Üst logo + başlık (GLOBAL İLE AYNI) -->
+        <div class="sb-hero" [class.sb-hero-collapsed]="collapsed">
+            <img src="assets/logo-auzef.png" alt="AUZEF" class="sb-hero-logo no-tint" />
+
+            <div class="sb-hero-title sb-hero-title--boxes" *ngIf="!collapsed">
+                <div class="sb-hero-box">{{ i18n.t('sidebar.brand') }} - {{ i18n.t('sidebar.login.chatbot') }}</div>
+            </div>
+
+        </div>
+
+
+
+        <!-- MENÜ -->
+        <nav class="p-2 text-sm overflow-y-auto no-scrollbar" [style.height]="'calc(100% - var(--header-h) - 170px)'">
+            <div class="space-y-1">
+
+                <!-- Panel -->
+                <a routerLink="/chatbot/dashboard" routerLinkActive="active-sb" class="sidebar-item"
+                    [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
+                    [attr.title]="collapsed ? i18n.t('nav.chatbot.dashboard') : null">
+                    <span class="icon-box">
+                        <!-- + ikon -->
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="9"></circle>
+                            <path d="M12 8v8M8 12h8" stroke-linecap="round" />
+                        </svg>
+                    </span>
+                    <span class="min-w-0" *ngIf="!collapsed">
+                        <div class="truncate font-medium">
+                            {{ i18n.t('nav.chatbot.dashboard') }}
+                        </div>
+                    </span>
+                </a>
+
+                <!-- Panel -->
+                <a routerLink="/chatbot/document-upload" routerLinkActive="active-sb" class="sidebar-item"
+                    [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
+                    [attr.title]="collapsed ? i18n.t('nav.chatbot.document-upload') : null">
+                    <span class="icon-box">
+                        <!-- + ikon -->
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="9"></circle>
+                            <path d="M12 8v8M8 12h8" stroke-linecap="round" />
+                        </svg>
+                    </span>
+                    <span class="min-w-0" *ngIf="!collapsed">
+                        <div class="truncate font-medium">
+                            {{ i18n.t('nav.chatbot.document-upload') }}
+                        </div>
+                    </span>
+                </a>
+
+
+            </div>
+        </nav>
+
+    </div>
+</aside>

@@ -1,0 +1,199 @@
+<!-- Floating container -->
+<div class="fixed right-4 z-[60]" [style.bottom]="bottomOffset()">
+
+    <!-- Toggle Button -->
+    <button data-chatbot-toggle="1" type="button" (click)="toggle()" class="h-12 w-12 rounded-lg shadow-lg
+           text-white
+           bg-gradient-to-br from-violet-600 via-purple-600 to-fuchsia-600
+           ring-1 ring-white/20
+           flex items-center justify-center
+           hover:opacity-95 active:scale-[0.98]
+           focus:outline-none focus:ring-2 focus:ring-violet-300 dark:focus:ring-violet-500/40"
+        aria-label="Çözüm Botunu aç/kapat" [attr.aria-expanded]="open()">
+        <svg *ngIf="!open()" viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path
+                d="M21 12c0 4.418-4.03 8-9 8-1.2 0-2.35-.2-3.4-.56L3 20l1.1-4.1C3.4 14.7 3 13.38 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8Z" />
+            <path d="M7.5 12h.01M12 12h.01M16.5 12h.01" />
+        </svg>
+
+        <svg *ngIf="open()" viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M6 6l12 12M18 6L6 18" stroke-linecap="round" />
+        </svg>
+    </button>
+
+    <!-- Panel -->
+    <div *ngIf="open()" #panelEl class="csm-chat-panel mt-3 w-[calc(100vw-2rem)] sm:w-[420px]
+           rounded-lg overflow-hidden shadow-2xl
+           ring-1 ring-violet-200/70 dark:ring-violet-400/15
+           bg-white/80 dark:bg-slate-900/70 backdrop-blur">
+        <!-- HEADER -->
+        <div class="px-4 py-3 text-white bg-gradient-to-r from-violet-600 via-purple-600 to-fuchsia-600">
+            <div class="flex items-center gap-3">
+                <div class="h-9 w-9 rounded-lg bg-white/15 ring-1 ring-white/25 flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path
+                            d="M12 2a4 4 0 0 0-4 4v2H7a3 3 0 0 0-3 3v4a3 3 0 0 0 3 3h1v2h8v-2h1a3 3 0 0 0 3-3v-4a3 3 0 0 0-3-3h-1V6a4 4 0 0 0-4-4Z" />
+                        <path d="M9 14h.01M12 14h.01M15 14h.01" />
+                    </svg>
+                </div>
+
+                <div class="min-w-0">
+                    <div class="text-[14px] font-semibold leading-5 truncate">Çözüm Botu</div>
+                    <div class="text-[12px] text-white/85 flex items-center gap-2">
+                        <span class="inline-flex h-2 w-2 rounded-full" [ngClass]="statusDotClass()"></span>
+                        <span>{{ statusText() }}</span>
+                    </div>
+                </div>
+
+                <div class="ml-auto flex items-center gap-2">
+                    <button type="button" (click)="reset()"
+                        class="text-[12px] px-2.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/20 ring-1 ring-white/20">
+                        Sıfırla
+                    </button>
+
+                    <button type="button" (click)="close()"
+                        class="h-9 w-9 rounded-lg bg-white/15 hover:bg-white/20 ring-1 ring-white/20"
+                        aria-label="Kapat">
+                        <svg viewBox="0 0 24 24" class="h-5 w-5 m-auto" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M6 6l12 12M18 6L6 18" stroke-linecap="round" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- BODY -->
+        <div
+            class="bg-gradient-to-b from-violet-50/70 via-fuchsia-50/30 to-white/50 dark:from-slate-950/30 dark:via-slate-950/20 dark:to-slate-950/10">
+
+            <!-- Messages -->
+            <div #scrollEl class="csm-chat-scroll max-h-[430px] overflow-auto px-4 py-3 space-y-3">
+
+                <ng-container *ngFor="let m of messages()">
+
+                    <!-- Bot -->
+                    <div *ngIf="m.sender === 'bot'" class="flex items-start gap-2">
+                        <div class="mt-1 h-7 w-7 rounded-lg
+                        bg-white/80 dark:bg-slate-900/80
+                        ring-1 ring-violet-200/70 dark:ring-slate-700
+                        text-violet-700 dark:text-violet-300
+                        flex items-center justify-center shrink-0">
+                            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor"
+                                stroke-width="1.9">
+                                <path
+                                    d="M21 12c0 4.418-4.03 8-9 8-1.2 0-2.35-.2-3.4-.56L3 20l1.1-4.1C3.4 14.7 3 13.38 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8Z" />
+                            </svg>
+                        </div>
+
+                        <div class="max-w-[86%] rounded-lg px-3 py-2 shadow-sm
+                        bg-white/90 dark:bg-slate-900/80
+                        ring-1 ring-violet-200/70 dark:ring-slate-700">
+                            <div class="text-[13px] text-gray-800 dark:text-gray-100 whitespace-pre-line leading-5">
+                                {{ m.text }}
+                            </div>
+
+                            <div *ngIf="m.actions && m.actions.length" class="mt-2 flex flex-wrap gap-2">
+                                <button *ngFor="let a of (m.actions || [])" type="button" (click)="onAction(a)"
+                                    [disabled]="isTyping()" class="text-[12px] px-2.5 py-1.5 rounded-lg text-white shadow-sm
+                         bg-gradient-to-r from-violet-600 to-fuchsia-600
+                         hover:opacity-95 active:scale-[0.98]
+                         disabled:opacity-60 disabled:cursor-not-allowed">
+                                    {{ a.label }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- User -->
+                    <div *ngIf="m.sender === 'user'" class="flex justify-end">
+                        <div class="max-w-[86%] rounded-lg px-3 py-2 shadow-sm text-white
+                        bg-gradient-to-r from-violet-600 to-fuchsia-600
+                        ring-1 ring-white/15">
+                            <div class="text-[13px] whitespace-pre-line leading-5">
+                                {{ m.text }}
+                            </div>
+                        </div>
+                    </div>
+
+                </ng-container>
+
+                <!-- Bot yazıyor... -->
+                <div *ngIf="isTyping()" class="flex items-start gap-2">
+                    <div class="mt-1 h-7 w-7 rounded-lg
+                      bg-white/80 dark:bg-slate-900/80
+                      ring-1 ring-violet-200/70 dark:ring-slate-700
+                      text-violet-700 dark:text-violet-300
+                      flex items-center justify-center shrink-0">
+                        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.9">
+                            <path
+                                d="M21 12c0 4.418-4.03 8-9 8-1.2 0-2.35-.2-3.4-.56L3 20l1.1-4.1C3.4 14.7 3 13.38 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8Z" />
+                        </svg>
+                    </div>
+
+                    <div class="max-w-[86%] rounded-lg px-3 py-2 shadow-sm
+                      bg-white/90 dark:bg-slate-900/80
+                      ring-1 ring-violet-200/70 dark:ring-slate-700">
+                        <div class="text-[13px] text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                            <span class="font-medium">Bot</span>
+                            <span class="text-slate-500 dark:text-slate-400">yazıyor</span>
+                            <span class="flex items-center gap-1">
+                                <span class="h-1.5 w-1.5 rounded-full bg-violet-500 animate-bounce"></span>
+                                <span
+                                    class="h-1.5 w-1.5 rounded-full bg-violet-500 animate-bounce [animation-delay:120ms]"></span>
+                                <span
+                                    class="h-1.5 w-1.5 rounded-full bg-violet-500 animate-bounce [animation-delay:240ms]"></span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ✅ WARNING FIX: suggestions() her zaman array döndürür -> ?. gerekmez -->
+                <div class="pt-2" *ngIf="suggestions().length">
+                    <div class="flex flex-wrap gap-2">
+                        <button *ngFor="let s of suggestions()" type="button" (click)="send(s)" [disabled]="isTyping()"
+                            class="text-[12px] px-2.5 py-1.5 rounded-lg
+                     bg-white/85 dark:bg-slate-900/70
+                     ring-1 ring-violet-200/70 dark:ring-slate-700
+                     text-violet-700 dark:text-violet-200
+                     hover:bg-white dark:hover:bg-slate-900
+                     disabled:opacity-60 disabled:cursor-not-allowed">
+                            {{ s }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Anchor -->
+                <div #bottomAnchor class="h-0 w-full"></div>
+
+            </div>
+
+            <!-- Composer -->
+            <div class="px-4 py-3 bg-white/65 dark:bg-slate-900/55 ring-1 ring-violet-200/50 dark:ring-slate-800">
+                <div class="flex items-center gap-2">
+                    <div class="flex-1">
+                        <div class="rounded-lg p-[1px] bg-gradient-to-r from-violet-500/60 to-fuchsia-500/60">
+                            <input #inputEl type="text" [value]="input()" (input)="onInput(($any($event.target)).value)"
+                                (keydown)="sendFromEnter($event)" [disabled]="isTyping()" class="h-10 w-full rounded-lg bg-white dark:bg-slate-950
+                       text-[13px] text-gray-800 dark:text-gray-100
+                       px-3 outline-none
+                       disabled:opacity-60 disabled:cursor-not-allowed" placeholder="Sorunu yaz… (Enter ile gönder)" />
+                        </div>
+                    </div>
+
+                    <button type="button" (click)="send()" [disabled]="isTyping()" class="h-10 px-4 rounded-lg text-white shadow-sm
+                   bg-gradient-to-r from-violet-600 to-fuchsia-600
+                   hover:opacity-95 active:scale-[0.98]
+                   disabled:opacity-60 disabled:cursor-not-allowed">
+                        Gönder
+                    </button>
+                </div>
+
+                <div class="mt-2 text-[11px] text-slate-600 dark:text-slate-300/80">
+                    İpucu: “Talep oluştur” yazarak akış başlatabilirsin.
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
