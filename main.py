@@ -69,7 +69,7 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
         if MEILI_STATUS["healthy"] or (current_time - MEILI_STATUS["last_check"] > CIRCUIT_BREAKER_TIME):
             try:
                 meili_hits = MEILI_PROVIDER.search(q, limit=3)
-                MEILI_STATUS["healthy"] = True # Başarılıysa durumu düzelt
+                MEILI_STATUS["healthy"] = True
                 
                 if meili_hits and meili_hits[0]['score'] >= 0.85:
                     return {
@@ -84,14 +84,12 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
                 MEILI_STATUS["last_check"] = current_time
                 logger.error(f"⚠️ MeiliSearch çöktü! {CIRCUIT_BREAKER_TIME} saniye boyunca Qdrant kullanılacak.")
         else:
-            # Devre kesici aktif, Meili'yi pas geç
             logger.info("⚡ Circuit Breaker aktif: MeiliSearch atlanıyor...")
 
 
         # --- ADIM 2: QDRANT (SEMANTIC SEARCH) ---
         try:
             qdrant_hits = QDRANT_PROVIDER.search(q, limit=3)
-            # Yüksek güvenli (0.75+) sonuç bulursa LLM'e gitme, direkt cevapla
             if qdrant_hits and qdrant_hits[0]['score'] > 0.75:
                 return {
                     "source": "qdrant_vector",

@@ -16,18 +16,16 @@ def import_real_data(file_path):
         ).fetchone()
         qna_id = qna_result[0]
 
-        # 2. Tagleri İşle (Virgülle ayrılmış varsayıyoruz: "etiket1, etiket2")
+        # 2. Tagleri İşle
         if pd.notna(row['tags']):
             tag_list = [t.strip() for t in str(row['tags']).split(',')]
             for tag_name in tag_list:
-                # Önce tag var mı bak, yoksa ekle ve ID'sini al
                 tag_id_res = db.execute(
                     text("INSERT INTO tags (name) VALUES (:n) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id"),
                     {"n": tag_name}
                 ).fetchone()
                 tag_id = tag_id_res[0]
                 
-                # Ara tabloya (qna_tags) ekle
                 db.execute(
                     text("INSERT INTO qna_tags (qna_id, tag_id) VALUES (:q_id, :t_id) ON CONFLICT DO NOTHING"),
                     {"q_id": qna_id, "t_id": tag_id}
@@ -47,7 +45,7 @@ def import_real_data(file_path):
     db.commit()
     print("✅ Tüm veriler PostgreSQL'e dağıtıldı.")
 
-    # 4. MeiliSearch'ü Senin Yazdığın VIEW Üzerinden Güncelle
+    # 4. MeiliSearch VIEW Üzerinden Güncelle
     sync_meilisearch(db)
     db.close()
 
@@ -55,7 +53,6 @@ def sync_meilisearch(db):
     import meilisearch
     client = meilisearch.Client('http://localhost:7700', 'masterKey123')
     
-    # Senin hazırladığın VIEW'ı kullanıyoruz - Tüm JOIN'ler burada bitmiş geliyor!
     view_data = db.execute(text("SELECT * FROM qna_search_view")).mappings().all()
     documents = [dict(row) for row in view_data]
     
@@ -66,5 +63,4 @@ def sync_meilisearch(db):
     index.update_searchable_attributes(['question', 'queries', 'tags', 'answer'])
     print(f"✅ MeiliSearch VIEW üzerinden güncellendi. Toplam döküman: {len(documents)}")
 
-# Çalıştır
 import_real_data("data/module_479_Qna_Export_Data_2026-01-12 15_21(2).csv")

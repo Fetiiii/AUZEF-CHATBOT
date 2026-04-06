@@ -39,7 +39,6 @@ class QdrantProvider(BaseSearchProvider):
     def __init__(self, host: str, port: int, collection_name: str, model_name: str):
         self.client = QdrantClient(host=host, port=port)
         self.collection_name = collection_name
-        # Not: Model yükleme maliyetli bir işlemdir, singleton veya global yönetim tercih edilebilir.
         self.model = SentenceTransformer(model_name)
 
     def search(self, query: str, limit: int = 3):
