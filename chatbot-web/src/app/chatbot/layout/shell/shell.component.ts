@@ -5,6 +5,7 @@ import {
   signal
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { RouterOutlet } from '@angular/router';
 
 import { HeaderComponent as ChatbotHeaderComponent } from '../header/header.component';
 import { ChatbotSidebarComponent } from '../sidebar/sidebar.component';
@@ -16,6 +17,7 @@ import { FooterComponent as ChatbotFooterComponent } from '../footer/footer.comp
   selector: 'app-chatbot-shell',
   imports: [
     CommonModule,
+    RouterOutlet,
     ChatbotHeaderComponent,
     ChatbotSidebarComponent,
     ChatbotFooterComponent,

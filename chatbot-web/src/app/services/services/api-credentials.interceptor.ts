@@ -1,6 +1,6 @@
 import { HttpInterceptorFn } from '@angular/common/http';
 
-const API_BASE = '/service';
+const API_BASE = '/api';
 
 export const apiCredentialsInterceptor: HttpInterceptorFn = (req, next) => {
     // Sadece bizim API’ye giderken cookie taşı

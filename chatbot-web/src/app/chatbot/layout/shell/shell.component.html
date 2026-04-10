@@ -13,6 +13,11 @@
 
         
 
+        <!-- PAGE CONTENT -->
+        <main class="p-4 md:p-6 min-h-[calc(100dvh-var(--header-h,60px))]">
+          <router-outlet></router-outlet>
+        </main>
+
         <!-- Scroll-to-top -->
         <button *ngIf="showUp()" (click)="goTop()"
             class="bg-[#7c3aed] text-white fixed right-4 bottom-16 lg:bottom-4 z-40 h-11 w-11 rounded-full shadow-lg"

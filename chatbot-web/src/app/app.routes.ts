@@ -17,7 +17,15 @@ export const routes: Routes = [
     data: { title: 'chatbot.signIn' }
   },
 
-  // 🔐 Chatbot shell
+  // 🔓 Chatbot public sayfası (login gerekmez)
+  {
+    path: 'chat',
+    loadComponent: () =>
+      import('./chatbot/chat/chat.component').then((m) => m.ChatComponent),
+    data: { title: 'nav.chatbot.chat' }
+  },
+
+  // 🔐 Chatbot admin shell (login gerekir)
   {
     path: 'chatbot',
     loadComponent: () =>
@@ -45,7 +53,7 @@ export const routes: Routes = [
     ]
   },
 
-  // Bilinmeyen tüm route'lar chatbot login'e yönlensin
+  // Bilinmeyen tüm route'lar sign-in'e yönlensin
   {
     path: '**',
     redirectTo: 'chatbot/sign-in'

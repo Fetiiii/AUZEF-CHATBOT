@@ -1,0 +1,176 @@
+<!-- ────────────────────────────────────────────────────── -->
+<!-- AUZEF Chatbot — Sohbet Sayfası                       -->
+<!-- ────────────────────────────────────────────────────── -->
+
+<div class="flex flex-col h-[calc(100dvh-var(--header-h,60px))] bg-slate-50 dark:bg-slate-950">
+
+  <!-- ── ÜSTT BAR ──────────────────────────────────────── -->
+  <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800
+              bg-white dark:bg-slate-900 shadow-sm shrink-0">
+    <div class="flex items-center gap-3">
+      <!-- Avatar -->
+      <div class="h-9 w-9 rounded-full bg-gradient-to-br from-violet-500 to-purple-700
+                  flex items-center justify-center shrink-0 shadow">
+        <svg class="h-5 w-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+      </div>
+      <div>
+        <div class="text-sm font-semibold text-slate-800 dark:text-slate-100">AUZEF Asistan</div>
+        <div class="text-xs text-emerald-500 flex items-center gap-1">
+          <span class="h-1.5 w-1.5 bg-emerald-500 rounded-full inline-block"></span>
+          Çevrimiçi
+        </div>
+      </div>
+    </div>
+    <button
+      type="button"
+      (click)="clearChat()"
+      class="h-8 px-3 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700
+             text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+      title="Sohbeti temizle">
+      <svg class="h-4 w-4 inline-block mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+      </svg>
+      Temizle
+    </button>
+  </div>
+
+  <!-- ── MESAJLAR ALANI ─────────────────────────────────── -->
+  <div class="flex-1 overflow-y-auto px-4 py-4 space-y-4 scroll-smooth">
+
+    @for (msg of messages(); track msg.id) {
+
+      <!-- KULLANICI MESAJI -->
+      @if (msg.role === 'user') {
+        <div class="flex justify-end">
+          <div class="max-w-[80%] md:max-w-[65%]">
+            <div class="bg-violet-600 text-white rounded-2xl rounded-br-md px-4 py-3 text-sm leading-relaxed shadow-sm">
+              {{ msg.text }}
+            </div>
+            <div class="text-right text-[10px] text-slate-400 dark:text-slate-500 mt-1 pr-1">
+              {{ msg.timestamp | date:'HH:mm' }}
+            </div>
+          </div>
+        </div>
+      }
+
+      <!-- BOT MESAJI -->
+      @if (msg.role === 'bot') {
+        <div class="flex items-start gap-3">
+          <!-- Avatar -->
+          <div class="h-8 w-8 rounded-full bg-gradient-to-br from-violet-500 to-purple-700
+                      flex items-center justify-center shrink-0 mt-0.5 shadow">
+            <svg class="h-4 w-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+
+          <div class="max-w-[80%] md:max-w-[70%] space-y-2">
+
+            <!-- Typing indicator -->
+            @if (msg.loading) {
+              <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700
+                          rounded-2xl rounded-bl-md px-4 py-3 shadow-sm">
+                <div class="flex items-center gap-1">
+                  <span class="h-2 w-2 bg-slate-400 dark:bg-slate-500 rounded-full animate-bounce [animation-delay:0ms]"></span>
+                  <span class="h-2 w-2 bg-slate-400 dark:bg-slate-500 rounded-full animate-bounce [animation-delay:150ms]"></span>
+                  <span class="h-2 w-2 bg-slate-400 dark:bg-slate-500 rounded-full animate-bounce [animation-delay:300ms]"></span>
+                </div>
+              </div>
+            } @else {
+              <!-- Cevap balonu -->
+              <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700
+                          rounded-2xl rounded-bl-md px-4 py-3 shadow-sm">
+                <p class="text-sm text-slate-800 dark:text-slate-100 leading-relaxed whitespace-pre-wrap">{{ msg.text }}</p>
+              </div>
+
+              <!-- Öneri listesi -->
+              @if (msg.suggestions && msg.suggestions.length > 0) {
+                <div class="space-y-1.5 pl-1">
+                  <p class="text-[11px] text-slate-400 dark:text-slate-500 font-medium">Bunları mı sormak istediniz?</p>
+                  @for (s of msg.suggestions; track s) {
+                    <button
+                      type="button"
+                      (click)="suggestClick(s)"
+                      class="block w-full text-left text-xs px-3 py-2 rounded-lg
+                             border border-violet-200 dark:border-violet-800/60
+                             bg-violet-50 dark:bg-violet-950/30
+                             text-violet-700 dark:text-violet-300
+                             hover:bg-violet-100 dark:hover:bg-violet-900/40 transition">
+                      {{ s }}
+                    </button>
+                  }
+                </div>
+              }
+
+              <!-- Kaynak + zaman -->
+              <div class="flex items-center gap-2 pl-1">
+                @if (sourceLabel(msg.source)) {
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full {{ sourceBadgeClass(msg.source) }}">
+                    {{ sourceLabel(msg.source) }}
+                  </span>
+                }
+                <span class="text-[10px] text-slate-400 dark:text-slate-500">
+                  {{ msg.timestamp | date:'HH:mm' }}
+                </span>
+              </div>
+            }
+
+          </div>
+        </div>
+      }
+
+    }
+
+    <!-- Scroll anchor -->
+    <div #messagesEnd></div>
+  </div>
+
+  <!-- ── GİRİŞ ALANI ────────────────────────────────────── -->
+  <div class="shrink-0 border-t border-slate-200 dark:border-slate-800
+              bg-white dark:bg-slate-900 px-4 py-3">
+    <div class="max-w-3xl mx-auto">
+      <div class="flex items-end gap-2 rounded-xl border border-slate-300 dark:border-slate-600
+                  bg-slate-50 dark:bg-slate-800 px-3 py-2
+                  focus-within:ring-2 focus-within:ring-violet-500/40 focus-within:border-violet-400
+                  transition">
+        <textarea
+          [(ngModel)]="inputText"
+          (keydown)="onKeyDown($event)"
+          rows="1"
+          placeholder="Sorunuzu yazın... (Enter ile gönderin)"
+          [disabled]="sending()"
+          class="flex-1 bg-transparent text-sm text-slate-800 dark:text-slate-100
+                 placeholder:text-slate-400 dark:placeholder:text-slate-500
+                 resize-none outline-none border-none ring-0 shadow-none
+                 max-h-32 overflow-y-auto leading-6 py-1
+                 disabled:opacity-60">
+        </textarea>
+
+        <button
+          type="button"
+          (click)="send()"
+          [disabled]="!inputText.trim() || sending()"
+          class="h-9 w-9 rounded-lg bg-violet-600 hover:bg-violet-700
+                 text-white flex items-center justify-center shrink-0
+                 transition disabled:opacity-40 disabled:cursor-not-allowed shadow-sm">
+          @if (sending()) {
+            <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+            </svg>
+          } @else {
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m22 2-7 20-4-9-9-4 20-7z"/><path d="m22 2-11 11"/>
+            </svg>
+          }
+        </button>
+      </div>
+      <p class="text-center text-[10px] text-slate-400 dark:text-slate-600 mt-2">
+        AUZEF Akıllı Asistan · Yalnızca AUZEF konularında yardımcı olur
+      </p>
+    </div>
+  </div>
+
+</div>

@@ -36,29 +36,21 @@ function readTokenFallback(): string | null {
 }
 
 function isServiceCall(url: string): boolean {
-    // relative '/service/...'
-    if (url.startsWith('/service/')) return true;
+    // relative '/api/...'
+    if (url.startsWith('/api/')) return true;
 
-    // absolute 'https://.../service/...'
+    // absolute 'https://.../api/...'
     try {
         const u = new URL(url);
-        return u.pathname.startsWith('/service/');
+        return u.pathname.startsWith('/api/');
     } catch {
         return false;
     }
 }
 
-function isAdminServiceCall(url: string): boolean {
-    // relative '/service/admin' or '/service/admin/...'
-    if (url.startsWith('/service/admin')) return true;
-
-    // absolute 'https://.../service/admin...'
-    try {
-        const u = new URL(url);
-        return u.pathname.startsWith('/service/admin');
-    } catch {
-        return false;
-    }
+function isAdminServiceCall(_url: string): boolean {
+    // admin'e özel çağrı yok — chatbot için ayırt etmeye gerek yok
+    return false;
 }
 
 export const authInterceptor: HttpInterceptorFn = (

@@ -36,21 +36,32 @@
                     </span>
                 </a>
 
-                <!-- Panel -->
+                <!-- Chatbot -->
+                <a routerLink="/chat" routerLinkActive="active-sb" class="sidebar-item"
+                    [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
+                    [attr.title]="collapsed ? 'Chatbot' : null">
+                    <span class="icon-box">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                    </span>
+                    <span class="min-w-0" *ngIf="!collapsed">
+                        <div class="truncate font-medium">Chatbot</div>
+                    </span>
+                </a>
+
+                <!-- Veri Yönetimi -->
                 <a routerLink="/chatbot/document-upload" routerLinkActive="active-sb" class="sidebar-item"
                     [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
                     [attr.title]="collapsed ? i18n.t('nav.chatbot.document-upload') : null">
                     <span class="icon-box">
-                        <!-- + ikon -->
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <circle cx="12" cy="12" r="9"></circle>
-                            <path d="M12 8v8M8 12h8" stroke-linecap="round" />
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <path d="M3 9h18M3 15h18M9 9v9M15 9v9"/>
                         </svg>
                     </span>
                     <span class="min-w-0" *ngIf="!collapsed">
-                        <div class="truncate font-medium">
-                            {{ i18n.t('nav.chatbot.document-upload') }}
-                        </div>
+                        <div class="truncate font-medium">{{ i18n.t('nav.chatbot.document-upload') }}</div>
                     </span>
                 </a>
 
