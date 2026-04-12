@@ -63,6 +63,7 @@ const TR: Dict = {
   'nav.test-page': 'Test Sayfası',
   'nav.chatbot.dashboard': 'Panel',
   'nav.chatbot.document-upload': 'Doküman Yükle',
+  'nav.chatbot.view-data': 'İzleme Paneli',
 
 
   // GENERAL SIGN- IN CARD
@@ -299,6 +300,7 @@ const EN: Dict = {
   'nav.test-page': 'Test Page',
   'nav.chatbot.dashboard': 'Dashboard',
   'nav.chatbot.document-upload': 'Upload Document',
+  'nav.chatbot.view-data': 'Monitoring',
 
 
 

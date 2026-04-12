@@ -11,11 +11,9 @@
         <app-chatbot-header [offsetLeft]="offsetLeft()" (toggleSidebar)="toggleSidebar()">
         </app-chatbot-header>
 
-        
-
-        <!-- PAGE CONTENT -->
-        <main class="p-4 md:p-6 min-h-[calc(100dvh-var(--header-h,60px))]">
-          <router-outlet></router-outlet>
+        <!-- MAIN CONTENT -->
+        <main class="container-p pt-header safe-main">
+            <router-outlet></router-outlet>
         </main>
 
         <!-- Scroll-to-top -->

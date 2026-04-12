@@ -17,14 +17,6 @@ export const routes: Routes = [
     data: { title: 'chatbot.signIn' }
   },
 
-  // 🔓 Chatbot public sayfası (login gerekmez)
-  {
-    path: 'chat',
-    loadComponent: () =>
-      import('./chatbot/chat/chat.component').then((m) => m.ChatComponent),
-    data: { title: 'nav.chatbot.chat' }
-  },
-
   // 🔐 Chatbot admin shell (login gerekir)
   {
     path: 'chatbot',
@@ -43,12 +35,28 @@ export const routes: Routes = [
       },
 
       {
+        path: 'chat',
+        loadComponent: () =>
+          import('./chatbot/chat/chat.component').then((m) => m.ChatComponent),
+        data: { title: 'nav.chatbot.chat' }
+      },
+
+      {
         path: 'document-upload',
         loadComponent: () =>
           import('./chatbot/document-upload/document-upload.component').then(
             (m) => m.DocumentUploadComponent
           ),
         data: { title: 'nav.chatbot.document-upload' }
+      },
+
+      {
+        path: 'view-data',
+        loadComponent: () =>
+          import('./chatbot/ViewData/view-data.component').then(
+            (m) => m.ViewDataComponent
+          ),
+        data: { title: 'nav.chatbot.view-data' }
       }
     ]
   },
