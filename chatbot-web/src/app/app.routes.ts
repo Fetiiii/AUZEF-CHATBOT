@@ -49,10 +49,19 @@ export const routes: Routes = [
             (m) => m.DocumentUploadComponent
           ),
         data: { title: 'nav.chatbot.document-upload' }
+      },
+
+      {
+        path: 'view-data',
+        loadComponent: () =>
+          import('./chatbot/ViewData/view-data.component').then(
+            (m) => m.ViewDataComponent
+          ),
+        data: { title: 'nav.chatbot.view-data' }
       }
     ]
   },
-
+  
   // Bilinmeyen tüm route'lar sign-in'e yönlensin
   {
     path: '**',

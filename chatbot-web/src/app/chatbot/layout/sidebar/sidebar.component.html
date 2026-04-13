@@ -65,6 +65,22 @@
                     </span>
                 </a>
 
+                <!-- İzleme Paneli -->
+                <a routerLink="/chatbot/view-data" routerLinkActive="active-sb" class="sidebar-item"
+                    [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
+                    [attr.title]="collapsed ? i18n.t('nav.chatbot.view-data') : null">
+                    <span class="icon-box">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                        </svg>
+                    </span>
+                    <span class="min-w-0" *ngIf="!collapsed">
+                        <div class="truncate font-medium">
+                            {{ i18n.t('nav.chatbot.view-data') }}
+                        </div>
+                    </span>
+                </a>
+
 
             </div>
         </nav>
