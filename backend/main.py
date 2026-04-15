@@ -100,7 +100,7 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
                 meili_hits = MEILI_PROVIDER.search(q, limit=3)
                 MEILI_STATUS["healthy"] = True
 
-                if meili_hits and meili_hits[0]['score'] >= 0.85:
+                if meili_hits and meili_hits[0]['score'] >= 0.90:
                     return {
                         "source": "meilisearch",
                         "status": "success",
@@ -260,9 +260,6 @@ def delete_qna(qna_id: int, db: Session = Depends(get_db)):
     db.delete(row)
     db.commit()
     return None
-
-
-
 
 
 # ─────────────────────────────────────────────

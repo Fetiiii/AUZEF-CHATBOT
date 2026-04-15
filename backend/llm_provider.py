@@ -13,6 +13,8 @@ class LLMFactory:
             return OpenAIProvider()
         elif provider_name == "gemini":
             return GeminiProvider()
+        elif provider_name == "openrouter":
+            return OpenRouterProvider()
         else:
             raise ValueError(f"Unsupported provider: {provider_name}")
 
@@ -85,3 +87,38 @@ Bilmiyorsan AUZEF ile ilgili olduğunu söyle ve bilmediğini belirt.
         )
 
         return response.text
+    
+class OpenRouterProvider(BaseLLMProvider):
+    def __init__(self, model: str = "openai/gpt-4o-mini"):
+        self.client = OpenAI(
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url="https://openrouter.ai/api/v1"
+        )
+        self.model = model
+
+    def ask(self, question: str, context_list: list) -> str:
+        context_str = "\n\n".join([
+            f"Context {i+1}: Soru: {item['question']}\nCevap: {item['answer']}"
+            for i, item in enumerate(context_list)
+        ])
+
+        prompt = f"""
+        User Question: {question}
+
+        Context (Referans Bilgiler):
+        {context_str}
+
+        Instruction:
+        Yukarıdaki bilgileri kullanarak soruyu cevapla.
+        Eğer bilgi yetersizse, AUZEF ile ilgili olduğunu belirt ve bilmediğini söyle.
+        Dışarıdan ek bilgi katma, sadece Context içindekileri baz al.
+        """
+
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "Sen AUZEF (Açık ve Uzaktan Eğitim Fakültesi) için yardımcı bir asistansın. Sadece sana verilen context'i kullanarak cevap verirsin."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message.content
