@@ -1,9 +1,0 @@
-node_modules/
-cache/
-dist/
-out-tsc/
-.angular/
-
-# local dev certs (istersen repoya girmesin)
-localhost.pem
-localhost-key.pem

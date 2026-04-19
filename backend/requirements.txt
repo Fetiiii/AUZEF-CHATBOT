@@ -1,0 +1,26 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# Database
+sqlalchemy
+psycopg2-binary
+
+# Data Processing
+pandas
+openpyxl
+
+# Search Providers
+meilisearch
+qdrant-client
+
+# Vector Embeddings
+sentence-transformers
+
+# LLM Providers
+openai
+google-genai
+
+# Utilities
+pydantic
+python-dotenv

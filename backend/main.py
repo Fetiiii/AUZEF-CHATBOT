@@ -35,8 +35,8 @@ MEILI_PROVIDER = MeiliSearchProvider(
 )
 
 QDRANT_PROVIDER = QdrantProvider(
-    host="localhost",
-    port=int(os.getenv("QDRANT_PORT")),
+    host=os.getenv("QDRANT_HOST", "localhost"),
+    port=int(os.getenv("QDRANT_PORT", "6333")),
     collection_name="auzef_qna_vectors",
     model_name="nezahatkorkmaz/turkce-embedding-bge-m3"
 )
@@ -166,6 +166,36 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
 #  QnA CRUD Endpoint'leri
 # ─────────────────────────────────────────────
 
+def get_qna_view_dict(db: Session, qna_id: int):
+    view_data = db.execute(
+        text("SELECT * FROM qna_search_view WHERE id = :id"),
+        {"id": qna_id}
+    ).mappings().first()
+    return dict(view_data) if view_data else None
+
+def sync_providers(db: Session, qna_id: int):
+    doc = get_qna_view_dict(db, qna_id)
+    if not doc:
+        return
+    try:
+        MEILI_PROVIDER.add_documents([doc])
+    except Exception as e:
+        logger.error(f"MeiliSearch sync hatası: {e}")
+    try:
+        QDRANT_PROVIDER.upsert_point(qna_id, doc['question'], doc['answer'])
+    except Exception as e:
+        logger.error(f"Qdrant sync hatası: {e}")
+
+def remove_from_providers(qna_id: int):
+    try:
+        MEILI_PROVIDER.delete_document(qna_id)
+    except Exception as e:
+        logger.error(f"MeiliSearch delete hatası: {e}")
+    try:
+        QDRANT_PROVIDER.delete_point(qna_id)
+    except Exception as e:
+        logger.error(f"Qdrant delete hatası: {e}")
+
 @app.get("/api/qna")
 def list_qna(
     skip: int = 0,
@@ -198,6 +228,10 @@ def create_qna(body: QnACreateRequest, db: Session = Depends(get_db)):
     db.add(row)
     db.commit()
     db.refresh(row)
+    
+    # Sync with MeiliSearch & Qdrant
+    sync_providers(db, row.id)
+    
     return {
         "id": row.id,
         "question_text": row.question_text,
@@ -223,6 +257,11 @@ def bulk_update_qna(items: List[QnABulkUpdateItem], db: Session = Depends(get_db
             row.status = item.status
         updated.append(row.id)
     db.commit()
+    
+    # Sync all updated records
+    for qna_id in updated:
+        sync_providers(db, qna_id)
+
     return {"updated_ids": updated, "count": len(updated)}
 
 @app.put("/api/qna/{qna_id}")
@@ -241,6 +280,10 @@ def update_qna(qna_id: int, body: QnAUpdateRequest, db: Session = Depends(get_db
 
     db.commit()
     db.refresh(row)
+
+    # Sync with MeiliSearch & Qdrant
+    sync_providers(db, row.id)
+
     return {
         "id": row.id,
         "question_text": row.question_text,
@@ -259,6 +302,10 @@ def delete_qna(qna_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="QnA kaydı bulunamadı.")
     db.delete(row)
     db.commit()
+
+    # Remove from MeiliSearch & Qdrant
+    remove_from_providers(qna_id)
+    
     return None
 
 

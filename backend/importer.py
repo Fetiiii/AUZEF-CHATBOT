@@ -1,11 +1,16 @@
+import os
 import pandas as pd
 from sqlalchemy import text
 from database import SessionLocal
+from dotenv import load_dotenv
 
-def import_real_data(file_path):
+load_dotenv()
+
+
+def import_real_data(file_path: str):
     db = SessionLocal()
     df = pd.read_csv(file_path, delimiter=';')
-    
+
     print(f"📊 {len(df)} satır veri işleniyor...")
 
     for _, row in df.iterrows():
@@ -17,7 +22,7 @@ def import_real_data(file_path):
         qna_id = qna_result[0]
 
         # 2. Tagleri İşle
-        if pd.notna(row['tags']):
+        if pd.notna(row.get('tags')):
             tag_list = [t.strip() for t in str(row['tags']).split(',')]
             for tag_name in tag_list:
                 tag_id_res = db.execute(
@@ -25,7 +30,7 @@ def import_real_data(file_path):
                     {"n": tag_name}
                 ).fetchone()
                 tag_id = tag_id_res[0]
-                
+
                 db.execute(
                     text("INSERT INTO qna_tags (qna_id, tag_id) VALUES (:q_id, :t_id) ON CONFLICT DO NOTHING"),
                     {"q_id": qna_id, "t_id": tag_id}
@@ -43,24 +48,32 @@ def import_real_data(file_path):
                     )
 
     db.commit()
-    print("✅ Tüm veriler PostgreSQL'e dağıtıldı.")
+    print("✅ Tüm veriler PostgreSQL'e yüklendi.")
 
-    # 4. MeiliSearch VIEW Üzerinden Güncelle
+    # 4. MeiliSearch'ü Güncelle
     sync_meilisearch(db)
     db.close()
 
+
 def sync_meilisearch(db):
     import meilisearch
-    client = meilisearch.Client('http://localhost:7700', 'masterKey123')
-    
+
+    meili_url = os.getenv("MEILI_URL", "http://localhost:7700")
+    meili_key = os.getenv("MEILI_MASTER_KEY", "masterKey123")
+
+    client = meilisearch.Client(meili_url, meili_key)
+
     view_data = db.execute(text("SELECT * FROM qna_search_view")).mappings().all()
     documents = [dict(row) for row in view_data]
-    
+
     index = client.index('auzef_qna_index')
     index.add_documents(documents)
-    
-    # Arama önceliği ayarları
-    index.update_searchable_attributes(['question', 'queries', 'tags', 'answer'])
-    print(f"✅ MeiliSearch VIEW üzerinden güncellendi. Toplam döküman: {len(documents)}")
 
-import_real_data("data/module_479_Qna_Export_Data_2026-01-12 15_21(2).csv")
+    index.update_searchable_attributes(['question', 'queries', 'tags', 'answer'])
+    print(f"✅ MeiliSearch güncellendi. Toplam döküman: {len(documents)}")
+
+
+if __name__ == "__main__":
+    import sys
+    file_path = sys.argv[1] if len(sys.argv) > 1 else "data/module_479_Qna.csv"
+    import_real_data(file_path)

@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import meilisearch
 from qdrant_client import QdrantClient
+from qdrant_client.http.models import PointStruct
 from sentence_transformers import SentenceTransformer
 
 class BaseSearchProvider(ABC):
@@ -35,6 +36,15 @@ class MeiliSearchProvider(BaseSearchProvider):
         })
         return [hit['question'] for hit in results['hits']]
 
+    def add_documents(self, documents: list):
+        self.index.add_documents(documents)
+
+    def update_documents(self, documents: list):
+        self.index.update_documents(documents)
+
+    def delete_document(self, document_id: int):
+        self.index.delete_document(document_id)
+
 class QdrantProvider(BaseSearchProvider):
     def __init__(self, host: str, port: int, collection_name: str, model_name: str):
         self.client = QdrantClient(host=host, port=port)
@@ -57,3 +67,24 @@ class QdrantProvider(BaseSearchProvider):
                 "source": "qdrant"
             } for point in results.points
         ]
+
+    def upsert_point(self, point_id: int, question: str, answer: str):
+        vector = self.model.encode(question).tolist()
+        point = PointStruct(
+            id=point_id,
+            vector=vector,
+            payload={
+                "question": question,
+                "answer": answer
+            }
+        )
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=[point]
+        )
+
+    def delete_point(self, point_id: int):
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=[point_id]
+        )
