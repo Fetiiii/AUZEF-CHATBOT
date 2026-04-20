@@ -17,6 +17,8 @@ Tarayıcı → Frontend (nginx :80)
          └── LLM (OpenRouter/OpenAI/Gemini) — RAG fallback
 ```
 
+> **Not:** Dahili servisler (DB, MeiliSearch, Qdrant) dış dünyaya kapalıdır — sadece Docker ağı içinden erişilebilir. Yalnızca frontend (port 80) dışarıya açıktır.
+
 ---
 
 ## ✅ Ön Koşullar
@@ -42,9 +44,14 @@ cd "AUZEF CHATBOT"
 ```bash
 cp .env.example .env
 ```
-`.env` dosyasını açık bir en az bir LLM API anahtarı doldurun:
+`.env` dosyasını açıp şunları doldurun:
+- **Zorunlu:** En az bir LLM API anahtarı (`OPENROUTER_API_KEY` önerilir)
+- **Production'da zorunlu:** `POSTGRES_PASSWORD` ve `MEILI_MASTER_KEY` güçlü şifrelerle değiştirilmeli
+
 ```env
-OPENROUTER_API_KEY=sk-or-...   # openrouter.ai'dan ücretsiz alınabilir
+OPENROUTER_API_KEY=sk-or-...          # openrouter.ai'dan ücretsiz alınabilir
+POSTGRES_PASSWORD=guclu_bir_sifre     # Production'da mutlaka değiştirin!
+MEILI_MASTER_KEY=guclu_bir_key        # Production'da mutlaka değiştirin!
 ```
 
 ### 3. Sistemi başlatın
@@ -79,9 +86,9 @@ docker compose exec backend python vector_sync.py
 | **Chatbot** | http://localhost/chat | Öğrenci arayüzü |
 | **Admin Panel** | http://localhost/chatbot/sign-in | Yönetim (fb/1) |
 | **Veri Yönetimi** | http://localhost/chatbot/document-upload | QnA + LLM switch |
-| **API Docs** | http://localhost:8000/docs | Swagger UI |
-| **pgAdmin** | http://localhost:5050 | Veritabanı arayüzü |
-| **MeiliSearch** | http://localhost:7700 | Arama motoru |
+| **API Docs** | http://localhost/api/docs | Swagger UI (nginx üzerinden) |
+
+> pgAdmin ve MeiliSearch arayüzleri production'da kapalıdır. Geliştirme modunda açılır (aşağıya bakın).
 
 ---
 
@@ -108,8 +115,8 @@ docker compose logs -f backend
 Docker olmadan geliştirmek için:
 
 ```bash
-# 1. Sadece altyapı servislerini Docker ile çalıştır
-docker compose up -d db meilisearch qdrant
+# 1. Altyapı servislerini + pgAdmin'i aç (dev profili)
+docker compose --profile dev up -d db meilisearch qdrant pgadmin
 
 # 2. Backend'i lokalde başlat
 cd backend
@@ -124,6 +131,14 @@ npm install
 npm start
 # → http://localhost:4200
 ```
+
+**Geliştirme modu erişim adresleri:**
+| Servis | URL |
+|---|---|
+| Frontend (ng serve) | http://localhost:4200 |
+| Backend (uvicorn) | http://localhost:8000 |
+| pgAdmin | http://localhost:5050 |
+| MeiliSearch | http://localhost:7700 |
 
 ---
 
