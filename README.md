@@ -64,16 +64,13 @@ docker compose up -d
 
 ## 🗄️ İlk Veri Yükleme
 
-Sistem ilk kez ayağa kalktığında veritabanı boş gelir. Sırasıyla şu komutları çalıştırın:
+Sistem ilk kez ayağa kalktığında veritabanı tabloları **otomatik oluşturulur**. Sadece CSV verisini içe aktarmanız gerekir:
 
 ```bash
-# 1. Veritabanı tablolarını ve sistem ayarlarını oluştur
-docker compose exec backend python init_system.py
-
-# 2. CSV verisini PostgreSQL + MeiliSearch'e aktar
+# 1. CSV verisini PostgreSQL + MeiliSearch'e aktar
 docker compose exec backend python importer.py
 
-# 3. Vektörleri Qdrant'a yükle (semantic search için)
+# 2. Vektörleri Qdrant'a yükle (semantic search için)
 docker compose exec backend python vector_sync.py
 ```
 

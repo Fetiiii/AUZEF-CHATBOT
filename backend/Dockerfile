@@ -17,6 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Sonra kaynak kod
 COPY . .
 
+# Windows'ta kayıt edilen .sh script'i Linux'ta çalışabilen hale getir
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+
 # ─── Güvenlik: non-root kullanıcı ─────────────────────────────────────────────
 RUN adduser --disabled-password --no-create-home --gecos "" appuser \
     && mkdir -p /app/.cache/huggingface \
@@ -31,4 +34,4 @@ EXPOSE 8000
 ENV HF_HOME=/app/.cache/huggingface
 
 # Production: 4 worker (CPU sayısına göre ayarlayın)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
