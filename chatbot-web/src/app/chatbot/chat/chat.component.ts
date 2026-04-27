@@ -146,7 +146,9 @@ export class ChatComponent implements OnInit {
   }
 
   private pushMessage(msg: Partial<ChatMessage>): string {
-    const id = crypto.randomUUID();
+    const id = typeof crypto?.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const full: ChatMessage = {
       id,
       role: msg.role ?? 'bot',
