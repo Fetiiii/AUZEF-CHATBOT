@@ -94,6 +94,8 @@ services:
       dockerfile: Dockerfile
     container_name: auzef_backend
     restart: unless-stopped
+    ports:
+      - "8000:8000"
     env_file:
       - .env
     environment:
@@ -143,7 +145,7 @@ services:
       - "80:80"
       # HTTPS — SSL sertifikanız varsa aşağıdaki satırı açın:
       # - "443:443"
-    # volumes:
+      # volumes:
       # SSL sertifikaları için (Let's Encrypt veya benzeri):
       # - ./ssl/certs:/etc/nginx/ssl:ro
     depends_on:
