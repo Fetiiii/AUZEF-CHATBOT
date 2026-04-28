@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Query, Depends, HTTPException
+from fastapi import FastAPI, Query, Depends, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import SessionLocal, SystemConfig, QnA
+from database import SessionLocal, SystemConfig, QnA, QueryLog
 from providers import MeiliSearchProvider, QdrantProvider
 from llm_provider import LLMFactory
 from pydantic import BaseModel
@@ -85,11 +85,27 @@ class LLMConfigRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────
+#  Query Logging (arka planda, yanıt yolunu etkilemez)
+# ─────────────────────────────────────────────
+
+def _log_query(source: str, status: str, ip: Optional[str]):
+    db = SessionLocal()
+    try:
+        db.add(QueryLog(source=source, status=status, ip_address=ip))
+        db.commit()
+    except Exception as e:
+        logger.error(f"Query log yazılamadı: {e}")
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────────
 #  SEARCH (Orijinal endpoint korundu)
 # ─────────────────────────────────────────────
 
 @app.get("/api/search")
-async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db)):
+async def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(..., min_length=2), db: Session = Depends(get_db)):
+    ip = request.client.host if request.client else None
     current_time = time.time()
     meili_hits = []
 
@@ -101,6 +117,7 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
                 MEILI_STATUS["healthy"] = True
 
                 if meili_hits and meili_hits[0]['score'] >= 0.90:
+                    background_tasks.add_task(_log_query, "meilisearch", "success", ip)
                     return {
                         "source": "meilisearch",
                         "status": "success",
@@ -119,6 +136,7 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
         try:
             qdrant_hits = QDRANT_PROVIDER.search(q, limit=3)
             if qdrant_hits and qdrant_hits[0]['score'] > 0.75:
+                background_tasks.add_task(_log_query, "qdrant_vector", "success", ip)
                 return {
                     "source": "qdrant_vector",
                     "status": "success",
@@ -134,6 +152,7 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
         if is_llm_enabled(db) and qdrant_hits:
             try:
                 answer = LLM_PROVIDER.ask(q, qdrant_hits)
+                background_tasks.add_task(_log_query, "llm", "success", ip)
                 return {
                     "source": "llm",
                     "status": "success",
@@ -151,6 +170,7 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
         except:
             pass
 
+        background_tasks.add_task(_log_query, "none", "suggest", ip)
         return {
             "source": "none",
             "status": "suggest",
@@ -159,6 +179,7 @@ async def search(q: str = Query(..., min_length=2), db: Session = Depends(get_db
         }
 
     except Exception as e:
+        background_tasks.add_task(_log_query, "none", "error", ip)
         return {"status": "error", "message": f"Sistem genel hatası: {str(e)}"}
 
 
@@ -336,3 +357,69 @@ def set_llm_config(body: LLMConfigRequest, db: Session = Depends(get_db)):
     db.commit()
     logger.info(f"LLM durumu güncellendi: {new_value}")
     return {"enabled": body.enabled, "message": f"LLM {'etkinleştirildi' if body.enabled else 'devre dışı bırakıldı'}."}
+
+
+# ─────────────────────────────────────────────
+#  İzleme İstatistikleri
+# ─────────────────────────────────────────────
+
+@app.get("/api/stats")
+def get_stats(db: Session = Depends(get_db)):
+    from datetime import datetime, timedelta
+
+    # Turkey is UTC+3 with no DST (since 2016)
+    ISTANBUL_OFFSET = timedelta(hours=3)
+    now_utc = datetime.utcnow()
+    now_istanbul = now_utc + ISTANBUL_OFFSET
+
+    # Midnight in Istanbul time, converted back to UTC for DB comparison
+    today_start_utc = (now_istanbul.replace(hour=0, minute=0, second=0, microsecond=0)) - ISTANBUL_OFFSET
+    five_min_ago = now_utc - timedelta(minutes=5)
+
+    active_users = db.execute(
+        text("SELECT COUNT(*)::int FROM query_logs WHERE created_at >= :since"),
+        {"since": five_min_ago}
+    ).scalar() or 0
+
+    total_today = db.execute(
+        text("SELECT COUNT(*)::int FROM query_logs WHERE created_at >= :today"),
+        {"today": today_start_utc}
+    ).scalar() or 0
+
+    # generate_series and labels in Istanbul time; created_at stored as UTC so cast accordingly
+    hourly_rows = db.execute(text("""
+        SELECT
+            to_char(gs.hour, 'HH24:00') AS label,
+            COALESCE(COUNT(ql.id), 0)::int AS count
+        FROM generate_series(
+            date_trunc('hour', NOW() AT TIME ZONE 'Europe/Istanbul') - INTERVAL '23 hours',
+            date_trunc('hour', NOW() AT TIME ZONE 'Europe/Istanbul'),
+            INTERVAL '1 hour'
+        ) AS gs(hour)
+        LEFT JOIN query_logs ql
+            ON date_trunc('hour', (ql.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Istanbul') = gs.hour
+        GROUP BY gs.hour
+        ORDER BY gs.hour
+    """)).fetchall()
+
+    source_rows = db.execute(
+        text("""
+            SELECT source, COUNT(*)::int AS cnt
+            FROM query_logs
+            WHERE created_at >= :today
+            GROUP BY source
+        """),
+        {"today": today_start_utc}
+    ).fetchall()
+
+    sources = {"meilisearch": 0, "qdrant_vector": 0, "llm": 0, "none": 0}
+    for row in source_rows:
+        if row.source in sources:
+            sources[row.source] = row.cnt
+
+    return {
+        "active_users": int(active_users),
+        "total_queries_today": int(total_today),
+        "hourly": [{"label": row.label, "count": row.count} for row in hourly_rows],
+        "sources": sources
+    }

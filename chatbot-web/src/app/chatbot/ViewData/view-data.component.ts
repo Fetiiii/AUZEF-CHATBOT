@@ -2,11 +2,13 @@ import {
   ChangeDetectionStrategy,
   Component,
   OnInit,
+  inject,
   signal
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartData } from 'chart.js';
+import { StatsApiService } from '../../services/services/chatbot/stats-api.service';
 
 @Component({
   selector: 'app-view-data',
@@ -20,6 +22,7 @@ import { ChartConfiguration, ChartData } from 'chart.js';
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class ViewDataComponent implements OnInit {
+  private readonly statsService = inject(StatsApiService);
 
   /* ── Metric cards ── */
   activeUsers = signal<number>(0);
@@ -90,78 +93,51 @@ export class ViewDataComponent implements OnInit {
   noAnswerCount = signal<number>(0);
 
   ngOnInit(): void {
-    this.loadMockData();
+    this.loadStats();
   }
 
-  /* ────────────────────────────────────────────
-     MOCK DATA — replace with real API calls later
-     ──────────────────────────────────────────── */
-  private loadMockData(): void {
-    const now = new Date();
-    const currentHour = now.getHours();
+  private loadStats(): void {
+    this.statsService.getStats().subscribe({
+      next: (stats) => {
+        this.activeUsers.set(stats.active_users);
+        this.totalQueriesToday.set(stats.total_queries_today);
 
-    // ── 1. Build 24-hour traffic with a realistic bell curve ──
-    const labels: string[] = [];
-    const data: number[] = [];
-    let total = 0;
+        const labels = stats.hourly.map(h => h.label);
+        const data = stats.hourly.map(h => h.count);
+        this.hourlyLabels = labels;
+        this.hourlyChartData.set({
+          labels,
+          datasets: [{
+            data,
+            label: 'Sorgu Sayısı',
+            borderColor: '#7c3aed',
+            backgroundColor: 'rgba(124,58,237,.08)',
+            pointBackgroundColor: '#7c3aed',
+            pointBorderColor: '#fff',
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            borderWidth: 2,
+            fill: true,
+            tension: 0.35
+          }]
+        });
 
-    for (let i = 0; i < 24; i++) {
-      const hour = (currentHour - 23 + i + 24) % 24;
-      labels.push(`${hour.toString().padStart(2, '0')}:00`);
-
-      // Bell curve peak at 11:00-13:00
-      const dist = Math.abs(hour - 12);
-      const base = Math.max(2, Math.round(55 * Math.exp(-(dist * dist) / 18)));
-      const jitter = Math.round((Math.random() - 0.5) * 12);
-      const value = Math.max(0, base + jitter);
-      data.push(value);
-      total += value;
-    }
-
-    this.totalQueriesToday.set(total);
-    this.hourlyLabels = labels;
-    this.hourlyChartData.set({
-      labels,
-      datasets: [
-        {
-          data,
-          label: 'Sorgu Sayısı',
-          borderColor: '#7c3aed',
-          backgroundColor: 'rgba(124,58,237,.08)',
-          pointBackgroundColor: '#7c3aed',
-          pointBorderColor: '#fff',
-          pointRadius: 3,
-          pointHoverRadius: 5,
-          borderWidth: 2,
-          fill: true,
-          tension: 0.35
-        }
-      ]
-    });
-
-    // ── 2. Active users (random realistic count) ──
-    this.activeUsers.set(Math.floor(Math.random() * 18) + 3);
-
-    // ── 3. Resolution source breakdown ──
-    const llm = Math.round(total * 0.42);
-    const meili = Math.round(total * 0.45);
-    const none = total - llm - meili;
-
-    this.llmCount.set(llm);
-    this.meiliCount.set(meili);
-    this.noAnswerCount.set(none);
-
-    this.doughnutChartData.set({
-      labels: ['LLM (Yapay Zeka)', 'MeiliSearch', 'Cevapsız'],
-      datasets: [
-        {
-          data: [llm, meili, none],
-          backgroundColor: ['#7c3aed', '#10b981', '#f59e0b'],
-          borderColor: ['#fff', '#fff', '#fff'],
-          borderWidth: 2,
-          hoverOffset: 6
-        }
-      ]
+        const { llm, meilisearch, none } = stats.sources;
+        this.llmCount.set(llm);
+        this.meiliCount.set(meilisearch);
+        this.noAnswerCount.set(none);
+        this.doughnutChartData.set({
+          labels: ['LLM (Yapay Zeka)', 'MeiliSearch', 'Cevapsız'],
+          datasets: [{
+            data: [llm, meilisearch, none],
+            backgroundColor: ['#7c3aed', '#10b981', '#f59e0b'],
+            borderColor: ['#fff', '#fff', '#fff'],
+            borderWidth: 2,
+            hoverOffset: 6
+          }]
+        });
+      },
+      error: (err) => console.error('İstatistikler yüklenemedi:', err)
     });
   }
 }

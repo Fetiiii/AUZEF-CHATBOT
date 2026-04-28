@@ -46,12 +46,20 @@ class QnATag(Base):
     qna_id = Column(BigInteger, ForeignKey("qna.id", ondelete="CASCADE"), primary_key=True)
     tag_id = Column(BigInteger, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
 
-class SystemConfig(Base):                                                                                                                  
-    __tablename__ = "system_config"                                                                                                       
-    key = Column(String(50), primary_key=True)                                                                                             
-    value = Column(String(255), nullable=True)                                                                                            
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())                                                          
-                                                                                                                                           
+class SystemConfig(Base):
+    __tablename__ = "system_config"
+    key = Column(String(50), primary_key=True)
+    value = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class QueryLog(Base):
+    __tablename__ = "query_logs"
+    id = Column(BigInteger, primary_key=True, index=True)
+    source = Column(String(20), nullable=False)   # meilisearch | qdrant_vector | llm | none
+    status = Column(String(20), nullable=False)   # success | suggest | error
+    ip_address = Column(String(45), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
 # Veritabanı tablolarını oluştur
 def init_db():
     Base.metadata.create_all(bind=engine)
