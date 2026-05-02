@@ -33,14 +33,7 @@ export const routes: Routes = [
     canActivate: [chatbotAuthGuard],
     canActivateChild: [chatbotAuthGuard],
     children: [
-      { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
-
-      {
-        path: 'dashboard',
-        loadComponent: () =>
-          import('./chatbot/dashboard/dashboard.component').then((m) => m.DashboardComponent),
-        data: { title: 'nav.chatbot.dashboard' }
-      },
+      { path: '', pathMatch: 'full', redirectTo: 'document-upload' },
 
       {
         path: 'document-upload',

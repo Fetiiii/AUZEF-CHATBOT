@@ -55,4 +55,10 @@ export class QnaApiService {
   bulkUpdate(items: QnABulkUpdateItem[]): Observable<{ updated_ids: number[]; count: number }> {
     return this.http.put<{ updated_ids: number[]; count: number }>(`${this.base}/bulk-update`, items);
   }
+
+  importCsv(file: File): Observable<{ imported: number }> {
+    const form = new FormData();
+    form.append('file', file);
+    return this.http.post<{ imported: number }>(`${this.base}/import`, form);
+  }
 }

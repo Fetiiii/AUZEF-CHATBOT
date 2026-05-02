@@ -20,7 +20,7 @@ export class SignInComponent {
   loading = false;
   loginErrorMessage: string | null = null;
 
-  private readonly AFTER_LOGIN_URL = '/chatbot/dashboard';
+  private readonly AFTER_LOGIN_URL = '/chatbot/document-upload';
 
   form = this.fb.group({
     identifier: ['', [Validators.required]],

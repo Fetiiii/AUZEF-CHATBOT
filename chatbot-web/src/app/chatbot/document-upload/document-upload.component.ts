@@ -122,6 +122,8 @@ export class DocumentUploadComponent implements OnInit {
   hasPendingChanges = signal(false);
   toastMessage = signal<string | null>(null);
   toastType = signal<'success' | 'error'>('success');
+  importing = signal(false);
+  selectedFile = signal<File | null>(null);
 
   // Yeni satır formu
   newQuestion = '';
@@ -300,5 +302,32 @@ export class DocumentUploadComponent implements OnInit {
 
   quickFilter(value: string): void {
     this.gridApi?.setGridOption('quickFilterText', value);
+  }
+
+  onFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.selectedFile.set(input.files?.[0] ?? null);
+    this.cdr.markForCheck();
+  }
+
+  uploadCsv(): void {
+    const file = this.selectedFile();
+    if (!file) return;
+    this.importing.set(true);
+
+    this.qnaApi.importCsv(file).subscribe({
+      next: (res) => {
+        this.importing.set(false);
+        this.selectedFile.set(null);
+        this.showToast(`${res.imported} kayıt içe aktarıldı.`, 'success');
+        this.refreshData();
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.importing.set(false);
+        this.showToast('İçe aktarma başarısız oldu.', 'error');
+        this.cdr.markForCheck();
+      },
+    });
   }
 }

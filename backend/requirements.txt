@@ -1,5 +1,6 @@
 # Web Framework
 fastapi
+python-multipart
 uvicorn[standard]
 
 # Database

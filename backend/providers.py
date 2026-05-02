@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import meilisearch
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import PointStruct
+from qdrant_client.http.models import PointStruct, Distance, VectorParams
 from sentence_transformers import SentenceTransformer
 
 class BaseSearchProvider(ABC):
@@ -50,6 +50,16 @@ class QdrantProvider(BaseSearchProvider):
         self.client = QdrantClient(host=host, port=port)
         self.collection_name = collection_name
         self.model = SentenceTransformer(model_name)
+
+    def ensure_collection(self):
+        try:
+            self.client.get_collection(self.collection_name)
+        except Exception:
+            vector_size = self.model.get_sentence_embedding_dimension()
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
+            )
 
     def search(self, query: str, limit: int = 3):
         query_vector = self.model.encode(query).tolist()

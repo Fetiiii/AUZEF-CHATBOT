@@ -1,5 +1,7 @@
-from fastapi import FastAPI, Query, Depends, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, Query, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+import csv
+import io
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import SessionLocal, SystemConfig, QnA, QueryLog
@@ -54,6 +56,15 @@ def get_db():
 def is_llm_enabled(db: Session):
     config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
     return config.value.lower() == "true" if config else False
+
+@app.on_event("startup")
+async def startup_event():
+    try:
+        QDRANT_PROVIDER.ensure_collection()
+        logger.info("Qdrant koleksiyonu hazır.")
+    except Exception as e:
+        logger.error(f"Qdrant collection init hatası: {e}")
+
 
 # Circuit Breaker Durumu
 MEILI_STATUS = {"healthy": True, "last_check": 0}
@@ -328,6 +339,64 @@ def delete_qna(qna_id: int, db: Session = Depends(get_db)):
     remove_from_providers(qna_id)
     
     return None
+
+
+# ─────────────────────────────────────────────
+#  CSV Import
+# ─────────────────────────────────────────────
+
+@app.post("/api/qna/import")
+async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """CSV dosyasından toplu QnA içe aktarır. Format: question;answer;tags;query_1;...;query_20"""
+    content = await file.read()
+    try:
+        text_content = content.decode("utf-8")
+    except UnicodeDecodeError:
+        text_content = content.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text_content), delimiter=';')
+    inserted_ids = []
+
+    for row in reader:
+        question = row.get('question', '').strip()
+        answer = row.get('answer', '').strip()
+        if not question or not answer:
+            continue
+
+        result = db.execute(
+            text("INSERT INTO qna (question_text, answer_text) VALUES (:q, :a) RETURNING id"),
+            {"q": question, "a": answer}
+        ).fetchone()
+        qna_id = result[0]
+        inserted_ids.append(qna_id)
+
+        tags_val = row.get('tags', '')
+        if tags_val and tags_val.strip():
+            for tag_name in [t.strip() for t in tags_val.split(',') if t.strip()]:
+                tag_res = db.execute(
+                    text("INSERT INTO tags (name) VALUES (:n) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id"),
+                    {"n": tag_name}
+                ).fetchone()
+                db.execute(
+                    text("INSERT INTO qna_tags (qna_id, tag_id) VALUES (:q_id, :t_id) ON CONFLICT DO NOTHING"),
+                    {"q_id": qna_id, "t_id": tag_res[0]}
+                )
+
+        for i in range(1, 21):
+            query_val = row.get(f'query_{i}', '').strip()
+            if query_val:
+                db.execute(
+                    text("INSERT INTO qna_queries (qna_id, query_text) VALUES (:q_id, :qt)"),
+                    {"q_id": qna_id, "qt": query_val}
+                )
+
+    db.commit()
+
+    for qna_id in inserted_ids:
+        sync_providers(db, qna_id)
+
+    logger.info(f"CSV import tamamlandı: {len(inserted_ids)} kayıt eklendi.")
+    return {"imported": len(inserted_ids)}
 
 
 # ─────────────────────────────────────────────
