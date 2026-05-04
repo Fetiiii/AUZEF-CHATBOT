@@ -143,11 +143,9 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      # HTTPS — SSL sertifikanız varsa aşağıdaki satırı açın:
-      # - "443:443"
-      # volumes:
-      # SSL sertifikaları için (Let's Encrypt veya benzeri):
-      # - ./ssl/certs:/etc/nginx/ssl:ro
+      - "443:443"
+    volumes:
+      - ./ssl/certs:/etc/nginx/ssl:ro
     depends_on:
       backend:
         condition: service_healthy
