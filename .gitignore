@@ -54,3 +54,11 @@ Thumbs.db
 # ── Docker ───────────────────────────────────────────────────────────────────
 # (docker-compose.override.yml yerel geliştirme için — git'e eklenmesin)
 docker-compose.override.yml
+# SSL DOSYALARI
+# SSL klasörünü ve altındaki tüm certs/fullchain/privkey içeriğini engeller
+ssl/
+
+# Ekstra güvenlik: Kazara başka yere kopyalanırsa diye uzantı bazlı engeller
+*.pem
+*.key
+*.crt
