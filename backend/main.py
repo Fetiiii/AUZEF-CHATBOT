@@ -94,6 +94,9 @@ class QnABulkUpdateItem(BaseModel):
 class LLMConfigRequest(BaseModel):
     enabled: bool
 
+class WidgetChatRequest(BaseModel):
+    message: str
+
 
 # ─────────────────────────────────────────────
 #  Query Logging (arka planda, yanıt yolunu etkilemez)
@@ -108,6 +111,62 @@ def _log_query(source: str, status: str, ip: Optional[str]):
         logger.error(f"Query log yazılamadı: {e}")
     finally:
         db.close()
+
+
+# ─────────────────────────────────────────────
+#  Widget Chat Adapter
+# ─────────────────────────────────────────────
+
+@app.post("/widget-chat")
+async def widget_chat(body: WidgetChatRequest, db: Session = Depends(get_db)):
+    """Embed widget için basit adapter: {message} → {answer}"""
+    q = body.message.strip()
+    if not q:
+        return {"answer": "Lütfen bir soru yazın."}
+
+    current_time = time.time()
+    meili_hits = []
+
+    # MeiliSearch
+    try:
+        if MEILI_STATUS["healthy"] or (current_time - MEILI_STATUS["last_check"] > CIRCUIT_BREAKER_TIME):
+            meili_hits = MEILI_PROVIDER.search(q, limit=3)
+            MEILI_STATUS["healthy"] = True
+            if meili_hits and meili_hits[0]["score"] >= 0.90:
+                return {"answer": meili_hits[0]["answer"]}
+    except Exception:
+        MEILI_STATUS["healthy"] = False
+        MEILI_STATUS["last_check"] = current_time
+        meili_hits = []
+
+    # Qdrant
+    qdrant_hits = []
+    try:
+        qdrant_hits = QDRANT_PROVIDER.search(q, limit=3)
+        if qdrant_hits and qdrant_hits[0]["score"] > 0.75:
+            return {"answer": qdrant_hits[0]["answer"]}
+    except Exception:
+        qdrant_hits = []
+
+    # LLM (RAG fallback)
+    if is_llm_enabled(db) and qdrant_hits:
+        try:
+            return {"answer": LLM_PROVIDER.ask(q, qdrant_hits)}
+        except Exception:
+            pass
+
+    # Öneriler
+    try:
+        suggestions = MEILI_PROVIDER.get_suggestions(q)
+        if suggestions:
+            return {
+                "answer": "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
+                "suggestions": suggestions[:3]
+            }
+    except Exception:
+        pass
+
+    return {"answer": "Bu konuda bilgim bulunmuyor."}
 
 
 # ─────────────────────────────────────────────

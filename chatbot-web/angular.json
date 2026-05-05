@@ -26,7 +26,8 @@
             "tsConfig": "tsconfig.app.json",
             "assets": [
               "src/assets",
-              "src/favicon.ico"
+              "src/favicon.ico",
+              { "glob": "widget.js", "input": "src", "output": "/" }
             ],
             "styles": [
               "src/styles.css",

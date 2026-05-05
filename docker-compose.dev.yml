@@ -1,0 +1,6 @@
+services:
+  frontend:
+    ports:
+      - "80:80"
+    volumes:
+      - ./chatbot-web/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
