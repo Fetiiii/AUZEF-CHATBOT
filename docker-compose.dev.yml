@@ -1,6 +1,14 @@
 services:
   frontend:
+    build:
+      context: ./chatbot-web
+      dockerfile: Dockerfile
+    container_name: auzef_frontend
+    restart: unless-stopped
     ports:
       - "80:80"
+      - "4200:4200"
     volumes:
+      - ./chatbot-web:/app
       - ./chatbot-web/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    

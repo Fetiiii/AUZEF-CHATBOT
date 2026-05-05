@@ -68,6 +68,7 @@ export class DocumentUploadComponent implements OnInit {
       wrapText: true,
       autoHeight: true,
       cellStyle: { 'white-space': 'normal', 'line-height': '1.5' },
+      cellEditorPopupPosition: 'under',
     },
     {
       field: 'status',
@@ -112,7 +113,10 @@ export class DocumentUploadComponent implements OnInit {
       },
     },
   ];
-
+  gridOptions = {
+    editType: 'fullRow' as const,
+    stopEditingWhenGridLosesFocus: true,
+  };
   // ── State ─────────────────────────────────────────
   loading = signal(true);
   saving = signal(false);
