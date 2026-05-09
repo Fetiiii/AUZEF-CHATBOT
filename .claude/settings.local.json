@@ -4,7 +4,8 @@
       "Bash(xargs grep *)",
       "Bash(python *)",
       "Bash(dir -Recurse -Filter \"docker-compose.yml\")",
-      "Bash(Select-Object FullName)"
+      "Bash(Select-Object FullName)",
+      "Bash(git show *)"
     ]
   }
 }

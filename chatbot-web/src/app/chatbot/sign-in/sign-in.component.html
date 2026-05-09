@@ -4,62 +4,6 @@
 <div class="card pt-7 sm:pt-9 px-6 pb-6 md:pt-8 md:px-8 md:pb-8 rounded-lg border border-gray-200/70 dark:border-slate-700/70
     shadow-[0_18px_55px_-30px_rgba(2,6,23,.45)] dark:shadow-[0_18px_55px_-30px_rgba(0,0,0,.7)] relative
     max-w-full overflow-hidden">
-    <!-- ✅ Kart içi: Tema + Dil (kartla hizalı) -->
-    <div class="absolute right-10 top-4 sm:right-10 sm:top-5 z-40 flex items-center gap-2 max-w-full">
-        <!-- Tema segmenti -->
-        <div class="inline-flex items-center gap-2 shrink-0">
-            <div class="segment segment--primary h-[35px]">
-                <button type="button" [attr.aria-pressed]="theme.mode() === 'system'" (click)="setTheme('system')"
-                    title="{{ t('theme.system') }}">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" />
-                    </svg>
-                </button>
-
-                <button type="button" [attr.aria-pressed]="theme.mode() === 'light'" (click)="setTheme('light')"
-                    title="{{ t('theme.light') }}">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path
-                            d="M12 18a6 6 0 1 0-6-6 6 6 0 0 0 6 6Zm0-14v2M12 18v2m8-8h-2M6 12H4m12.95 4.95-1.41-1.41M8.46 8.46 7.05 7.05m9.9 9.9 1.41 1.41M8.46 15.54 7.05 16.95" />
-                    </svg>
-                </button>
-
-                <button type="button" [attr.aria-pressed]="theme.mode() === 'dark'" (click)="setTheme('dark')"
-                    title="{{ t('theme.dark') }}">
-                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3c.06 0 .12 0 .18 0A7 7 0 0 0 21 12.79Z" />
-                    </svg>
-                </button>
-            </div>
-        </div>
-
-        <!-- Dil menüsü -->
-        <div class="relative shrink-0" (click)="$event.stopPropagation()">
-            <button type="button" class="langbtn langbtn--primary h-[35px]" (click)="langOpen = !langOpen">
-                <img [src]="currentFlag()" class="flag" alt="flag" />
-                <span class="hidden sm:inline">{{ lang() | uppercase }}</span>
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="1.5">
-                    <path d="m6 9 6 6 6-6" />
-                </svg>
-            </button>
-
-            <div *ngIf="langOpen"
-                class="absolute right-0 mt-1 w-32 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
-                <button class="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-slate-800"
-                    (click)="setLang('tr')">
-                    <img src="assets/flags/tr.svg" class="flag" alt="TR" />
-                    Türkçe
-                </button>
-                <button class="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-100 dark:hover:bg-slate-800"
-                    (click)="setLang('en')">
-                    <img src="assets/flags/en.svg" class="flag" alt="EN" />
-                    English
-                </button>
-            </div>
-        </div>
-    </div>
-
     <!-- ✅ İÇERİK: Scroll AÇIK -->
     <div
         class="h-[90dvh] flex flex-col px-3 sm:px-6 overflow-x-hidden overflow-y-auto overscroll-contain mt-7 mb-12 no-scrollbar">
@@ -94,26 +38,11 @@
                         <div class="mt-1 text-[15px] sm:text-xl font-semibold text-gray-900 dark:text-gray-100">
                             {{ t('faculty') }}
                         </div>
-
-                        <div
-                            class="mt-8 mb-8 flex flex-wrap items-center justify-center gap-2 text-sm font-normal tracking-wide">
-                            <span class="px-3 py-2 rounded-lg bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300
-                border border-violet-300 dark:border-violet-700/50 shadow-sm">
-                                {{ t('system') }}
-                            </span>
-
-                            <span class="px-3 py-2 rounded-lg bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300
-                border border-emerald-500/70 shadow-sm">
-                                {{ t('system-chatbot') }}
-                            </span>
-                        </div>
-
                         <div
                             class="mt-4 mb-4 -mx-4 sm:-mx-6 md:-mx-8 border-t border-gray-200/70 dark:border-slate-700/70">
                         </div>
                     </div>
                 </div>
-
                 <h2 class="text-xl font-semibold mb-1 text-gray-900 dark:text-gray-100">
                     {{ t('chatbot.signIn') }}
                 </h2>
@@ -209,11 +138,14 @@
                         
                     </div>
 
-                    <button type="submit" class="w-full px-4 py-2.5 rounded-lg bg-violet-600 text-white font-semibold
-              hover:bg-violet-700 active:scale-[.99] transition
-              shadow-[0_12px_30px_-18px_rgba(109,40,217,.85)]
-              disabled:opacity-100 disabled:cursor-not-allowed disabled:bg-violet-600" [disabled]="false">
-                        {{ loading ? t('signing-in') : t('chatbot.signIn') }}
+                    <button type="submit"
+                            class="w-full px-4 py-2.5 rounded-lg
+                                    bg-blue-900 text-white font-semibold
+                                    hover:bg-blue-950 active:scale-[.99] transition
+                                    shadow-[0_12px_30px_-18px_rgba(30,58,138,.85)]
+                                    disabled:opacity-100 disabled:cursor-not-allowed disabled:bg-blue-900"
+                            [disabled]="false">
+                    {{ loading ? t('signing-in') : t('chatbot.signIn') }}
                     </button>
 
                     <div *ngIf="loginErrorMessage" class="flex items-start gap-2 p-3 rounded-lg border border-red-200 dark:border-red-800
@@ -227,14 +159,10 @@
                             <div class="font-semibold">{{ t('error') }}</div>
                             <div class="opacity-90">{{ loginErrorMessage }}</div>
                         </div>
-                    </div>
-
-                    <!-- ✅ Teknik Destek -->
-                    
+                    </div>                    
                 </form>
             </div>
         </div>
-
         <div class="flex-1 max-h-6"></div>
     </div>
 </div>

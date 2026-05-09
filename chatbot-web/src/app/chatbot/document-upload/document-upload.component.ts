@@ -65,11 +65,22 @@ export class DocumentUploadComponent implements OnInit {
       editable: true,
       sortable: true,
       filter: true,
+
       wrapText: true,
       autoHeight: true,
-      cellStyle: { 'white-space': 'normal', 'line-height': '1.5' },
+
+      cellStyle: {
+        'white-space': 'normal',
+        'line-height': '1.5'
+      },
+      cellEditor: 'agLargeTextCellEditor',
+      cellEditorPopup: true,
       cellEditorPopupPosition: 'under',
-    },
+      cellEditorParams: {
+        rows: 18,
+        cols: 80
+      }
+},
     {
       field: 'status',
       headerName: 'Durum',
