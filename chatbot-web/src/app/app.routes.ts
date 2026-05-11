@@ -17,13 +17,8 @@ export const routes: Routes = [
     data: { title: 'chatbot.signIn' }
   },
 
-  // 🔓 Chatbot public sayfası (login gerekmez)
-  {
-    path: 'chat',
-    loadComponent: () =>
-      import('./chatbot/chat/chat.component').then((m) => m.ChatComponent),
-    data: { title: 'nav.chatbot.chat' }
-  },
+  // Chatbot artık widget olarak sunuluyor
+  { path: 'chat', redirectTo: 'chatbot/sign-in', pathMatch: 'full' },
 
   // 🔐 Chatbot admin shell (login gerekir)
   {

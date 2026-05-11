@@ -8,6 +8,7 @@
   })();
   var _apiUrl = (_script && _script.getAttribute('data-api-url')) ||
     ((_script && _script.src ? new URL(_script.src).origin : '') + '/widget-chat');
+  var _pos = (_script && _script.getAttribute('data-position') === 'left') ? 'left' : 'right';
 
   // ── Mount shadow root ───────────────────────────────────────────────────────
   var host = document.createElement('div');
@@ -21,7 +22,7 @@
     '*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}',
 
     // FAB button
-    '.fab{position:fixed;bottom:24px;right:24px;width:58px;height:58px;border-radius:50%;',
+    '.fab{position:fixed;bottom:24px;' + _pos + ':24px;width:58px;height:58px;border-radius:50%;',
     'background:linear-gradient(135deg,#1e3a8a,#1e40af);color:#fff;border:none;cursor:pointer;',
     'box-shadow:0 4px 20px rgba(30,58,138,.5);display:flex;align-items:center;',
     'justify-content:center;transition:transform .2s,box-shadow .2s;z-index:2147483646;}',
@@ -29,11 +30,11 @@
     '.fab svg{width:26px;height:26px;}',
 
     // Popup
-    '.popup{position:fixed;bottom:96px;right:24px;width:360px;height:520px;',
+    '.popup{position:fixed;bottom:96px;' + _pos + ':24px;width:360px;height:520px;',
     'background:#fff;border-radius:16px;box-shadow:0 16px 56px rgba(0,0,0,.18);',
     'display:flex;flex-direction:column;overflow:hidden;z-index:2147483645;',
     'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;',
-    'transform-origin:bottom right;transition:transform .25s cubic-bezier(.34,1.56,.64,1),opacity .2s;}',
+    'transform-origin:bottom ' + _pos + ';transition:transform .25s cubic-bezier(.34,1.56,.64,1),opacity .2s;}',
     '.popup.hidden{transform:scale(.85) translateY(16px);opacity:0;pointer-events:none;}',
 
     // Header
@@ -104,8 +105,8 @@
 
     // Responsive
     '@media(max-width:420px){',
-    '.popup{width:calc(100vw - 16px);right:8px;bottom:84px;}',
-    '.fab{right:12px;bottom:12px;}}'
+    '.popup{width:calc(100vw - 16px);' + _pos + ':8px;bottom:84px;}',
+    '.fab{' + _pos + ':12px;bottom:12px;}}'
   ].join('');
 
   // ── HTML ────────────────────────────────────────────────────────────────────

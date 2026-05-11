@@ -118,12 +118,13 @@ def _log_query(source: str, status: str, ip: Optional[str]):
 # ─────────────────────────────────────────────
 
 @app.post("/widget-chat")
-async def widget_chat(body: WidgetChatRequest, db: Session = Depends(get_db)):
+async def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Embed widget için basit adapter: {message} → {answer}"""
     q = body.message.strip()
     if not q:
         return {"answer": "Lütfen bir soru yazın."}
 
+    ip = request.client.host if request.client else None
     current_time = time.time()
     meili_hits = []
 
@@ -133,6 +134,7 @@ async def widget_chat(body: WidgetChatRequest, db: Session = Depends(get_db)):
             meili_hits = MEILI_PROVIDER.search(q, limit=3)
             MEILI_STATUS["healthy"] = True
             if meili_hits and meili_hits[0]["score"] >= 0.90:
+                background_tasks.add_task(_log_query, "meilisearch", "success", ip)
                 return {"answer": meili_hits[0]["answer"]}
     except Exception:
         MEILI_STATUS["healthy"] = False
@@ -144,6 +146,7 @@ async def widget_chat(body: WidgetChatRequest, db: Session = Depends(get_db)):
     try:
         qdrant_hits = QDRANT_PROVIDER.search(q, limit=3)
         if qdrant_hits and qdrant_hits[0]["score"] > 0.75:
+            background_tasks.add_task(_log_query, "qdrant_vector", "success", ip)
             return {"answer": qdrant_hits[0]["answer"]}
     except Exception:
         qdrant_hits = []
@@ -151,6 +154,7 @@ async def widget_chat(body: WidgetChatRequest, db: Session = Depends(get_db)):
     # LLM (RAG fallback)
     if is_llm_enabled(db) and qdrant_hits:
         try:
+            background_tasks.add_task(_log_query, "llm", "success", ip)
             return {"answer": LLM_PROVIDER.ask(q, qdrant_hits)}
         except Exception:
             pass
@@ -159,6 +163,7 @@ async def widget_chat(body: WidgetChatRequest, db: Session = Depends(get_db)):
     try:
         suggestions = MEILI_PROVIDER.get_suggestions(q)
         if suggestions:
+            background_tasks.add_task(_log_query, "none", "suggest", ip)
             return {
                 "answer": "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
                 "suggestions": suggestions[:3]
@@ -166,6 +171,7 @@ async def widget_chat(body: WidgetChatRequest, db: Session = Depends(get_db)):
     except Exception:
         pass
 
+    background_tasks.add_task(_log_query, "none", "suggest", ip)
     return {"answer": "Bu konuda bilgim bulunmuyor."}
 
 
