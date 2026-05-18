@@ -144,18 +144,20 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
     # Qdrant
     qdrant_hits = []
     try:
-        qdrant_hits = QDRANT_PROVIDER.search(q, limit=3)
+        qdrant_hits = QDRANT_PROVIDER.search(q, limit=5)
         if qdrant_hits and qdrant_hits[0]["score"] > 0.75:
             background_tasks.add_task(_log_query, "qdrant_vector", "success", ip)
             return {"answer": qdrant_hits[0]["answer"]}
     except Exception:
         qdrant_hits = []
 
-    # LLM (RAG fallback)
+    # LLM (RAG fallback) — selector mode: picks verbatim answer or None
     if is_llm_enabled(db) and qdrant_hits:
         try:
-            background_tasks.add_task(_log_query, "llm", "success", ip)
-            return {"answer": LLM_PROVIDER.ask(q, qdrant_hits)}
+            answer = LLM_PROVIDER.ask(q, qdrant_hits)
+            if answer:
+                background_tasks.add_task(_log_query, "llm", "success", ip)
+                return {"answer": answer}
         except Exception:
             pass
 
@@ -210,7 +212,7 @@ async def search(request: Request, background_tasks: BackgroundTasks, q: str = Q
 
         # --- ADIM 2: QDRANT (SEMANTIC SEARCH) ---
         try:
-            qdrant_hits = QDRANT_PROVIDER.search(q, limit=3)
+            qdrant_hits = QDRANT_PROVIDER.search(q, limit=5)
             if qdrant_hits and qdrant_hits[0]['score'] > 0.75:
                 background_tasks.add_task(_log_query, "qdrant_vector", "success", ip)
                 return {
@@ -224,18 +226,19 @@ async def search(request: Request, background_tasks: BackgroundTasks, q: str = Q
             logger.error(f"Qdrant hatası: {str(e)}")
             qdrant_hits = []
 
-        # --- ADIM 3: LLM FALLBACK (RAG) ---
+        # --- ADIM 3: LLM FALLBACK (RAG) — selector mode: picks verbatim answer or None ---
         if is_llm_enabled(db) and qdrant_hits:
             try:
                 answer = LLM_PROVIDER.ask(q, qdrant_hits)
-                background_tasks.add_task(_log_query, "llm", "success", ip)
-                return {
-                    "source": "llm",
-                    "status": "success",
-                    "answer": answer,
-                    "question": q,
-                    "context_used": [h['question'] for h in qdrant_hits]
-                }
+                if answer:
+                    background_tasks.add_task(_log_query, "llm", "success", ip)
+                    return {
+                        "source": "llm",
+                        "status": "success",
+                        "answer": answer,
+                        "question": q,
+                        "context_used": [h['question'] for h in qdrant_hits]
+                    }
             except Exception as e:
                 logger.error(f"LLM Hatası: {str(e)}")
 
