@@ -9,6 +9,8 @@
   var _apiUrl = (_script && _script.getAttribute('data-api-url')) ||
     ((_script && _script.src ? new URL(_script.src).origin : '') + '/widget-chat');
   var _pos = (_script && _script.getAttribute('data-position') === 'left') ? 'left' : 'right';
+  // ── Talep oluşturma sayfası (AUZEF Çözüm Merkezi) — URL hazır olunca buraya yazın ──
+  var _solutionUrl = (_script && _script.getAttribute('data-solution-url')) || 'https://cozummerkeziauzef.istanbul.edu.tr/student/sign-in';
 
   // ── Mount shadow root ───────────────────────────────────────────────────────
   var host = document.createElement('div');
@@ -95,6 +97,17 @@
     '.spinner{width:14px;height:14px;border:2px solid rgba(255,255,255,.4);',
     'border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;}',
     '@keyframes spin{to{transform:rotate(360deg)}}',
+
+    // Feedback
+    '.feedback{display:flex;flex-direction:column;gap:6px;padding:4px 0 2px;}',
+    '.fb-q{font-size:11px;color:#64748b;margin:0;}',
+    '.fb-btns{display:flex;gap:6px;}',
+    '.fb-btn{padding:4px 14px;border-radius:20px;border:1.5px solid;font-size:12px;',
+    'cursor:pointer;font-family:inherit;transition:background .15s;}',
+    '.fb-btn.yes{border-color:#86efac;background:#f0fdf4;color:#15803d;}',
+    '.fb-btn.yes:hover{background:#dcfce7;}',
+    '.fb-btn.no{border-color:#fca5a5;background:#fff1f2;color:#b91c1c;}',
+    '.fb-btn.no:hover{background:#fee2e2;}',
 
     // Suggestion chips
     '.suggestions{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0 2px;}',
@@ -203,10 +216,14 @@
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (data) {
         typingEl.remove();
-        appendMsg('bot', data.answer || 'Yanıt alınamadı.');
-        if (data.suggestions && data.suggestions.length) {
-          appendSuggestions(data.suggestions);
-        }
+        var answer = data.answer || 'Yanıt alınamadı.';
+        appendBotMsg(answer, function () {
+          if (data.suggestions && data.suggestions.length) {
+            appendSuggestions(data.suggestions);
+          } else {
+            appendFeedback();
+          }
+        });
       })
       .catch(function () {
         typingEl.remove();
@@ -228,6 +245,45 @@
       '<span class="ts">' + ts + '</span>';
     messages.appendChild(el);
     scrollEnd();
+    return el;
+  }
+
+  // ── Bot message with typewriter effect ──────────────────────────────────────
+  function appendBotMsg(text, onDone) {
+    var ts = new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+    var el = document.createElement('div');
+    el.className = 'msg bot';
+
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble';
+
+    var p = document.createElement('p');
+    p.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-word;';
+    bubble.appendChild(p);
+
+    var tsSpan = document.createElement('span');
+    tsSpan.className = 'ts';
+    tsSpan.textContent = ts;
+
+    el.appendChild(bubble);
+    el.appendChild(tsSpan);
+    messages.appendChild(el);
+    scrollEnd();
+
+    var i = 0;
+    // speed: max 20ms/char, but cap total duration at 4s for long answers
+    var speed = Math.min(20, Math.floor(4000 / Math.max(text.length, 1)));
+    function tick() {
+      if (i < text.length) {
+        p.textContent += text[i];
+        i++;
+        scrollEnd();
+        setTimeout(tick, speed);
+      } else if (onDone) {
+        onDone();
+      }
+    }
+    tick();
     return el;
   }
 
@@ -264,6 +320,81 @@
       wrap.appendChild(btn);
     });
     el.appendChild(wrap);
+    messages.appendChild(el);
+    scrollEnd();
+  }
+
+  // ── Feedback ────────────────────────────────────────────────────────────────
+  function appendFeedback() {
+    var el = document.createElement('div');
+    el.className = 'msg bot';
+
+    var fb = document.createElement('div');
+    fb.className = 'feedback';
+
+    function showThankYou() {
+      fb.innerHTML = '<p class="fb-q">Geri bildiriminiz için teşekkür ederiz.</p>';
+      scrollEnd();
+    }
+
+    function showRequestStep() {
+      fb.innerHTML = '';
+      var q2 = document.createElement('p');
+      q2.className = 'fb-q';
+      q2.textContent = 'Talep oluşturmak ister misiniz?';
+
+      var btns2 = document.createElement('div');
+      btns2.className = 'fb-btns';
+
+      var yes2 = document.createElement('button');
+      yes2.className = 'fb-btn yes';
+      yes2.textContent = 'Evet';
+
+      var no2 = document.createElement('button');
+      no2.className = 'fb-btn no';
+      no2.textContent = 'Hayır';
+
+      yes2.addEventListener('click', function () {
+        window.open(_solutionUrl, '_blank');
+        fb.innerHTML = '<p class="fb-q">Talep sayfasına yönlendiriliyorsunuz.</p>';
+        scrollEnd();
+      });
+
+      no2.addEventListener('click', function () {
+        fb.innerHTML = '<p class="fb-q">Anlıyorum. Başka sorularınız için buradayım.</p>';
+        scrollEnd();
+      });
+
+      btns2.appendChild(yes2);
+      btns2.appendChild(no2);
+      fb.appendChild(q2);
+      fb.appendChild(btns2);
+      scrollEnd();
+    }
+
+    var q1 = document.createElement('p');
+    q1.className = 'fb-q';
+    q1.textContent = 'Bu cevaptan memnun kaldınız mı?';
+
+    var btns1 = document.createElement('div');
+    btns1.className = 'fb-btns';
+
+    var yes1 = document.createElement('button');
+    yes1.className = 'fb-btn yes';
+    yes1.textContent = 'Evet';
+
+    var no1 = document.createElement('button');
+    no1.className = 'fb-btn no';
+    no1.textContent = 'Hayır';
+
+    yes1.addEventListener('click', showThankYou);
+    no1.addEventListener('click', showRequestStep);
+
+    btns1.appendChild(yes1);
+    btns1.appendChild(no1);
+    fb.appendChild(q1);
+    fb.appendChild(btns1);
+    el.appendChild(fb);
     messages.appendChild(el);
     scrollEnd();
   }
