@@ -52,8 +52,7 @@ yarn-error.log*
 Thumbs.db
 
 # ── Docker ───────────────────────────────────────────────────────────────────
-# (docker-compose.override.yml yerel geliştirme için — git'e eklenmesin)
-docker-compose.override.yml
+docker-compose.dev.yml
 # SSL DOSYALARI
 # SSL klasörünü ve altındaki tüm certs/fullchain/privkey içeriğini engeller
 ssl/

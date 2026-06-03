@@ -98,6 +98,10 @@
     'border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;}',
     '@keyframes spin{to{transform:rotate(360deg)}}',
 
+    // Links inside bot answers
+    '.chat-link{color:#1e3a8a;text-decoration:underline;word-break:break-all;}',
+    '.chat-link:hover{color:#1e40af;}',
+
     // Feedback
     '.feedback{display:flex;flex-direction:column;gap:6px;padding:4px 0 2px;}',
     '.fb-q{font-size:11px;color:#64748b;margin:0;}',
@@ -279,8 +283,10 @@
         i++;
         scrollEnd();
         setTimeout(tick, speed);
-      } else if (onDone) {
-        onDone();
+      } else {
+        // Animation done — replace plain text with linked HTML
+        p.innerHTML = linkify(text);
+        if (onDone) onDone();
       }
     }
     tick();
@@ -419,6 +425,17 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function linkify(str) {
+    var parts = str.split(/(https?:\/\/[^\s]+)/g);
+    return parts.map(function (part, i) {
+      if (i % 2 === 1) {
+        var safe = esc(part);
+        return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer" class="chat-link">' + safe + '</a>';
+      }
+      return esc(part);
+    }).join('');
   }
 
 })();
