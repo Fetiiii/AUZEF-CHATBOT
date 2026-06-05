@@ -114,13 +114,22 @@
     '.fb-btn.no:hover{background:#fee2e2;}',
 
     // Suggestion chips
-    '.suggestions{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0 2px;}',
+    '.suggestions{display:flex;flex-direction:column;gap:6px;padding:6px 0 2px;}',
     '.chip{background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:20px;',
-    'padding:5px 12px;font-size:12px;cursor:pointer;font-family:inherit;',
-    'transition:background .15s,transform .1s;}',
-    '.chip:hover{background:#bfdbfe;transform:scale(1.03);}',
-    '.chip-next{background:#f1f5f9;color:#475569;border-color:#cbd5e1;}',
-    '.chip-next:hover{background:#e2e8f0;transform:scale(1.03);}',
+    'padding:7px 14px;font-size:12px;cursor:pointer;font-family:inherit;',
+    'text-align:left;width:100%;transition:background .15s,transform .1s;}',
+    '.chip:hover{background:#bfdbfe;transform:scale(1.02);}',
+    '.suggestions-nav{display:flex;gap:6px;padding:6px 0 2px;}',
+    '.chip-next{background:#f1f5f9;color:#475569;border:1.5px solid #cbd5e1;border-radius:20px;',
+    'padding:4px 12px;font-size:12px;font-style:normal;cursor:pointer;font-family:inherit;',
+    'text-decoration:none;transition:background .15s;}',
+    '.chip-next:hover{background:#e2e8f0;}',
+
+    // Stars
+    '.stars{display:flex;gap:2px;padding:2px 0;}',
+    '.star{font-size:22px;color:#d1d5db;background:none;border:none;cursor:pointer;',
+    'padding:0 1px;transition:color .1s;line-height:1;font-family:inherit;}',
+    '.star.lit{color:#f59e0b;}',
 
     // Responsive
     '@media(max-width:420px){',
@@ -321,12 +330,12 @@
 
     function renderPage() {
       el.innerHTML = '';
-      var wrap = document.createElement('div');
-      wrap.className = 'suggestions';
-
       var start = page * PAGE_SIZE;
       var end = Math.min(start + PAGE_SIZE, list.length);
 
+      // Suggestion items — vertical italic list
+      var itemsWrap = document.createElement('div');
+      itemsWrap.className = 'suggestions';
       list.slice(start, end).forEach(function (s) {
         var btn = document.createElement('button');
         btn.className = 'chip';
@@ -336,32 +345,31 @@
           el.remove();
           send();
         });
-        wrap.appendChild(btn);
+        itemsWrap.appendChild(btn);
       });
+      el.appendChild(itemsWrap);
 
-      if (page > 0) {
-        var prevBtn = document.createElement('button');
-        prevBtn.className = 'chip chip-next';
-        prevBtn.textContent = '← Geri';
-        prevBtn.addEventListener('click', function () {
-          page--;
-          renderPage();
-        });
-        wrap.appendChild(prevBtn);
+      // Navigation row — separate from items
+      if (page > 0 || end < list.length) {
+        var navWrap = document.createElement('div');
+        navWrap.className = 'suggestions-nav';
+        if (page > 0) {
+          var prevBtn = document.createElement('button');
+          prevBtn.className = 'chip chip-next';
+          prevBtn.textContent = '← Geri';
+          prevBtn.addEventListener('click', function () { page--; renderPage(); });
+          navWrap.appendChild(prevBtn);
+        }
+        if (end < list.length) {
+          var nextBtn = document.createElement('button');
+          nextBtn.className = 'chip chip-next';
+          nextBtn.textContent = 'Devam →';
+          nextBtn.addEventListener('click', function () { page++; renderPage(); });
+          navWrap.appendChild(nextBtn);
+        }
+        el.appendChild(navWrap);
       }
 
-      if (end < list.length) {
-        var nextBtn = document.createElement('button');
-        nextBtn.className = 'chip chip-next';
-        nextBtn.textContent = 'Devam →';
-        nextBtn.addEventListener('click', function () {
-          page++;
-          renderPage();
-        });
-        wrap.appendChild(nextBtn);
-      }
-
-      el.appendChild(wrap);
       scrollEnd();
     }
 
@@ -403,7 +411,6 @@
         fb.innerHTML = '<p class="fb-q">Talep sayfasına yönlendiriliyorsunuz.</p>';
         scrollEnd();
       });
-
       no2.addEventListener('click', function () {
         fb.innerHTML = '<p class="fb-q">Anlıyorum. Başka sorularınız için buradayım.</p>';
         scrollEnd();
@@ -416,28 +423,47 @@
       scrollEnd();
     }
 
+    // Star rating
     var q1 = document.createElement('p');
     q1.className = 'fb-q';
     q1.textContent = 'Bu cevaptan memnun kaldınız mı?';
 
-    var btns1 = document.createElement('div');
-    btns1.className = 'fb-btns';
+    var starsWrap = document.createElement('div');
+    starsWrap.className = 'stars';
 
-    var yes1 = document.createElement('button');
-    yes1.className = 'fb-btn yes';
-    yes1.textContent = 'Evet';
+    for (var r = 1; r <= 5; r++) {
+      (function (rating) {
+        var star = document.createElement('button');
+        star.className = 'star';
+        star.textContent = '★';
+        star.setAttribute('data-r', rating);
 
-    var no1 = document.createElement('button');
-    no1.className = 'fb-btn no';
-    no1.textContent = 'Hayır';
+        star.addEventListener('mouseenter', function () {
+          starsWrap.querySelectorAll('.star').forEach(function (s) {
+            s.classList.toggle('lit', parseInt(s.getAttribute('data-r')) <= rating);
+          });
+        });
+        star.addEventListener('mouseleave', function () {
+          starsWrap.querySelectorAll('.star').forEach(function (s) { s.classList.remove('lit'); });
+        });
+        star.addEventListener('click', function () {
+          starsWrap.querySelectorAll('.star').forEach(function (s) {
+            s.classList.toggle('lit', parseInt(s.getAttribute('data-r')) <= rating);
+            s.style.pointerEvents = 'none';
+          });
+          if (rating >= 4) {
+            setTimeout(showThankYou, 300);
+          } else {
+            setTimeout(showRequestStep, 300);
+          }
+        });
 
-    yes1.addEventListener('click', showThankYou);
-    no1.addEventListener('click', showRequestStep);
+        starsWrap.appendChild(star);
+      })(r);
+    }
 
-    btns1.appendChild(yes1);
-    btns1.appendChild(no1);
     fb.appendChild(q1);
-    fb.appendChild(btns1);
+    fb.appendChild(starsWrap);
     el.appendChild(fb);
     messages.appendChild(el);
     scrollEnd();
