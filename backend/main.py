@@ -163,12 +163,12 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
 
     # Öneriler
     try:
-        suggestions = MEILI_PROVIDER.get_suggestions(q)
+        suggestions = MEILI_PROVIDER.get_suggestions(q, limit=20)
         if suggestions:
             background_tasks.add_task(_log_query, "none", "suggest", ip)
             return {
                 "answer": "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
-                "suggestions": suggestions[:3]
+                "suggestions": suggestions
             }
     except Exception:
         pass
@@ -245,7 +245,7 @@ async def search(request: Request, background_tasks: BackgroundTasks, q: str = Q
         # --- ADIM 4: SUGGESTIONS ---
         suggestions = []
         try:
-            suggestions = MEILI_PROVIDER.get_suggestions(q)
+            suggestions = MEILI_PROVIDER.get_suggestions(q, limit=20)
         except:
             pass
 

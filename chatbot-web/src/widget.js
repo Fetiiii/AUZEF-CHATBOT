@@ -119,6 +119,8 @@
     'padding:5px 12px;font-size:12px;cursor:pointer;font-family:inherit;',
     'transition:background .15s,transform .1s;}',
     '.chip:hover{background:#bfdbfe;transform:scale(1.03);}',
+    '.chip-next{background:#f1f5f9;color:#475569;border-color:#cbd5e1;}',
+    '.chip-next:hover{background:#e2e8f0;transform:scale(1.03);}',
 
     // Responsive
     '@media(max-width:420px){',
@@ -308,26 +310,62 @@
     return el;
   }
 
-  // ── Suggestion chips ────────────────────────────────────────────────────────
+  // ── Suggestion chips (paginated) ────────────────────────────────────────────
   function appendSuggestions(list) {
+    var PAGE_SIZE = 3;
+    var page = 0;
+
     var el = document.createElement('div');
     el.className = 'msg bot';
-    var wrap = document.createElement('div');
-    wrap.className = 'suggestions';
-    list.forEach(function (s) {
-      var btn = document.createElement('button');
-      btn.className = 'chip';
-      btn.textContent = s;
-      btn.addEventListener('click', function () {
-        input.value = s;
-        el.remove();
-        send();
-      });
-      wrap.appendChild(btn);
-    });
-    el.appendChild(wrap);
     messages.appendChild(el);
-    scrollEnd();
+
+    function renderPage() {
+      el.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'suggestions';
+
+      var start = page * PAGE_SIZE;
+      var end = Math.min(start + PAGE_SIZE, list.length);
+
+      list.slice(start, end).forEach(function (s) {
+        var btn = document.createElement('button');
+        btn.className = 'chip';
+        btn.textContent = s;
+        btn.addEventListener('click', function () {
+          input.value = s;
+          el.remove();
+          send();
+        });
+        wrap.appendChild(btn);
+      });
+
+      if (page > 0) {
+        var prevBtn = document.createElement('button');
+        prevBtn.className = 'chip chip-next';
+        prevBtn.textContent = '← Geri';
+        prevBtn.addEventListener('click', function () {
+          page--;
+          renderPage();
+        });
+        wrap.appendChild(prevBtn);
+      }
+
+      if (end < list.length) {
+        var nextBtn = document.createElement('button');
+        nextBtn.className = 'chip chip-next';
+        nextBtn.textContent = 'Devam →';
+        nextBtn.addEventListener('click', function () {
+          page++;
+          renderPage();
+        });
+        wrap.appendChild(nextBtn);
+      }
+
+      el.appendChild(wrap);
+      scrollEnd();
+    }
+
+    renderPage();
   }
 
   // ── Feedback ────────────────────────────────────────────────────────────────
