@@ -57,6 +57,37 @@ def is_llm_enabled(db: Session):
     config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
     return config.value.lower() == "true" if config else False
 
+def _llm_select_answer(q: str, qdrant_hits: list):
+    """Selector mantığını korur: tek soruda mevcut davranış, çoklu soruda
+    her alt soru için ayrı retrieval + ayrı seçim yapıp cevapları birleştirir.
+
+    Tek bir birleşik sorgu için yapılan embedding/retrieval, ikinci soruyu
+    aday havuzundan dışarıda bırakabildiği için her alt soru kendi
+    retrieval'ı ile seçtirilir. Sorular noktalama olmadan yazılmış olsa bile
+    LLM ile ayrılır. Cevaplar yine birebir (verbatim) seçilir, asla üretilmez.
+    """
+    sub_questions = LLM_PROVIDER.split_questions(q)
+    if len(sub_questions) <= 1:
+        return LLM_PROVIDER.ask(q, qdrant_hits)
+
+    answers = []
+    for sub_q in sub_questions:
+        # Bir alt sorudaki hata (retrieval ya da seçim), diğer alt soruların
+        # başarılı cevaplarını kaybettirmemeli.
+        try:
+            hits = QDRANT_PROVIDER.search(sub_q, limit=5)
+            if not hits:
+                continue
+            ans = LLM_PROVIDER.ask(sub_q, hits)
+        except Exception:
+            continue
+        if ans and ans not in answers:
+            answers.append(ans)
+
+    if not answers:
+        return None
+    return "\n\n".join(answers)
+
 @app.on_event("startup")
 async def startup_event():
     try:
@@ -154,7 +185,7 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
     # LLM (RAG fallback) — selector mode: picks verbatim answer or None
     if is_llm_enabled(db) and qdrant_hits:
         try:
-            answer = LLM_PROVIDER.ask(q, qdrant_hits)
+            answer = _llm_select_answer(q, qdrant_hits)
             if answer:
                 background_tasks.add_task(_log_query, "llm", "success", ip)
                 return {"answer": answer}
@@ -229,7 +260,7 @@ async def search(request: Request, background_tasks: BackgroundTasks, q: str = Q
         # --- ADIM 3: LLM FALLBACK (RAG) — selector mode: picks verbatim answer or None ---
         if is_llm_enabled(db) and qdrant_hits:
             try:
-                answer = LLM_PROVIDER.ask(q, qdrant_hits)
+                answer = _llm_select_answer(q, qdrant_hits)
                 if answer:
                     background_tasks.add_task(_log_query, "llm", "success", ip)
                     return {
