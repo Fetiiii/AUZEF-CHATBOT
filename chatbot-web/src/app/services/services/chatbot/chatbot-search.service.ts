@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 export interface SearchResponse {
-  source: 'meilisearch' | 'qdrant_vector' | 'llm' | 'none';
+  source: 'meilisearch' | 'qdrant_vector' | 'llm' | 'academic_calendar' | 'none';
   status: 'success' | 'suggest' | 'error';
   answer?: string;
   question?: string;

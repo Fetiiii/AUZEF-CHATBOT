@@ -40,6 +40,15 @@ export const routes: Routes = [
       },
 
       {
+        path: 'academic-calendar',
+        loadComponent: () =>
+          import('./chatbot/academic-calendar/academic-calendar.component').then(
+            (m) => m.AcademicCalendarComponent
+          ),
+        data: { title: 'nav.chatbot.academic-calendar' }
+      },
+
+      {
         path: 'view-data',
         loadComponent: () =>
           import('./chatbot/ViewData/view-data.component').then(

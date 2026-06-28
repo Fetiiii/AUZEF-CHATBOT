@@ -4,7 +4,7 @@ import csv
 import io
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import SessionLocal, SystemConfig, QnA, QueryLog
+from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar
 from providers import MeiliSearchProvider, QdrantProvider
 from llm_provider import LLMFactory
 from pydantic import BaseModel
@@ -97,6 +97,78 @@ class LLMConfigRequest(BaseModel):
 class WidgetChatRequest(BaseModel):
     message: str
 
+# ── Academic Calendar Schemas ──
+class AcademicCalendarCreateRequest(BaseModel):
+    period: str
+    event: str
+    start_date: str
+    end_date: str
+
+class AcademicCalendarUpdateRequest(BaseModel):
+    period: Optional[str] = None
+    event: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+class AcademicCalendarBulkUpdateItem(BaseModel):
+    id: int
+    period: Optional[str] = None
+    event: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+# ─────────────────────────────────────────────
+#  Akademik Takvim — Tarih Sorusu Algılama
+# ─────────────────────────────────────────────
+
+def is_date_query(query: str) -> bool:
+    """Kullanıcı sorusunun tarih/takvim ile ilgili olup olmadığını belirler."""
+    q = query.lower()
+    date_patterns = ["ne zaman", "hangi tarih", "hangi gün", "tarihi ne", "tarihleri ne",
+                     "kaçında", "kaçınca", "ayın kaçı", "ne vakit"]
+    if any(p in q for p in date_patterns):
+        return True
+    event_keywords = ["büt", "bütünleme", "vize", "final", "ara sınav", "bitirme sınavı",
+                      "telafi", "kayıt yenileme", "ders seçim", "ders ekle", "ekle-sil",
+                      "muafiyet", "mezuniyet", "üç ders sınavı", "ikinci üniversite kayıt",
+                      "eğitim öğretim başlangıcı", "akademik takvim"]
+    if any(ew in q for ew in event_keywords):
+        return True
+    return False
+
+def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
+    """Akademik takvim tablosundan tarih sorusuna cevap arar."""
+    entries = db.query(AcademicCalendar).all()
+    if not entries:
+        return None
+
+    candidates = []
+    for e in entries:
+        if e.start_date == e.end_date:
+            answer = f"{e.period} — {e.event}: {e.start_date} tarihindedir."
+        else:
+            answer = f"{e.period} — {e.event}: {e.start_date} – {e.end_date} tarihleri arasındadır."
+        candidates.append({
+            "question": f"{e.event} ne zaman?",
+            "answer": answer
+        })
+
+    if use_llm:
+        try:
+            answer = LLM_PROVIDER.ask(query, candidates)
+            if answer:
+                return answer
+        except Exception as e:
+            logger.error(f"Takvim LLM hatası: {e}")
+
+    q = query.lower()
+    for c in candidates:
+        event_lower = c["question"].lower()
+        if any(word in event_lower for word in q.split() if len(word) > 2):
+            return c["answer"]
+
+    return None
+
 
 # ─────────────────────────────────────────────
 #  Query Logging (arka planda, yanıt yolunu etkilemez)
@@ -127,6 +199,13 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
     ip = request.client.host if request.client else None
     current_time = time.time()
     meili_hits = []
+
+    # --- ADIM 0: AKADEMİK TAKVİM KONTROLÜ ---
+    if is_date_query(q):
+        cal_answer = search_calendar(q, db, is_llm_enabled(db))
+        if cal_answer:
+            background_tasks.add_task(_log_query, "academic_calendar", "success", ip)
+            return {"answer": cal_answer}
 
     # MeiliSearch
     try:
@@ -188,6 +267,18 @@ async def search(request: Request, background_tasks: BackgroundTasks, q: str = Q
     meili_hits = []
 
     try:
+        # --- ADIM 0: AKADEMİK TAKVİM KONTROLÜ ---
+        if is_date_query(q):
+            cal_answer = search_calendar(q, db, is_llm_enabled(db))
+            if cal_answer:
+                background_tasks.add_task(_log_query, "academic_calendar", "success", ip)
+                return {
+                    "source": "academic_calendar",
+                    "status": "success",
+                    "answer": cal_answer,
+                    "question": q
+                }
+
         # --- ADIM 1: MEILISEARCH (KEYWORD SEARCH) ---
         if MEILI_STATUS["healthy"] or (current_time - MEILI_STATUS["last_check"] > CIRCUIT_BREAKER_TIME):
             try:
@@ -560,3 +651,150 @@ def get_stats(db: Session = Depends(get_db)):
         "hourly": [{"label": row.label, "count": row.count} for row in hourly_rows],
         "sources": sources
     }
+
+
+# ─────────────────────────────────────────────
+#  Akademik Takvim CRUD
+# ─────────────────────────────────────────────
+
+@app.get("/api/academic-calendar")
+def list_calendar(skip: int = 0, limit: int = 500, db: Session = Depends(get_db)):
+    """Tüm akademik takvim kayıtlarını döner."""
+    rows = db.query(AcademicCalendar).order_by(AcademicCalendar.id).offset(skip).limit(limit).all()
+    return [
+        {
+            "id": r.id,
+            "period": r.period,
+            "event": r.event,
+            "start_date": r.start_date,
+            "end_date": r.end_date,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
+        for r in rows
+    ]
+
+
+@app.post("/api/academic-calendar", status_code=201)
+def create_calendar(body: AcademicCalendarCreateRequest, db: Session = Depends(get_db)):
+    """Yeni takvim kaydı oluşturur."""
+    row = AcademicCalendar(
+        period=body.period,
+        event=body.event,
+        start_date=body.start_date,
+        end_date=body.end_date,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": row.id,
+        "period": row.period,
+        "event": row.event,
+        "start_date": row.start_date,
+        "end_date": row.end_date,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@app.put("/api/academic-calendar/bulk-update")
+def bulk_update_calendar(items: List[AcademicCalendarBulkUpdateItem], db: Session = Depends(get_db)):
+    """Birden fazla takvim kaydını tek seferde günceller."""
+    updated = []
+    for item in items:
+        row = db.query(AcademicCalendar).filter(AcademicCalendar.id == item.id).first()
+        if not row:
+            continue
+        if item.period is not None:
+            row.period = item.period
+        if item.event is not None:
+            row.event = item.event
+        if item.start_date is not None:
+            row.start_date = item.start_date
+        if item.end_date is not None:
+            row.end_date = item.end_date
+        updated.append(row.id)
+    db.commit()
+    return {"updated_ids": updated, "count": len(updated)}
+
+
+@app.put("/api/academic-calendar/{cal_id}")
+def update_calendar(cal_id: int, body: AcademicCalendarUpdateRequest, db: Session = Depends(get_db)):
+    """Tek bir takvim kaydını günceller."""
+    row = db.query(AcademicCalendar).filter(AcademicCalendar.id == cal_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Takvim kaydı bulunamadı.")
+    if body.period is not None:
+        row.period = body.period
+    if body.event is not None:
+        row.event = body.event
+    if body.start_date is not None:
+        row.start_date = body.start_date
+    if body.end_date is not None:
+        row.end_date = body.end_date
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": row.id,
+        "period": row.period,
+        "event": row.event,
+        "start_date": row.start_date,
+        "end_date": row.end_date,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@app.delete("/api/academic-calendar/{cal_id}", status_code=204)
+def delete_calendar(cal_id: int, db: Session = Depends(get_db)):
+    """Takvim kaydını siler."""
+    row = db.query(AcademicCalendar).filter(AcademicCalendar.id == cal_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Takvim kaydı bulunamadı.")
+    db.delete(row)
+    db.commit()
+    return None
+
+
+@app.post("/api/academic-calendar/import")
+async def import_calendar_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """CSV dosyasından toplu takvim verisi içe aktarır.
+    Kabul edilen formatlar (virgül veya noktalı virgül):
+      Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi
+      period;event;start_date;end_date
+    """
+    content = await file.read()
+    try:
+        text_content = content.decode("utf-8")
+    except UnicodeDecodeError:
+        text_content = content.decode("latin-1")
+
+    # Otomatik delimiter algılama
+    first_line = text_content.split("\n")[0]
+    delimiter = ";" if ";" in first_line else ","
+
+    reader = csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
+    inserted = 0
+
+    for row in reader:
+        # Hem Türkçe hem İngilizce sütun isimlerini destekle
+        period = (row.get("Donem") or row.get("period") or "").strip()
+        event = (row.get("Etkinlik") or row.get("event") or "").strip()
+        start = (row.get("Baslangic_Tarihi") or row.get("start_date") or "").strip()
+        end = (row.get("Bitis_Tarihi") or row.get("end_date") or "").strip()
+
+        if not event or not start:
+            continue
+
+        db.add(AcademicCalendar(
+            period=period,
+            event=event,
+            start_date=start,
+            end_date=end or start,
+        ))
+        inserted += 1
+
+    db.commit()
+    logger.info(f"Takvim CSV import tamamlandı: {inserted} kayıt eklendi.")
+    return {"imported": inserted}

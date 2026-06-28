@@ -63,6 +63,7 @@ const TR: Dict = {
   'nav.test-page': 'Test Sayfası',
   'nav.chatbot.dashboard': 'Panel',
   'nav.chatbot.document-upload': 'Doküman Yükle',
+  'nav.chatbot.academic-calendar': 'Akademik Takvim',
   'nav.chatbot.view-data': 'İzleme Paneli',
   'nav.chatbot.chat': 'Chatbot',
 
@@ -300,6 +301,7 @@ const EN: Dict = {
   'nav.test-page': 'Test Page',
   'nav.chatbot.dashboard': 'Dashboard',
   'nav.chatbot.document-upload': 'Upload Document',
+  'nav.chatbot.academic-calendar': 'Academic Calendar',
   'nav.chatbot.view-data': 'Monitoring',
   'nav.chatbot.chat': 'Chatbot',
 

@@ -1,0 +1,231 @@
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Academic Calendar Management — AG Grid + CRUD          -->
+<!-- ────────────────────────────────────────────────────── -->
+
+<!-- TOAST -->
+@if (toastMessage()) {
+  <div
+    class="fixed top-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium animate-fade-in transition-all"
+    [class]="toastType() === 'success'
+      ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/60 dark:border-emerald-700 dark:text-emerald-200'
+      : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-950/60 dark:border-red-700 dark:text-red-200'">
+    @if (toastType() === 'success') {
+      <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+    } @else {
+      <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+    }
+    {{ toastMessage() }}
+  </div>
+}
+
+<div class="p-4 md:p-6 space-y-5">
+
+  <!-- ── BAŞLIK SATIRI ─────────────────────────────────── -->
+  <div class="flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <h1 class="text-lg font-bold text-slate-800 dark:text-slate-100">Akademik Takvim Yönetimi</h1>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+        Takvim verilerini düzenleyin · Chatbot tarih sorularını bu veriden yanıtlar
+      </p>
+    </div>
+  </div>
+
+  <!-- ── TOOLBAR ────────────────────────────────────────── -->
+  <div class="flex flex-wrap items-center gap-3">
+    <!-- Arama -->
+    <div class="relative flex-1 min-w-[200px] max-w-xs">
+      <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      <input
+        type="text"
+        placeholder="Tabloda filtrele..."
+        (input)="quickFilter($any($event.target).value)"
+        class="w-full h-9 pl-9 pr-3 rounded-lg border border-slate-300 dark:border-slate-600
+               bg-white dark:bg-slate-900 text-sm text-slate-800 dark:text-slate-100
+               placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+    </div>
+
+    <div class="flex-1"></div>
+
+    <!-- Toplu kaydet -->
+    @if (hasPendingChanges()) {
+      <button
+        type="button"
+        (click)="discardChanges()"
+        class="h-9 px-3 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-600
+               text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+        Vazgeç
+      </button>
+      <button
+        type="button"
+        (click)="saveAllChanges()"
+        [disabled]="saving()"
+        class="h-9 px-4 rounded-lg text-xs font-semibold bg-blue-800 hover:bg-blue-900
+               text-white shadow-sm transition disabled:opacity-60 flex items-center gap-2">
+        @if (saving()) {
+          <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+          </svg>
+        }
+        {{ saving() ? 'Kaydediliyor...' : 'Değişiklikleri Kaydet (' + pendingChanges.size + ')' }}
+      </button>
+    }
+  </div>
+
+  <!-- ── AG GRID ────────────────────────────────────────── -->
+  @if (loading()) {
+    <div class="flex items-center justify-center h-64 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+      <div class="flex flex-col items-center gap-3 text-slate-400">
+        <svg class="h-8 w-8 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+        <span class="text-sm">Veriler yükleniyor...</span>
+      </div>
+    </div>
+  } @else {
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
+      <ag-grid-angular
+        [theme]="theme"
+        [rowData]="rowData"
+        [columnDefs]="colDefs"
+        [rowHeight]="52"
+        [headerHeight]="44"
+        [pagination]="true"
+        [paginationPageSize]="50"
+        [animateRows]="true"
+        [gridOptions]="gridOptions"
+        [undoRedoCellEditing]="true"
+        style="height: 540px; width: 100%;"
+        (gridReady)="onGridReady($event)"
+        (cellValueChanged)="onCellValueChanged($event)">
+      </ag-grid-angular>
+    </div>
+
+    <!-- Toplam bilgisi -->
+    <div class="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500 px-1">
+      <span>Toplam <strong class="text-slate-600 dark:text-slate-300">{{ rowData.length }}</strong> kayıt</span>
+      @if (hasPendingChanges()) {
+        <span class="text-amber-600 dark:text-amber-400 font-medium">
+          ⚠ {{ pendingChanges.size }} bekleyen değişiklik
+        </span>
+      }
+    </div>
+  }
+
+  <!-- ── CSV TOPLU İÇE AKTAR ─────────────────────────────── -->
+  <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+      <svg class="h-4 w-4 text-blue-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">CSV Toplu İçe Aktar</span>
+    </div>
+    <div class="p-4 flex flex-wrap items-center gap-4">
+      <div class="flex flex-col gap-1 flex-1 min-w-[240px]">
+        <p class="text-xs text-slate-500 dark:text-slate-400">
+          Beklenen sütunlar: <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded text-[11px]">Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi</code>
+        </p>
+        <input
+          type="file"
+          accept=".csv"
+          (change)="onFileSelected($event)"
+          class="text-sm text-slate-600 dark:text-slate-300
+                 file:mr-3 file:h-8 file:px-3 file:rounded-lg file:border-0
+                 file:text-xs file:font-semibold
+                 file:bg-blue-50 file:text-blue-800
+                 dark:file:bg-slate-800 dark:file:text-blue-300
+                 hover:file:bg-blue-100 dark:hover:file:bg-slate-700 transition"/>
+      </div>
+      <button
+        type="button"
+        (click)="uploadCsv()"
+        [disabled]="!selectedFile() || importing()"
+        class="h-9 px-5 rounded-lg text-xs font-semibold bg-blue-800 hover:bg-blue-900
+               text-white shadow-sm transition disabled:opacity-50 flex items-center gap-2 shrink-0">
+        @if (importing()) {
+          <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+          </svg>
+          Aktarılıyor...
+        } @else {
+          İçe Aktar
+        }
+      </button>
+    </div>
+  </div>
+
+  <!-- ── YENİ KAYIT EKLE ────────────────────────────────── -->
+  <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+      <svg class="h-4 w-4 text-blue-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>
+      </svg>
+      <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Yeni Takvim Kaydı Ekle</span>
+    </div>
+    <div class="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Dönem</label>
+        <input
+          [(ngModel)]="newPeriod"
+          type="text"
+          placeholder="ör: Bahar Dönemi"
+          class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800
+                 text-sm text-slate-800 dark:text-slate-100 px-3
+                 focus:outline-none focus:ring-2 focus:ring-blue-800/50 placeholder:text-slate-400"/>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Etkinlik</label>
+        <input
+          [(ngModel)]="newEvent"
+          type="text"
+          placeholder="ör: Bütünleme Sınavı"
+          class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800
+                 text-sm text-slate-800 dark:text-slate-100 px-3
+                 focus:outline-none focus:ring-2 focus:ring-blue-800/50 placeholder:text-slate-400"/>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Başlangıç Tarihi</label>
+        <input
+          [(ngModel)]="newStartDate"
+          type="text"
+          placeholder="ör: 04.07.2026"
+          class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800
+                 text-sm text-slate-800 dark:text-slate-100 px-3
+                 focus:outline-none focus:ring-2 focus:ring-blue-800/50 placeholder:text-slate-400"/>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Bitiş Tarihi</label>
+        <input
+          [(ngModel)]="newEndDate"
+          type="text"
+          placeholder="ör: 05.07.2026"
+          class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800
+                 text-sm text-slate-800 dark:text-slate-100 px-3
+                 focus:outline-none focus:ring-2 focus:ring-blue-800/50 placeholder:text-slate-400"/>
+      </div>
+      <div class="md:col-span-2 lg:col-span-4 flex justify-end">
+        <button
+          type="button"
+          (click)="submitNewRow()"
+          [disabled]="!newEvent.trim() || !newStartDate.trim() || addingRow()"
+          class="h-9 px-5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700
+                 text-white shadow-sm transition disabled:opacity-50 flex items-center gap-2">
+          @if (addingRow()) {
+            <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+            </svg>
+            Ekleniyor...
+          } @else {
+            Kayıt Ekle
+          }
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>

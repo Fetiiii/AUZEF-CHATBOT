@@ -59,6 +59,32 @@
                 </span>
             </a>
 
+            <!-- Akademik Takvim -->
+            <a routerLink="/chatbot/academic-calendar" [routerLinkActiveOptions]="{ exact: true }"
+                routerLinkActive="active" #calRla="routerLinkActive" class="relative flex-1 flex flex-col items-center justify-center px-2
+               transition-colors" [ngClass]="calRla.isActive
+          ? 'text-indigo-700 dark:text-indigo-100 font-semibold bg-indigo-50/95 dark:bg-indigo-500/20'
+          : 'text-slate-500 dark:text-slate-300 font-medium'">
+
+                <span *ngIf="calRla.isActive" class="absolute top-0 h-0.5 w-10 rounded-b-full
+                 bg-indigo-500 dark:bg-indigo-300">
+                </span>
+
+                <span class="inline-flex items-center justify-center h-7 w-7 rounded-full mb-0.5
+                 transition-colors" [ngClass]="calRla.isActive
+            ? 'bg-indigo-100 dark:bg-indigo-600/40'
+            : 'bg-transparent'">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+                        <path d="M16 2v4M8 2v4M3 10h18" stroke-linecap="round" />
+                    </svg>
+                </span>
+
+                <span class="leading-none text-[13px]">
+                    {{ i18n.t('nav.chatbot.academic-calendar') }}
+                </span>
+            </a>
+
             <!-- Kullanıcı Yönetimi -->
             <a routerLink="/chatbot/view-data" [routerLinkActiveOptions]="{ exact: true }"
                 routerLinkActive="active" #userRla="routerLinkActive" class="relative flex-1 flex flex-col items-center justify-center px-2

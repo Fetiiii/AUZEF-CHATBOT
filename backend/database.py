@@ -60,6 +60,16 @@ class QueryLog(Base):
     ip_address = Column(String(45), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
+class AcademicCalendar(Base):
+    __tablename__ = "academic_calendar"
+    id = Column(BigInteger, primary_key=True, index=True)
+    period = Column(String(100), nullable=False)       # Güz Dönemi, Bahar Dönemi, etc.
+    event = Column(Text, nullable=False)               # Ara Sınav (Vize), Bütünleme, etc.
+    start_date = Column(String(50), nullable=False)    # 08.11.2025
+    end_date = Column(String(50), nullable=False)      # 09.11.2025
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
 # Veritabanı tablolarını oluştur
 def init_db():
     Base.metadata.create_all(bind=engine)
