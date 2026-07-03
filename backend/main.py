@@ -7,6 +7,7 @@ from sqlalchemy import text
 from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar
 from providers import MeiliSearchProvider, QdrantProvider
 from llm_provider import LLMFactory
+from calendar_utils import format_calendar_answer, match_calendar_entry
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -173,18 +174,14 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
     if not entries:
         return None
 
-    candidates = []
-    for e in entries:
-        if e.start_date == e.end_date:
-            answer = f"{e.period} — {e.event}: {e.start_date} tarihindedir."
-        else:
-            answer = f"{e.period} — {e.event}: {e.start_date} – {e.end_date} tarihleri arasındadır."
-        candidates.append({
-            "question": f"{e.event} ne zaman?",
-            "answer": answer
-        })
-
     if use_llm:
+        candidates = [
+            {
+                "question": f"{e.event} ne zaman?",
+                "answer": format_calendar_answer(e.period, e.event, e.start_date, e.end_date),
+            }
+            for e in entries
+        ]
         try:
             answer = LLM_PROVIDER.ask(query, candidates)
             if answer:
@@ -192,11 +189,10 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
         except Exception as e:
             logger.error(f"Takvim LLM hatası: {e}")
 
-    q = query.lower()
-    for c in candidates:
-        event_lower = c["question"].lower()
-        if any(word in event_lower for word in q.split() if len(word) > 2):
-            return c["answer"]
+    # Yedek: kelime örtüşmesine göre en uygun kaydı seç (LLM'siz de doğru çalışır)
+    best = match_calendar_entry(query, entries)
+    if best:
+        return format_calendar_answer(best.period, best.event, best.start_date, best.end_date)
 
     return None
 
