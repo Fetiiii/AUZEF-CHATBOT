@@ -61,4 +61,8 @@ export class QnaApiService {
     form.append('file', file);
     return this.http.post<{ imported: number }>(`${this.base}/import`, form);
   }
+
+  exportCsv(): Observable<Blob> {
+    return this.http.get(`${this.base}/export`, { responseType: 'blob' });
+  }
 }

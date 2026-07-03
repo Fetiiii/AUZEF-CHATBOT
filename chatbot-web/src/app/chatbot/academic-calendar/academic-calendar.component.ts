@@ -127,6 +127,7 @@ export class AcademicCalendarComponent implements OnInit {
   toastMessage = signal<string | null>(null);
   toastType = signal<'success' | 'error'>('success');
   importing = signal(false);
+  exporting = signal(false);
   selectedFile = signal<File | null>(null);
 
   // Yeni satır formu
@@ -293,6 +294,28 @@ export class AcademicCalendarComponent implements OnInit {
       error: () => {
         this.importing.set(false);
         this.showToast('İçe aktarma başarısız oldu.', 'error');
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  exportCsv(): void {
+    this.exporting.set(true);
+    this.calendarApi.exportCsv().subscribe({
+      next: (blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'akademik_takvim_export.csv';
+        a.click();
+        URL.revokeObjectURL(url);
+        this.exporting.set(false);
+        this.showToast('CSV dışa aktarıldı.', 'success');
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.exporting.set(false);
+        this.showToast('Dışa aktarma başarısız oldu.', 'error');
         this.cdr.markForCheck();
       },
     });

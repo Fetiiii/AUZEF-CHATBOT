@@ -48,6 +48,28 @@
 
     <div class="flex-1"></div>
 
+    <!-- CSV Dışa Aktar -->
+    <button
+      type="button"
+      (click)="exportCsv()"
+      [disabled]="exporting()"
+      class="h-9 px-4 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-600
+             text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800
+             shadow-sm transition disabled:opacity-50 flex items-center gap-2">
+      @if (exporting()) {
+        <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+        Hazırlanıyor...
+      } @else {
+        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        CSV Dışa Aktar
+      }
+    </button>
+
     <!-- Toplu kaydet -->
     @if (hasPendingChanges()) {
       <button

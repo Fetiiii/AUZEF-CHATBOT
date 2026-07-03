@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Query, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import csv
 import io
 from sqlalchemy.orm import Session
@@ -536,7 +537,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     """CSV dosyasından toplu QnA içe aktarır. Format: question;answer;tags;query_1;...;query_20"""
     content = await file.read()
     try:
-        text_content = content.decode("utf-8")
+        text_content = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         text_content = content.decode("latin-1")
 
@@ -583,6 +584,40 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
 
     logger.info(f"CSV import tamamlandı: {len(inserted_ids)} kayıt eklendi.")
     return {"imported": len(inserted_ids)}
+
+
+@app.get("/api/qna/export")
+def export_qna(db: Session = Depends(get_db)):
+    """Tüm QnA verisini içe aktarma (import) formatında CSV olarak dışa aktarır.
+
+    Sütunlar import ile birebir aynıdır (question;answer;tags;query_1;...;query_20),
+    böylece dışa aktarılan dosya tekrar içe aktarılabilir (round-trip).
+    """
+    rows = db.query(QnA).order_by(QnA.id).all()
+
+    buf = io.StringIO()
+    fieldnames = ["question", "answer", "tags"] + [f"query_{i}" for i in range(1, 21)]
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, delimiter=";", extrasaction="ignore")
+    writer.writeheader()
+
+    for r in rows:
+        record = {
+            "question": r.question_text,
+            "answer": r.answer_text,
+            "tags": ", ".join(t.name for t in r.tags),
+        }
+        for i, query in enumerate(r.queries[:20], start=1):
+            record[f"query_{i}"] = query.query_text
+        writer.writerow(record)
+
+    # utf-8-sig (BOM) → Excel Türkçe karakterleri doğru gösterir; import BOM'u atlıyor.
+    data = buf.getvalue().encode("utf-8-sig")
+    logger.info(f"QnA export: {len(rows)} kayıt dışa aktarıldı.")
+    return Response(
+        content=data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=qna_export.csv"},
+    )
 
 
 # ─────────────────────────────────────────────
@@ -793,7 +828,7 @@ async def import_calendar_csv(file: UploadFile = File(...), db: Session = Depend
     """
     content = await file.read()
     try:
-        text_content = content.decode("utf-8")
+        text_content = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         text_content = content.decode("latin-1")
 
@@ -825,3 +860,35 @@ async def import_calendar_csv(file: UploadFile = File(...), db: Session = Depend
     db.commit()
     logger.info(f"Takvim CSV import tamamlandı: {inserted} kayıt eklendi.")
     return {"imported": inserted}
+
+
+@app.get("/api/academic-calendar/export")
+def export_calendar(db: Session = Depends(get_db)):
+    """Takvim verisini içe aktarma (import) formatında CSV olarak dışa aktarır.
+
+    Sütunlar import ile birebir aynıdır (Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi),
+    böylece dışa aktarılan dosya tekrar içe aktarılabilir (round-trip).
+    """
+    rows = db.query(AcademicCalendar).order_by(AcademicCalendar.id).all()
+
+    buf = io.StringIO()
+    fieldnames = ["Donem", "Etkinlik", "Baslangic_Tarihi", "Bitis_Tarihi"]
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, delimiter=",")
+    writer.writeheader()
+
+    for r in rows:
+        writer.writerow({
+            "Donem": r.period,
+            "Etkinlik": r.event,
+            "Baslangic_Tarihi": r.start_date,
+            "Bitis_Tarihi": r.end_date,
+        })
+
+    # utf-8-sig (BOM) → Excel Türkçe karakterleri doğru gösterir; import BOM'u atlıyor.
+    data = buf.getvalue().encode("utf-8-sig")
+    logger.info(f"Takvim export: {len(rows)} kayıt dışa aktarıldı.")
+    return Response(
+        content=data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=akademik_takvim_export.csv"},
+    )
