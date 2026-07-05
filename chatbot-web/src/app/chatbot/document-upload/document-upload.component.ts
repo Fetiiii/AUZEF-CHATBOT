@@ -78,7 +78,8 @@ export class DocumentUploadComponent implements OnInit {
       cellEditorPopupPosition: 'under',
       cellEditorParams: {
         rows: 18,
-        cols: 80
+        cols: 80,
+        maxLength: 10000
       }
 },
     {
