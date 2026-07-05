@@ -859,8 +859,12 @@ def get_stats(db: Session = Depends(get_db)):
     today_start_utc = (now_istanbul.replace(hour=0, minute=0, second=0, microsecond=0)) - ISTANBUL_OFFSET
     five_min_ago = now_utc - timedelta(minutes=5)
 
+    # "Aktif kullanıcı" = son 5 dakikada mesajı olan FARKLI sohbet (oturum) sayısı.
+    # IP kullanılamaz: tüm trafik nginx proxy'sinin IP'siyle geldiği için (172.18.0.7)
+    # her kullanıcı tek IP'ye çöker. conversation_id her oturuma özel olduğundan
+    # proxy arkasında bile kullanıcıları doğru ayrıştırır.
     active_users = db.execute(
-        text("SELECT COUNT(*)::int FROM query_logs WHERE created_at >= :since"),
+        text("SELECT COUNT(DISTINCT conversation_id)::int FROM conversation_messages WHERE created_at >= :since"),
         {"since": five_min_ago}
     ).scalar() or 0
 

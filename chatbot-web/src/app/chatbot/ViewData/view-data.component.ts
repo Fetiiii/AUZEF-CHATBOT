@@ -2,12 +2,14 @@ import {
   ChangeDetectionStrategy,
   Component,
   OnInit,
+  OnDestroy,
   inject,
   signal
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartData } from 'chart.js';
+import { Subscription, interval, startWith } from 'rxjs';
 import { StatsApiService } from '../../services/services/chatbot/stats-api.service';
 
 @Component({
@@ -21,8 +23,12 @@ import { StatsApiService } from '../../services/services/chatbot/stats-api.servi
   `,
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class ViewDataComponent implements OnInit {
+export class ViewDataComponent implements OnInit, OnDestroy {
   private readonly statsService = inject(StatsApiService);
+
+  /* ── Oto-yenileme ── */
+  private readonly REFRESH_MS = 30_000;   // 30 sn'de bir yenile (5 dk pencereyi canlı tutar)
+  private pollSub?: Subscription;
 
   /* ── Metric cards ── */
   activeUsers = signal<number>(0);
@@ -93,7 +99,14 @@ export class ViewDataComponent implements OnInit {
   noAnswerCount = signal<number>(0);
 
   ngOnInit(): void {
-    this.loadStats();
+    // Hemen bir kez yükle, sonra her 30 sn'de bir yenile
+    this.pollSub = interval(this.REFRESH_MS)
+      .pipe(startWith(0))
+      .subscribe(() => this.loadStats());
+  }
+
+  ngOnDestroy(): void {
+    this.pollSub?.unsubscribe();
   }
 
   private loadStats(): void {
