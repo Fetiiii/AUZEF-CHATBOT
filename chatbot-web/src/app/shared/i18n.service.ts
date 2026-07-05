@@ -64,6 +64,7 @@ const TR: Dict = {
   'nav.chatbot.dashboard': 'Panel',
   'nav.chatbot.document-upload': 'Doküman Yükle',
   'nav.chatbot.academic-calendar': 'Akademik Takvim',
+  'nav.chatbot.conversations': 'Konuşmalar',
   'nav.chatbot.view-data': 'İzleme Paneli',
   'nav.chatbot.chat': 'Chatbot',
 
@@ -302,6 +303,7 @@ const EN: Dict = {
   'nav.chatbot.dashboard': 'Dashboard',
   'nav.chatbot.document-upload': 'Upload Document',
   'nav.chatbot.academic-calendar': 'Academic Calendar',
+  'nav.chatbot.conversations': 'Conversations',
   'nav.chatbot.view-data': 'Monitoring',
   'nav.chatbot.chat': 'Chatbot',
 

@@ -55,6 +55,15 @@ export const routes: Routes = [
             (m) => m.ViewDataComponent
           ),
         data: { title: 'nav.chatbot.view-data' }
+      },
+
+      {
+        path: 'conversations',
+        loadComponent: () =>
+          import('./chatbot/conversations/conversations.component').then(
+            (m) => m.ConversationsComponent
+          ),
+        data: { title: 'nav.chatbot.conversations' }
       }
     ]
   },

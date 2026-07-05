@@ -1,0 +1,166 @@
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Conversations — Master-Detail (liste + transkript)     -->
+<!-- ────────────────────────────────────────────────────── -->
+
+<div class="p-4 md:p-6 space-y-4">
+
+  <!-- ── BAŞLIK ─────────────────────────────────────────── -->
+  <div>
+    <h1 class="text-lg font-bold text-slate-800 dark:text-slate-100">Konuşmalar</h1>
+    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+      Widget üzerinden yapılan sohbetler · puan ve talep durumuyla birlikte
+    </p>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4">
+
+    <!-- ═══════════ SOL: LİSTE ═══════════ -->
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm flex flex-col overflow-hidden"
+         style="min-height: 560px;">
+
+      <!-- Arama -->
+      <div class="p-3 border-b border-slate-100 dark:border-slate-800 flex gap-2">
+        <input
+          [(ngModel)]="search"
+          (keydown.enter)="doSearch()"
+          type="text"
+          placeholder="İlk soru, IP veya #id ara..."
+          class="flex-1 h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-600
+                 bg-white dark:bg-slate-900 text-sm text-slate-800 dark:text-slate-100
+                 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+        <button
+          type="button"
+          (click)="doSearch()"
+          class="h-9 px-3 rounded-lg text-xs font-semibold bg-blue-800 hover:bg-blue-900 text-white transition">
+          Ara
+        </button>
+      </div>
+
+      <!-- Liste gövdesi -->
+      <div class="flex-1 overflow-y-auto">
+        @if (loading()) {
+          <div class="flex items-center justify-center h-40 text-slate-400">
+            <svg class="h-6 w-6 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+            </svg>
+          </div>
+        } @else if (rows().length === 0) {
+          <div class="flex items-center justify-center h-40 text-sm text-slate-400">Kayıt bulunamadı.</div>
+        } @else {
+          @for (row of rows(); track row.id) {
+            <button
+              type="button"
+              (click)="selectRow(row.id)"
+              class="w-full text-left px-3 py-2.5 border-b border-slate-100 dark:border-slate-800
+                     hover:bg-slate-50 dark:hover:bg-slate-800/60 transition flex flex-col gap-1"
+              [ngClass]="selectedId() === row.id ? 'bg-blue-50 dark:bg-slate-800' : ''">
+              <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
+                {{ row.first_question || '(soru yok)' }}
+              </div>
+              <div class="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
+                <span>#{{ row.id }}</span>
+                <span>·</span>
+                <span>{{ formatDate(row.started_at) }}</span>
+                <span>·</span>
+                <span>{{ row.message_count }} mesaj</span>
+              </div>
+              <div class="flex items-center gap-2">
+                @if (row.avg_rating !== null) {
+                  <span class="text-[11px] text-amber-500 font-medium">★ {{ row.avg_rating }}</span>
+                } @else {
+                  <span class="text-[11px] text-slate-400">puan yok</span>
+                }
+                <span class="text-[10px] px-1.5 py-0.5 rounded-full font-semibold" [class]="talepClass(row.talep_status)">
+                  {{ talepLabel(row.talep_status) }}
+                </span>
+              </div>
+            </button>
+          }
+        }
+      </div>
+
+      <!-- Sayfalama -->
+      <div class="p-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+        <span>Toplam <strong class="text-slate-700 dark:text-slate-200">{{ total() }}</strong></span>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            (click)="prevPage()"
+            [disabled]="page() === 0"
+            class="h-7 px-2 rounded-md border border-slate-300 dark:border-slate-600 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+            ‹
+          </button>
+          <span>{{ page() + 1 }} / {{ totalPages() }}</span>
+          <button
+            type="button"
+            (click)="nextPage()"
+            [disabled]="page() + 1 >= totalPages()"
+            class="h-7 px-2 rounded-md border border-slate-300 dark:border-slate-600 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+            ›
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ SAĞ: DETAY ═══════════ -->
+    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm flex flex-col overflow-hidden"
+         style="min-height: 560px;">
+
+      @if (detail(); as d) {
+
+        <!-- Özet şeridi (her zaman üstte) -->
+        <div class="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span class="font-bold text-slate-700 dark:text-slate-200">Konuşma #{{ d.id }}</span>
+          <span class="text-slate-500 dark:text-slate-400">{{ formatDate(d.started_at) }}</span>
+          <span class="text-slate-500 dark:text-slate-400">IP: {{ d.ip_address || '—' }}</span>
+          <span class="text-slate-500 dark:text-slate-400">{{ d.messages.length }} mesaj</span>
+          <span class="px-1.5 py-0.5 rounded-full font-semibold" [class]="talepClass(d.talep_status)">
+            Talep: {{ talepLabel(d.talep_status) }}
+          </span>
+        </div>
+
+        <!-- Transkript -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-3">
+          @for (m of d.messages; track m.id) {
+            @if (m.role === 'user') {
+              <div class="flex justify-end">
+                <div class="max-w-[80%] px-3 py-2 rounded-2xl rounded-br-sm bg-blue-800 text-white text-sm whitespace-pre-wrap break-words">
+                  {{ m.content }}
+                </div>
+              </div>
+            } @else {
+              <div class="flex flex-col items-start gap-1 max-w-[85%]">
+                <div class="px-3 py-2 rounded-2xl rounded-bl-sm bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 text-sm whitespace-pre-wrap break-words">
+                  {{ m.content }}
+                </div>
+                <div class="flex items-center gap-2 pl-1">
+                  @if (m.source) {
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-medium">
+                      {{ sourceLabel(m.source) }}
+                    </span>
+                  }
+                  @if (m.rating !== null) {
+                    <span class="text-[11px] text-amber-500" [title]="m.rating + ' / 5'">{{ stars(m.rating) }}</span>
+                  }
+                </div>
+              </div>
+            }
+          }
+        </div>
+      } @else if (detailLoading()) {
+        <div class="flex-1 flex items-center justify-center text-slate-400">
+          <svg class="h-6 w-6 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+          </svg>
+        </div>
+      } @else {
+        <div class="flex-1 flex items-center justify-center text-sm text-slate-400">
+          Soldan bir konuşma seçin.
+        </div>
+      }
+    </div>
+
+  </div>
+</div>
