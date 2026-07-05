@@ -8,6 +8,8 @@
   })();
   var _apiUrl = (_script && _script.getAttribute('data-api-url')) ||
     ((_script && _script.src ? new URL(_script.src).origin : '') + '/widget-chat');
+  // /api/... uçları için kök (örn. .../widget-chat -> ...)
+  var _apiBase = _apiUrl.replace(/\/widget-chat\/?$/, '');
   var _pos = (_script && _script.getAttribute('data-position') === 'left') ? 'left' : 'right';
   // ── Talep oluşturma sayfası (AUZEF Çözüm Merkezi) — URL hazır olunca buraya yazın ──
   var _solutionUrl = (_script && _script.getAttribute('data-solution-url')) || 'https://cozummerkeziauzef.istanbul.edu.tr/student/sign-in';
@@ -228,6 +230,7 @@
 
   var isOpen   = false;
   var isSending = false;
+  var _conversationId = null;   // ilk cevapta backend'den gelir, sonraki mesajlarda geri gönderilir
 
   // ── Toggle ──────────────────────────────────────────────────────────────────
   function toggle() {
@@ -266,17 +269,19 @@
     fetch(_apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({ message: text, conversation_id: _conversationId })
     })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (data) {
         typingEl.remove();
+        if (data.conversation_id) { _conversationId = data.conversation_id; }
+        var msgId = data.message_id;
         var answer = data.answer || 'Yanıt alınamadı.';
         appendBotMsg(answer, function () {
           if (data.suggestions && data.suggestions.length) {
             appendSuggestions(data.suggestions);
           } else {
-            appendFeedback();
+            appendFeedback(msgId);
           }
         });
       })
@@ -417,7 +422,7 @@
   }
 
   // ── Feedback ────────────────────────────────────────────────────────────────
-  function appendFeedback() {
+  function appendFeedback(messageId) {
     var el = document.createElement('div');
     el.className = 'msg bot';
 
@@ -447,11 +452,13 @@
       no2.textContent = 'Hayır';
 
       yes2.addEventListener('click', function () {
+        sendTalep('redirected');
         window.open(_solutionUrl, '_blank');
         fb.innerHTML = '<p class="fb-q">Talep sayfasına yönlendiriliyorsunuz.</p>';
         scrollEnd();
       });
       no2.addEventListener('click', function () {
+        sendTalep('declined');
         fb.innerHTML = '<p class="fb-q">Anlıyorum. Başka sorularınız için buradayım.</p>';
         scrollEnd();
       });
@@ -491,6 +498,7 @@
             s.classList.toggle('lit', parseInt(s.getAttribute('data-r')) <= rating);
             s.style.pointerEvents = 'none';
           });
+          sendRating(messageId, rating);
           if (rating >= 4) {
             setTimeout(showThankYou, 300);
           } else {
@@ -512,6 +520,26 @@
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function scrollEnd() {
     requestAnimationFrame(function () { messages.scrollTop = messages.scrollHeight; });
+  }
+
+  // Bir bot cevabına verilen puanı backend'e gönderir (ateşle-unut)
+  function sendRating(messageId, rating) {
+    if (!messageId) return;
+    fetch(_apiBase + '/api/messages/' + messageId + '/rating', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: rating })
+    }).catch(function () {});
+  }
+
+  // Talep adımının sonucunu backend'e gönderir: 'redirected' | 'declined'
+  function sendTalep(status) {
+    if (!_conversationId) return;
+    fetch(_apiBase + '/api/conversations/' + _conversationId + '/talep', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: status })
+    }).catch(function () {});
   }
 
   function setSendState(busy) {

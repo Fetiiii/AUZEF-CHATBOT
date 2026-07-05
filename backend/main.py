@@ -4,8 +4,8 @@ from fastapi.responses import Response
 import csv
 import io
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar
+from sqlalchemy import text, or_
+from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar, Conversation, ConversationMessage
 from providers import MeiliSearchProvider, QdrantProvider
 from llm_provider import LLMFactory
 from calendar_utils import format_calendar_answer, match_calendar_entry
@@ -14,6 +14,7 @@ from typing import Optional, List
 import os
 import logging
 import time
+from datetime import datetime
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -129,6 +130,13 @@ class LLMConfigRequest(BaseModel):
 
 class WidgetChatRequest(BaseModel):
     message: str
+    conversation_id: Optional[int] = None
+
+class RatingRequest(BaseModel):
+    rating: int
+
+class TalepRequest(BaseModel):
+    status: str
 
 # ── Academic Calendar Schemas ──
 class AcademicCalendarCreateRequest(BaseModel):
@@ -214,6 +222,54 @@ def _log_query(source: str, status: str, ip: Optional[str]):
 
 
 # ─────────────────────────────────────────────
+#  Conversation (sohbet) kalıcılığı
+# ─────────────────────────────────────────────
+
+def _get_or_create_conversation(db: Session, conversation_id: Optional[int], ip: Optional[str]) -> Conversation:
+    """Var olan conversation'ı getirir; yoksa (ilk mesaj) yenisini oluşturur."""
+    conv = None
+    if conversation_id:
+        conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conv is None:
+        conv = Conversation(ip_address=ip)
+        db.add(conv)
+        db.commit()
+        db.refresh(conv)
+    return conv
+
+
+def _store_message(db: Session, conversation_id: int, role: str, content: str, source: Optional[str] = None) -> ConversationMessage:
+    msg = ConversationMessage(conversation_id=conversation_id, role=role, content=content, source=source)
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def _widget_reply(db: Session, conv: Optional[Conversation], answer: str, source: str, suggestions: Optional[list] = None) -> dict:
+    """Bot cevabını (mümkünse) kaydedip yanıtı döner.
+
+    Kayıt best-effort'tur: bir hata olursa cevabın kullanıcıya dönmesini
+    engellemez (yalnızca o mesaj için conversation_id/message_id dönmez).
+    """
+    resp = {"answer": answer}
+    if conv is not None:
+        try:
+            msg = _store_message(db, conv.id, "bot", answer, source=source)
+            resp["conversation_id"] = conv.id
+            resp["message_id"] = msg.id
+        except Exception as e:
+            logger.error(f"Bot mesajı kaydedilemedi (yanıt yolu etkilenmez): {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    if suggestions:
+        resp["suggestions"] = suggestions
+    return resp
+
+
+# ─────────────────────────────────────────────
 #  Widget Chat Adapter
 # ─────────────────────────────────────────────
 
@@ -228,12 +284,27 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
     current_time = time.time()
     meili_hits = []
 
+    # İlk mesajda conversation oluştur, kullanıcı mesajını kaydet.
+    # Best-effort: kayıt başarısız olursa (ör. tablo henüz yoksa) cevap yolu
+    # etkilenmez; sadece bu sohbet loglanmaz.
+    conv = None
+    try:
+        conv = _get_or_create_conversation(db, body.conversation_id, ip)
+        _store_message(db, conv.id, "user", q)
+    except Exception as e:
+        logger.error(f"Conversation kaydı yapılamadı (yanıt yolu etkilenmez): {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        conv = None
+
     # --- ADIM 0: AKADEMİK TAKVİM KONTROLÜ ---
     if is_date_query(q):
         cal_answer = search_calendar(q, db, is_llm_enabled(db))
         if cal_answer:
             background_tasks.add_task(_log_query, "academic_calendar", "success", ip)
-            return {"answer": cal_answer}
+            return _widget_reply(db, conv, cal_answer, "academic_calendar")
 
     # MeiliSearch
     try:
@@ -242,7 +313,7 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
             MEILI_STATUS["healthy"] = True
             if meili_hits and meili_hits[0]["score"] >= 0.90:
                 background_tasks.add_task(_log_query, "meilisearch", "success", ip)
-                return {"answer": meili_hits[0]["answer"]}
+                return _widget_reply(db, conv, meili_hits[0]["answer"], "meilisearch")
     except Exception:
         MEILI_STATUS["healthy"] = False
         MEILI_STATUS["last_check"] = current_time
@@ -254,7 +325,7 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
         qdrant_hits = QDRANT_PROVIDER.search(q, limit=5)
         if qdrant_hits and qdrant_hits[0]["score"] > 0.75:
             background_tasks.add_task(_log_query, "qdrant_vector", "success", ip)
-            return {"answer": qdrant_hits[0]["answer"]}
+            return _widget_reply(db, conv, qdrant_hits[0]["answer"], "qdrant_vector")
     except Exception:
         qdrant_hits = []
 
@@ -264,7 +335,7 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
             answer = _llm_select_answer(q, qdrant_hits)
             if answer:
                 background_tasks.add_task(_log_query, "llm", "success", ip)
-                return {"answer": answer}
+                return _widget_reply(db, conv, answer, "llm")
         except Exception:
             pass
 
@@ -273,15 +344,137 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
         suggestions = MEILI_PROVIDER.get_suggestions(q, limit=20)
         if suggestions:
             background_tasks.add_task(_log_query, "none", "suggest", ip)
-            return {
-                "answer": "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
-                "suggestions": suggestions
-            }
+            return _widget_reply(
+                db, conv,
+                "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
+                "none", suggestions=suggestions
+            )
     except Exception:
         pass
 
     background_tasks.add_task(_log_query, "none", "suggest", ip)
-    return {"answer": "Bu konuda bilgim bulunmuyor."}
+    return _widget_reply(db, conv, "Bu konuda bilgim bulunmuyor.", "none")
+
+
+@app.post("/api/messages/{message_id}/rating")
+def rate_message(message_id: int, body: RatingRequest, db: Session = Depends(get_db)):
+    """Bir bot cevabına verilen yıldız puanını (1-5) kaydeder."""
+    if body.rating < 1 or body.rating > 5:
+        raise HTTPException(status_code=400, detail="Puan 1-5 aralığında olmalı.")
+    msg = db.query(ConversationMessage).filter(ConversationMessage.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mesaj bulunamadı.")
+    msg.rating = body.rating
+    msg.rating_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/conversations/{conversation_id}/talep")
+def set_talep_status(conversation_id: int, body: TalepRequest, db: Session = Depends(get_db)):
+    """Talep adımının sonucunu kaydeder: 'declined' (Hayır) veya 'redirected' (Evet)."""
+    if body.status not in ("declined", "redirected"):
+        raise HTTPException(status_code=400, detail="Geçersiz talep durumu.")
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Konuşma bulunamadı.")
+    conv.talep_status = body.status
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/conversations")
+def list_conversations(skip: int = 0, limit: int = 25, search: str = "", db: Session = Depends(get_db)):
+    """Sohbet listesini sayfalı ÖZET olarak döner (mesaj metinleri hariç).
+
+    Performans: her istek en fazla `limit` konuşma + o sayfaya ait mesajların
+    tek bir toplu sorgusunu çeker (N+1 yok). Tüm veriyi asla aynı anda çekmez.
+    """
+    base = db.query(Conversation)
+
+    term = (search or "").strip()
+    if term:
+        like = f"%{term}%"
+        conds = [Conversation.ip_address.ilike(like)]
+        if term.isdigit():
+            conds.append(Conversation.id == int(term))
+        # ilk soru / kullanıcı mesajı metninde arama (meta arama kapsamı)
+        sub = db.query(ConversationMessage.conversation_id).filter(
+            ConversationMessage.role == "user",
+            ConversationMessage.content.ilike(like),
+        )
+        conds.append(Conversation.id.in_(sub))
+        base = base.filter(or_(*conds))
+
+    total = base.count()
+    convs = base.order_by(Conversation.started_at.desc()).offset(skip).limit(limit).all()
+
+    ids = [c.id for c in convs]
+    stats = {}
+    if ids:
+        msgs = (
+            db.query(ConversationMessage)
+            .filter(ConversationMessage.conversation_id.in_(ids))
+            .order_by(ConversationMessage.created_at, ConversationMessage.id)
+            .all()
+        )
+        for m in msgs:
+            s = stats.setdefault(m.conversation_id, {"count": 0, "first_q": None, "ratings": []})
+            s["count"] += 1
+            if m.role == "user" and s["first_q"] is None:
+                s["first_q"] = m.content
+            if m.rating is not None:
+                s["ratings"].append(m.rating)
+
+    items = []
+    for c in convs:
+        s = stats.get(c.id, {"count": 0, "first_q": None, "ratings": []})
+        ratings = s["ratings"]
+        items.append({
+            "id": c.id,
+            "started_at": c.started_at.isoformat() if c.started_at else None,
+            "ip_address": c.ip_address,
+            "talep_status": c.talep_status,
+            "message_count": s["count"],
+            "first_question": s["first_q"],
+            "avg_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
+            "rating_count": len(ratings),
+        })
+
+    return {"total": total, "items": items}
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
+    """Tek bir konuşmanın tüm mesajlarını (transkript) döner — yalnızca tıklanınca çağrılır."""
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Konuşma bulunamadı.")
+    msgs = (
+        db.query(ConversationMessage)
+        .filter(ConversationMessage.conversation_id == conversation_id)
+        .order_by(ConversationMessage.created_at, ConversationMessage.id)
+        .all()
+    )
+    return {
+        "id": conv.id,
+        "ip_address": conv.ip_address,
+        "talep_status": conv.talep_status,
+        "started_at": conv.started_at.isoformat() if conv.started_at else None,
+        "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+        "messages": [
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "source": m.source,
+                "rating": m.rating,
+                "rating_at": m.rating_at.isoformat() if m.rating_at else None,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in msgs
+        ],
+    }
 
 
 # ─────────────────────────────────────────────

@@ -60,6 +60,32 @@ class QueryLog(Base):
     ip_address = Column(String(45), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+    id = Column(BigInteger, primary_key=True, index=True)
+    ip_address = Column(String(45), nullable=True)
+    # not_offered = puan >=4 olduğu için talep hiç sorulmadı
+    # declined    = kullanıcı "Hayır" dedi
+    # redirected  = kullanıcı "Evet", talep sayfasına yönlendirildi
+    talep_status = Column(String(20), default="not_offered")
+    started_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    messages = relationship("ConversationMessage", back_populates="conversation", cascade="all, delete-orphan")
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+    id = Column(BigInteger, primary_key=True, index=True)
+    conversation_id = Column(BigInteger, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(10), nullable=False)      # user | bot
+    content = Column(Text, nullable=False)
+    source = Column(String(20), nullable=True)     # bot: meilisearch|qdrant_vector|llm|academic_calendar|none
+    rating = Column(SmallInteger, nullable=True)   # bot cevabına verilen puan (1-5); NULL = verilmedi
+    rating_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    conversation = relationship("Conversation", back_populates="messages")
+
 class AcademicCalendar(Base):
     __tablename__ = "academic_calendar"
     id = Column(BigInteger, primary_key=True, index=True)
