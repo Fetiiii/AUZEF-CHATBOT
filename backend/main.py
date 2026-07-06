@@ -14,7 +14,7 @@ from typing import Optional, List
 import os
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -442,6 +442,75 @@ def list_conversations(skip: int = 0, limit: int = 25, search: str = "", db: Ses
         })
 
     return {"total": total, "items": items}
+
+
+@app.get("/api/conversations/export")
+def export_conversations(ids: str = "", start: str = "", end: str = "", db: Session = Depends(get_db)):
+    """Seçili konuşmaları (?ids=1,2,3) veya bir tarih aralığındaki
+    (?start=YYYY-MM-DD&end=YYYY-MM-DD) konuşmaları transkript olarak
+    (her mesaj bir satır) CSV dışa aktarır.
+
+    NOT: Bu rota, /{conversation_id} rotasından ÖNCE tanımlı olmalı; aksi
+    halde "export" bir id sanılır.
+    """
+    ISTANBUL_OFFSET = timedelta(hours=3)
+    q = db.query(Conversation)
+
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    if id_list:
+        q = q.filter(Conversation.id.in_(id_list))
+    elif start or end:
+        if start:
+            try:
+                q = q.filter(Conversation.started_at >= datetime.strptime(start, "%Y-%m-%d") - ISTANBUL_OFFSET)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Geçersiz başlangıç tarihi (YYYY-MM-DD).")
+        if end:
+            try:
+                # bitiş günü dahil olsun diye +1 gün
+                q = q.filter(Conversation.started_at < datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1) - ISTANBUL_OFFSET)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Geçersiz bitiş tarihi (YYYY-MM-DD).")
+    else:
+        raise HTTPException(status_code=400, detail="En az bir filtre gerekli: ids ya da tarih aralığı.")
+
+    convs = q.order_by(Conversation.started_at).all()
+    conv_ids = [c.id for c in convs]
+
+    msgs_by_conv = {}
+    if conv_ids:
+        msgs = (
+            db.query(ConversationMessage)
+            .filter(ConversationMessage.conversation_id.in_(conv_ids))
+            .order_by(ConversationMessage.created_at, ConversationMessage.id)
+            .all()
+        )
+        for m in msgs:
+            msgs_by_conv.setdefault(m.conversation_id, []).append(m)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow([
+        "konusma_id", "konusma_tarihi", "ip", "talep_durumu",
+        "mesaj_tarihi", "rol", "icerik", "kaynak", "puan",
+    ])
+    for c in convs:
+        conv_date = c.started_at.isoformat() if c.started_at else ""
+        for m in msgs_by_conv.get(c.id, []):
+            writer.writerow([
+                c.id, conv_date, c.ip_address or "", c.talep_status,
+                m.created_at.isoformat() if m.created_at else "",
+                m.role, m.content, m.source or "",
+                m.rating if m.rating is not None else "",
+            ])
+
+    data = buf.getvalue().encode("utf-8-sig")
+    logger.info(f"Konuşma export: {len(convs)} konuşma dışa aktarıldı.")
+    return Response(
+        content=data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=konusmalar_export.csv"},
+    )
 
 
 @app.get("/api/conversations/{conversation_id}")

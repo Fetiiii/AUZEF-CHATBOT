@@ -12,6 +12,44 @@
     </p>
   </div>
 
+  <!-- ── EXPORT ARAÇ ÇUBUĞU ───────────────────────────── -->
+  <div class="flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-3 shadow-sm">
+    <div class="flex flex-col gap-1">
+      <label class="text-[11px] text-slate-500 dark:text-slate-400">Başlangıç</label>
+      <input type="date" [(ngModel)]="exportStart"
+        class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+               text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+    </div>
+    <div class="flex flex-col gap-1">
+      <label class="text-[11px] text-slate-500 dark:text-slate-400">Bitiş</label>
+      <input type="date" [(ngModel)]="exportEnd"
+        class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+               text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+    </div>
+    <button type="button" (click)="exportRange()"
+      [disabled]="exporting() || (!exportStart && !exportEnd)"
+      class="h-9 px-4 rounded-lg text-xs font-semibold bg-blue-800 hover:bg-blue-900 text-white
+             shadow-sm transition disabled:opacity-50">
+      Aralığı Dışa Aktar
+    </button>
+
+    <div class="flex-1"></div>
+
+    <button type="button" (click)="exportSelected()"
+      [disabled]="exporting() || selected().size === 0"
+      class="h-9 px-4 rounded-lg text-xs font-semibold border border-slate-300 dark:border-slate-600
+             text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800
+             shadow-sm transition disabled:opacity-50 flex items-center gap-2">
+      @if (exporting()) {
+        <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+      }
+      Seçilenleri Dışa Aktar ({{ selected().size }})
+    </button>
+  </div>
+
   <div class="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4">
 
     <!-- ═══════════ SOL: LİSTE ═══════════ -->
@@ -49,33 +87,42 @@
           <div class="flex items-center justify-center h-40 text-sm text-slate-400">Kayıt bulunamadı.</div>
         } @else {
           @for (row of rows(); track row.id) {
-            <button
-              type="button"
-              (click)="selectRow(row.id)"
-              class="w-full text-left px-3 py-2.5 border-b border-slate-100 dark:border-slate-800
-                     hover:bg-slate-50 dark:hover:bg-slate-800/60 transition flex flex-col gap-1"
+            <div
+              class="flex items-start gap-2 px-3 py-2.5 border-b border-slate-100 dark:border-slate-800
+                     hover:bg-slate-50 dark:hover:bg-slate-800/60 transition"
               [ngClass]="selectedId() === row.id ? 'bg-blue-50 dark:bg-slate-800' : ''">
-              <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
-                {{ row.first_question || '(soru yok)' }}
-              </div>
-              <div class="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
-                <span>#{{ row.id }}</span>
-                <span>·</span>
-                <span>{{ formatDate(row.started_at) }}</span>
-                <span>·</span>
-                <span>{{ row.message_count }} mesaj</span>
-              </div>
-              <div class="flex items-center gap-2">
-                @if (row.avg_rating !== null) {
-                  <span class="text-[11px] text-amber-500 font-medium">★ {{ row.avg_rating }}</span>
-                } @else {
-                  <span class="text-[11px] text-slate-400">puan yok</span>
-                }
-                <span class="text-[10px] px-1.5 py-0.5 rounded-full font-semibold" [class]="talepClass(row.talep_status)">
-                  {{ talepLabel(row.talep_status) }}
-                </span>
-              </div>
-            </button>
+              <input
+                type="checkbox"
+                class="mt-1 h-4 w-4 accent-blue-800 cursor-pointer shrink-0"
+                [checked]="selected().has(row.id)"
+                (change)="toggleSelect(row.id)"
+                title="Dışa aktarım için seç"/>
+              <button
+                type="button"
+                (click)="selectRow(row.id)"
+                class="flex-1 min-w-0 text-left flex flex-col gap-1">
+                <div class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
+                  {{ row.first_question || '(soru yok)' }}
+                </div>
+                <div class="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
+                  <span>#{{ row.id }}</span>
+                  <span>·</span>
+                  <span>{{ formatDate(row.started_at) }}</span>
+                  <span>·</span>
+                  <span>{{ row.message_count }} mesaj</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  @if (row.avg_rating !== null) {
+                    <span class="text-[11px] text-amber-500 font-medium">★ {{ row.avg_rating }}</span>
+                  } @else {
+                    <span class="text-[11px] text-slate-400">puan yok</span>
+                  }
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-semibold" [class]="talepClass(row.talep_status)">
+                    {{ talepLabel(row.talep_status) }}
+                  </span>
+                </div>
+              </button>
+            </div>
           }
         }
       </div>

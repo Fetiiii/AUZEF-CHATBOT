@@ -35,6 +35,12 @@ export class ConversationsComponent implements OnInit {
   detail = signal<ConversationDetail | null>(null);
   detailLoading = signal(false);
 
+  // ── Export / seçim ────────────────────────────────
+  selected = signal<Set<number>>(new Set());   // sayfalar arası korunur
+  exporting = signal(false);
+  exportStart = '';
+  exportEnd = '';
+
   constructor(
     private api: ConversationsApiService,
     private cdr: ChangeDetectorRef
@@ -100,6 +106,45 @@ export class ConversationsComponent implements OnInit {
       },
       error: () => {
         this.detailLoading.set(false);
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  // ── Export / seçim ────────────────────────────────
+  toggleSelect(id: number): void {
+    const s = new Set(this.selected());
+    if (s.has(id)) { s.delete(id); } else { s.add(id); }
+    this.selected.set(s);
+  }
+
+  exportSelected(): void {
+    const ids = Array.from(this.selected());
+    if (ids.length === 0) return;
+    this.runExport({ ids });
+  }
+
+  exportRange(): void {
+    if (!this.exportStart && !this.exportEnd) return;
+    this.runExport({ start: this.exportStart, end: this.exportEnd });
+  }
+
+  private runExport(params: { ids?: number[]; start?: string; end?: string }): void {
+    this.exporting.set(true);
+    this.api.exportCsv(params).subscribe({
+      next: (blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'konusmalar_export.csv';
+        a.click();
+        URL.revokeObjectURL(url);
+        this.exporting.set(false);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.exporting.set(false);
+        alert('Dışa aktarma başarısız oldu.');
         this.cdr.markForCheck();
       },
     });

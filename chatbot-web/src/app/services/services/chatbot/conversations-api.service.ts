@@ -53,4 +53,12 @@ export class ConversationsApiService {
   detail(id: number): Observable<ConversationDetail> {
     return this.http.get<ConversationDetail>(`${this.base}/${id}`);
   }
+
+  exportCsv(params: { ids?: number[]; start?: string; end?: string }): Observable<Blob> {
+    const q = new URLSearchParams();
+    if (params.ids && params.ids.length) q.set('ids', params.ids.join(','));
+    if (params.start) q.set('start', params.start);
+    if (params.end) q.set('end', params.end);
+    return this.http.get(`${this.base}/export?${q.toString()}`, { responseType: 'blob' });
+  }
 }
