@@ -171,3 +171,95 @@
         </div>
     </div>
 </section>
+
+
+<!-- ── KONUŞMA İSTATİSTİKLERİ (tarih filtreli) ── -->
+<section id="chart-conversation-stats"
+    class="mt-5 flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm
+           dark:border-slate-800 dark:bg-slate-900">
+
+    <!-- Header + tarih seçici -->
+    <div class="flex flex-wrap items-end justify-between gap-3 p-4 border-b border-gray-100 dark:border-slate-800">
+        <div class="min-w-0">
+            <h2 class="text-base font-bold text-gray-800 dark:text-gray-100">Konuşma İstatistikleri</h2>
+            <p class="text-[12px] md:text-[13px] text-slate-500 dark:text-slate-400">
+                Seçili tarih aralığındaki sohbetler · toplam
+                <strong class="text-slate-700 dark:text-slate-200">{{ totalConversations() }}</strong>
+            </p>
+        </div>
+        <div class="flex items-end gap-2">
+            <div class="flex flex-col gap-1">
+                <label class="text-[11px] text-slate-500 dark:text-slate-400">Başlangıç</label>
+                <input type="date" [(ngModel)]="convStart" (change)="onConvDateChange()"
+                    class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+            </div>
+            <div class="flex flex-col gap-1">
+                <label class="text-[11px] text-slate-500 dark:text-slate-400">Bitiş</label>
+                <input type="date" [(ngModel)]="convEnd" (change)="onConvDateChange()"
+                    class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+            </div>
+        </div>
+    </div>
+
+    <!-- Body -->
+    <div class="p-4 md:p-5 grid gap-6 lg:grid-cols-2 bg-slate-50/30 dark:bg-transparent">
+
+        <!-- Yıldız dağılımı (bar) -->
+        <div>
+            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Yıldız Dağılımı</h3>
+            <div style="height: 260px;">
+                <canvas baseChart [type]="'bar'" [data]="ratingChartData()" [options]="ratingChartOptions"></canvas>
+            </div>
+        </div>
+
+        <!-- Olumlu/olumsuz (doughnut) + talep kartları -->
+        <div class="flex flex-col gap-5">
+            <div>
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Sonuç (Olumlu / Olumsuz)</h3>
+                <div class="grid gap-4 sm:grid-cols-[minmax(0,190px)_1fr] items-center">
+                    <div class="mx-auto w-full max-w-[190px]" style="height: 190px;">
+                        <canvas baseChart [type]="'doughnut'" [data]="outcomeChartData()" [options]="doughnutChartOptions"></canvas>
+                    </div>
+                    <div class="flex flex-col gap-2">
+                        <div class="flex items-center gap-3 rounded-lg border border-gray-100 dark:border-slate-800 p-2.5">
+                            <span class="h-3 w-3 rounded-full" style="background:#10b981;"></span>
+                            <span class="text-sm text-slate-700 dark:text-slate-200">Olumlu (≥4)</span>
+                            <span class="ml-auto text-sm font-bold text-slate-800 dark:text-slate-100">{{ outcomeCounts().olumlu }}</span>
+                        </div>
+                        <div class="flex items-center gap-3 rounded-lg border border-gray-100 dark:border-slate-800 p-2.5">
+                            <span class="h-3 w-3 rounded-full" style="background:#ef4444;"></span>
+                            <span class="text-sm text-slate-700 dark:text-slate-200">Olumsuz (≤3)</span>
+                            <span class="ml-auto text-sm font-bold text-slate-800 dark:text-slate-100">{{ outcomeCounts().olumsuz }}</span>
+                        </div>
+                        <div class="flex items-center gap-3 rounded-lg border border-gray-100 dark:border-slate-800 p-2.5">
+                            <span class="h-3 w-3 rounded-full" style="background:#94a3b8;"></span>
+                            <span class="text-sm text-slate-700 dark:text-slate-200">Puansız</span>
+                            <span class="ml-auto text-sm font-bold text-slate-800 dark:text-slate-100">{{ outcomeCounts().puansiz }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Talep yönlendirmesi -->
+            <div>
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Talep Yönlendirmesi</h3>
+                <div class="grid gap-3 sm:grid-cols-3">
+                    <div class="rounded-lg border border-blue-200 dark:border-blue-500/40 bg-blue-50 dark:bg-blue-500/10 p-3">
+                        <p class="text-[11px] font-medium text-blue-700 dark:text-blue-300">Yönlendirilen</p>
+                        <p class="text-xl font-bold text-blue-800 dark:text-blue-200">{{ talepCounts().redirected }}</p>
+                    </div>
+                    <div class="rounded-lg border border-amber-200 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 p-3">
+                        <p class="text-[11px] font-medium text-amber-700 dark:text-amber-300">Oluşturmadan giden</p>
+                        <p class="text-xl font-bold text-amber-800 dark:text-amber-200">{{ talepCounts().declined }}</p>
+                    </div>
+                    <div class="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-3">
+                        <p class="text-[11px] font-medium text-slate-500 dark:text-slate-400">Talep önerilmedi</p>
+                        <p class="text-xl font-bold text-slate-700 dark:text-slate-200">{{ talepCounts().not_offered }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>

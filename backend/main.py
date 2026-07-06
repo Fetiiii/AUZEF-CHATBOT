@@ -981,6 +981,66 @@ def get_stats(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/stats/conversations")
+def get_conversation_stats(start: str = "", end: str = "", db: Session = Depends(get_db)):
+    """Konuşma bazlı istatistikler (tarih filtreli, conversations.started_at üzerinden).
+
+    - rating_distribution: her cevaba verilen puanların 1..5 dağılımı
+    - outcome: sohbetin SON puanına göre olumlu(>=4)/olumsuz(<=3)/puansız
+    - talep: redirected (yönlendirilen) / declined (oluşturmadan giden) / not_offered
+    """
+    ISTANBUL_OFFSET = timedelta(hours=3)
+    q = db.query(Conversation)
+    if start:
+        try:
+            q = q.filter(Conversation.started_at >= datetime.strptime(start, "%Y-%m-%d") - ISTANBUL_OFFSET)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Geçersiz başlangıç tarihi (YYYY-MM-DD).")
+    if end:
+        try:
+            q = q.filter(Conversation.started_at < datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1) - ISTANBUL_OFFSET)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Geçersiz bitiş tarihi (YYYY-MM-DD).")
+
+    convs = q.all()
+    conv_ids = [c.id for c in convs]
+    total = len(convs)
+
+    talep = {"redirected": 0, "declined": 0, "not_offered": 0}
+    for c in convs:
+        if c.talep_status in talep:
+            talep[c.talep_status] += 1
+
+    rating_distribution = {str(i): 0 for i in range(1, 6)}
+    last_rating_by_conv = {}
+    if conv_ids:
+        rated = (
+            db.query(ConversationMessage)
+            .filter(
+                ConversationMessage.conversation_id.in_(conv_ids),
+                ConversationMessage.rating.isnot(None),
+            )
+            .order_by(ConversationMessage.created_at, ConversationMessage.id)
+            .all()
+        )
+        for m in rated:
+            if 1 <= m.rating <= 5:
+                rating_distribution[str(m.rating)] += 1
+            # sıralı geldiği için en son yazılan = son puan
+            last_rating_by_conv[m.conversation_id] = m.rating
+
+    olumlu = sum(1 for r in last_rating_by_conv.values() if r >= 4)
+    olumsuz = sum(1 for r in last_rating_by_conv.values() if r <= 3)
+    puansiz = total - len(last_rating_by_conv)
+
+    return {
+        "total_conversations": total,
+        "rating_distribution": rating_distribution,
+        "outcome": {"olumlu": olumlu, "olumsuz": olumsuz, "puansiz": puansiz},
+        "talep": talep,
+    }
+
+
 # ─────────────────────────────────────────────
 #  Akademik Takvim CRUD
 # ─────────────────────────────────────────────
