@@ -4,11 +4,11 @@ type Lang = 'tr' | 'en';
 type Dict = Record<string, string>;
 
 const TR: Dict = {
-  'app.title': 'AUZEF Çözüm Merkezi',
+  'app.title': 'AUZEF ASİSTAN',
 
 
   // Sidebar
-  'sidebar.brand': 'ÇÖZÜM MERKEZİ',
+  'sidebar.brand': 'AUZEF ASİSTAN',
   'sidebar.activeUsers': 'AKTİF KULLANICILAR',
 
   // Sidebar Login Label
