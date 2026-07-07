@@ -45,9 +45,20 @@
   --header-h: 64px;
   --bottom-nav-h: 60px;
 
-  /* Mor tema tonu (aktif öğeler, light mod segment, fab vb.) */
-  --sidebar-tone: #1e3a8a;
-  /* blue-900 */
+  /* AUZEF yeşil/altın paleti — widget ile ortak token isimleri */
+  --c-primary: #536F35;
+  --c-primary-dark: #354923;
+  --c-primary-light: #789650;
+  --c-soft: #EEF4E8;
+  --c-gold: #D8B86A;
+  --c-copper: #B97942;
+  --c-ink: #1F2A18;
+  --c-muted: #6B755F;
+  --c-line: #D8E1CF;
+  --c-sand: #F5F1E8;
+
+  /* Ana ton (aktif öğeler, segment, fab vb.) — primary yeşil */
+  --sidebar-tone: #536F35;
 }
 
 /* ---------- Base ---------- */
@@ -226,11 +237,11 @@ html:not(.dark) .topbtn:hover {
 /* Arka plan (görsel + mor cam) */
 .sidebar-surface {
   background-image:
-    linear-gradient(180deg, rgba(30, 58, 138, .92) 0%, rgba(30, 64, 175, .92) 100%),
+    linear-gradient(180deg, rgba(53, 73, 35, .92) 0%, rgba(31, 42, 24, .94) 100%),
     url('/assets/sidebar/istanbul-gate.jpg');
   background-size: cover;
   background-position: center;
-  --sidebar-tone: #1e3a8a;
+  --sidebar-tone: #536F35;
 
   border-right: 1px solid rgba(255, 255, 255, .18);
 }
@@ -327,9 +338,9 @@ html:not(.dark) .topbtn:hover {
 
 /* Aktif görünüm — mor bar */
 .active-sb {
-  background: rgba(30, 58, 138, .85) !important;
+  background: rgba(83, 111, 53, .85) !important;
   color: #fff !important;
-  box-shadow: 0 12px 24px rgba(30, 58, 138, .25), inset 0 0 0 1px rgba(255, 255, 255, .12);
+  box-shadow: 0 12px 24px rgba(83, 111, 53, .25), inset 0 0 0 1px rgba(255, 255, 255, .12);
 }
 
 /* İkon kutusu */
@@ -381,7 +392,7 @@ html:not(.dark) .topbtn:hover {
   padding: 2px 8px;
   border-radius: 999px;
   background: #fff;
-  color: #1e3a8a;
+  color: #354923;
   box-shadow: 0 2px 0 rgba(0, 0, 0, .12), inset 0 0 0 1px rgba(0, 0, 0, .06);
 }
 
@@ -401,7 +412,7 @@ html:not(.dark) .topbtn:hover {
   height: 10px;
   border-radius: 999px;
   background: #9ca3af;
-  border: 2px solid rgba(30, 58, 138, .9);
+  border: 2px solid rgba(83, 111, 53, .9);
 }
 
 /* ✅ Alt menü satırlarını biraz daha ince yap (TEK KOPYA) */
@@ -612,12 +623,12 @@ html:not(.dark) .csm-modal-subtitle {
 }
 
 .csm-btn-violet {
-  border-color: rgba(59, 130, 246, 0.6);
-  background: rgba(30, 58, 138, 0.12);
+  border-color: rgba(83, 111, 53, 0.6);
+  background: rgba(83, 111, 53, 0.12);
 }
 
 .csm-btn-violet:hover {
-  background: rgba(30, 58, 138, 0.18);
+  background: rgba(83, 111, 53, 0.18);
 }
 
 .csm-btn-danger {
@@ -676,8 +687,8 @@ html:not(.dark) .csm-perm-list {
 }
 
 .csm-input:focus {
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
-  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 3px rgba(83, 111, 53, 0.25);
+  border-color: rgba(83, 111, 53, 0.55);
 }
 
 /* Small helper text */
@@ -776,7 +787,7 @@ input[type="password"]::-ms-clear {
   width: 10px;
   height: 10px;
   border-radius: 4px;
-  background: rgba(30, 58, 138, 0.8);
+  background: rgba(83, 111, 53, 0.8);
 }
 
 /* ============================================
@@ -951,7 +962,7 @@ input[type="password"]::-ms-clear {
 
   font-size: 12px;
   font-weight: 800;
-  color: rgb(37, 99, 235);
+  color: rgb(83, 111, 53);
   text-decoration: none;
 }
 
