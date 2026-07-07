@@ -18,17 +18,17 @@
       <label class="text-[11px] text-slate-500 dark:text-slate-400">Başlangıç</label>
       <input type="date" [(ngModel)]="exportStart"
         class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
-               text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+               text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-800/50"/>
     </div>
     <div class="flex flex-col gap-1">
       <label class="text-[11px] text-slate-500 dark:text-slate-400">Bitiş</label>
       <input type="date" [(ngModel)]="exportEnd"
         class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
-               text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+               text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-800/50"/>
     </div>
     <button type="button" (click)="exportRange()"
       [disabled]="exporting() || (!exportStart && !exportEnd)"
-      class="h-9 px-4 rounded-lg text-xs font-semibold bg-blue-800 hover:bg-blue-900 text-white
+      class="h-9 px-4 rounded-lg text-xs font-semibold bg-brand-800 hover:bg-brand-900 text-white
              shadow-sm transition disabled:opacity-50">
       Aralığı Dışa Aktar
     </button>
@@ -65,20 +65,42 @@
           placeholder="İlk soru, IP veya #id ara..."
           class="flex-1 h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-600
                  bg-white dark:bg-slate-900 text-sm text-slate-800 dark:text-slate-100
-                 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+                 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-800/50"/>
         <button
           type="button"
           (click)="doSearch()"
-          class="h-9 px-3 rounded-lg text-xs font-semibold bg-blue-800 hover:bg-blue-900 text-white transition">
+          class="h-9 px-3 rounded-lg text-xs font-semibold bg-brand-800 hover:bg-brand-900 text-white transition">
           Ara
         </button>
+      </div>
+
+      <!-- Tümünü seç (filtreye uyan tümü, tüm sayfalar) -->
+      <div class="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+        <input
+          type="checkbox"
+          class="h-4 w-4 accent-brand-800 cursor-pointer"
+          [checked]="allMatchingSelected()"
+          [disabled]="rows().length === 0 || selectingAll()"
+          (change)="toggleSelectAll()"
+          title="Filtreye uyan tüm konuşmaları seç"/>
+        <span class="text-[11px] text-slate-500 dark:text-slate-400">
+          Tümünü seç@if (selectingAll()) {&nbsp;<span class="text-brand-700 dark:text-brand-300">(yükleniyor…)</span>}
+        </span>
+        @if (selected().size > 0) {
+          <button
+            type="button"
+            (click)="clearSelection()"
+            class="ml-auto text-[11px] font-medium text-brand-700 dark:text-brand-300 hover:underline">
+            Seçimi temizle ({{ selected().size }})
+          </button>
+        }
       </div>
 
       <!-- Liste gövdesi -->
       <div class="flex-1 overflow-y-auto">
         @if (loading()) {
           <div class="flex items-center justify-center h-40 text-slate-400">
-            <svg class="h-6 w-6 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24">
+            <svg class="h-6 w-6 animate-spin text-brand-600" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
             </svg>
@@ -90,10 +112,10 @@
             <div
               class="flex items-start gap-2 px-3 py-2.5 border-b border-slate-100 dark:border-slate-800
                      hover:bg-slate-50 dark:hover:bg-slate-800/60 transition"
-              [ngClass]="selectedId() === row.id ? 'bg-blue-50 dark:bg-slate-800' : ''">
+              [ngClass]="selectedId() === row.id ? 'bg-brand-50 dark:bg-slate-800' : ''">
               <input
                 type="checkbox"
-                class="mt-1 h-4 w-4 accent-blue-800 cursor-pointer shrink-0"
+                class="mt-1 h-4 w-4 accent-brand-800 cursor-pointer shrink-0"
                 [checked]="selected().has(row.id)"
                 (change)="toggleSelect(row.id)"
                 title="Dışa aktarım için seç"/>
@@ -172,7 +194,7 @@
           @for (m of d.messages; track m.id) {
             @if (m.role === 'user') {
               <div class="flex justify-end">
-                <div class="max-w-[80%] px-3 py-2 rounded-2xl rounded-br-sm bg-blue-800 text-white text-sm whitespace-pre-wrap break-words">
+                <div class="max-w-[80%] px-3 py-2 rounded-2xl rounded-br-sm bg-brand-800 text-white text-sm whitespace-pre-wrap break-words">
                   {{ m.content }}
                 </div>
               </div>
@@ -197,7 +219,7 @@
         </div>
       } @else if (detailLoading()) {
         <div class="flex-1 flex items-center justify-center text-slate-400">
-          <svg class="h-6 w-6 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24">
+          <svg class="h-6 w-6 animate-spin text-brand-600" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
           </svg>

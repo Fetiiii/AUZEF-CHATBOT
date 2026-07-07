@@ -7,6 +7,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Observable } from 'rxjs';
 
 import {
   ConversationsApiService,
@@ -38,6 +39,7 @@ export class ConversationsComponent implements OnInit {
   // ── Export / seçim ────────────────────────────────
   selected = signal<Set<number>>(new Set());   // sayfalar arası korunur
   exporting = signal(false);
+  selectingAll = signal(false);
   exportStart = '';
   exportEnd = '';
 
@@ -72,6 +74,7 @@ export class ConversationsComponent implements OnInit {
     this.page.set(0);
     this.selectedId.set(null);
     this.detail.set(null);
+    this.clearSelection();   // yeni arama = yeni sonuç kümesi, seçimi sıfırla
     this.load();
   }
 
@@ -118,20 +121,50 @@ export class ConversationsComponent implements OnInit {
     this.selected.set(s);
   }
 
+  // Filtreye uyan tümü seçili mi? (baş kutu durumu)
+  allMatchingSelected(): boolean {
+    return this.total() > 0 && this.selected().size >= this.total();
+  }
+
+  // Filtreye uyan TÜM konuşmaları seç (tüm sayfalar) / seçimi kaldır.
+  // Tüm id'ler backend'den çekilir; export POST ile gönderildiği için sayı sınırı yok.
+  toggleSelectAll(): void {
+    if (this.allMatchingSelected()) {
+      this.clearSelection();
+      return;
+    }
+    this.selectingAll.set(true);
+    this.api.allIds(this.search).subscribe({
+      next: (res) => {
+        this.selected.set(new Set(res.ids));
+        this.selectingAll.set(false);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.selectingAll.set(false);
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  clearSelection(): void {
+    this.selected.set(new Set());
+  }
+
   exportSelected(): void {
     const ids = Array.from(this.selected());
     if (ids.length === 0) return;
-    this.runExport({ ids });
+    this.download(this.api.exportByIds(ids));
   }
 
   exportRange(): void {
     if (!this.exportStart && !this.exportEnd) return;
-    this.runExport({ start: this.exportStart, end: this.exportEnd });
+    this.download(this.api.exportCsv({ start: this.exportStart, end: this.exportEnd }));
   }
 
-  private runExport(params: { ids?: number[]; start?: string; end?: string }): void {
+  private download(obs: Observable<Blob>): void {
     this.exporting.set(true);
-    this.api.exportCsv(params).subscribe({
+    obs.subscribe({
       next: (blob) => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -167,7 +200,7 @@ export class ConversationsComponent implements OnInit {
   talepClass(status: string): string {
     switch (status) {
       case 'redirected':
-        return 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300';
+        return 'bg-brand-100 text-brand-700 dark:bg-brand-950/60 dark:text-brand-300';
       case 'declined':
         return 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300';
       default:

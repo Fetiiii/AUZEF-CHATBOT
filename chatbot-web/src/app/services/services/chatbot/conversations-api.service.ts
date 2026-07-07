@@ -54,11 +54,23 @@ export class ConversationsApiService {
     return this.http.get<ConversationDetail>(`${this.base}/${id}`);
   }
 
-  exportCsv(params: { ids?: number[]; start?: string; end?: string }): Observable<Blob> {
+  // Tarih aralığı export'u (GET)
+  exportCsv(params: { start?: string; end?: string }): Observable<Blob> {
     const q = new URLSearchParams();
-    if (params.ids && params.ids.length) q.set('ids', params.ids.join(','));
     if (params.start) q.set('start', params.start);
     if (params.end) q.set('end', params.end);
     return this.http.get(`${this.base}/export?${q.toString()}`, { responseType: 'blob' });
+  }
+
+  // Seçili id'lerin export'u — POST (binlerce id URL'e sığmasın diye)
+  exportByIds(ids: number[]): Observable<Blob> {
+    return this.http.post(`${this.base}/export`, { ids }, { responseType: 'blob' });
+  }
+
+  // Filtreye uyan TÜM id'ler ("tümünü seç" için)
+  allIds(search = ''): Observable<{ ids: number[] }> {
+    const q = new URLSearchParams();
+    if (search) q.set('search', search);
+    return this.http.get<{ ids: number[] }>(`${this.base}/ids?${q.toString()}`);
   }
 }

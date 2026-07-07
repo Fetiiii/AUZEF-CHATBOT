@@ -383,6 +383,62 @@ def set_talep_status(conversation_id: int, body: TalepRequest, db: Session = Dep
     return {"ok": True}
 
 
+def _apply_conversation_search(q, db: Session, search: str):
+    """Konuşma sorgusuna meta arama filtresi uygular (ilk soru / ip / #id)."""
+    term = (search or "").strip()
+    if not term:
+        return q
+    like = f"%{term}%"
+    conds = [Conversation.ip_address.ilike(like)]
+    if term.isdigit():
+        conds.append(Conversation.id == int(term))
+    sub = db.query(ConversationMessage.conversation_id).filter(
+        ConversationMessage.role == "user",
+        ConversationMessage.content.ilike(like),
+    )
+    conds.append(Conversation.id.in_(sub))
+    return q.filter(or_(*conds))
+
+
+def _conversations_csv_response(db: Session, convs) -> Response:
+    """Verilen konuşmaları transkript (her mesaj bir satır) CSV olarak döner."""
+    conv_ids = [c.id for c in convs]
+    msgs_by_conv = {}
+    if conv_ids:
+        msgs = (
+            db.query(ConversationMessage)
+            .filter(ConversationMessage.conversation_id.in_(conv_ids))
+            .order_by(ConversationMessage.created_at, ConversationMessage.id)
+            .all()
+        )
+        for m in msgs:
+            msgs_by_conv.setdefault(m.conversation_id, []).append(m)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow([
+        "konusma_id", "konusma_tarihi", "ip", "talep_durumu",
+        "mesaj_tarihi", "rol", "icerik", "kaynak", "puan",
+    ])
+    for c in convs:
+        conv_date = c.started_at.isoformat() if c.started_at else ""
+        for m in msgs_by_conv.get(c.id, []):
+            writer.writerow([
+                c.id, conv_date, c.ip_address or "", c.talep_status,
+                m.created_at.isoformat() if m.created_at else "",
+                m.role, m.content, m.source or "",
+                m.rating if m.rating is not None else "",
+            ])
+
+    data = buf.getvalue().encode("utf-8-sig")
+    logger.info(f"Konuşma export: {len(convs)} konuşma dışa aktarıldı.")
+    return Response(
+        content=data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=konusmalar_export.csv"},
+    )
+
+
 @app.get("/api/conversations")
 def list_conversations(skip: int = 0, limit: int = 25, search: str = "", db: Session = Depends(get_db)):
     """Sohbet listesini sayfalı ÖZET olarak döner (mesaj metinleri hariç).
@@ -390,21 +446,7 @@ def list_conversations(skip: int = 0, limit: int = 25, search: str = "", db: Ses
     Performans: her istek en fazla `limit` konuşma + o sayfaya ait mesajların
     tek bir toplu sorgusunu çeker (N+1 yok). Tüm veriyi asla aynı anda çekmez.
     """
-    base = db.query(Conversation)
-
-    term = (search or "").strip()
-    if term:
-        like = f"%{term}%"
-        conds = [Conversation.ip_address.ilike(like)]
-        if term.isdigit():
-            conds.append(Conversation.id == int(term))
-        # ilk soru / kullanıcı mesajı metninde arama (meta arama kapsamı)
-        sub = db.query(ConversationMessage.conversation_id).filter(
-            ConversationMessage.role == "user",
-            ConversationMessage.content.ilike(like),
-        )
-        conds.append(Conversation.id.in_(sub))
-        base = base.filter(or_(*conds))
+    base = _apply_conversation_search(db.query(Conversation), db, search)
 
     total = base.count()
     convs = base.order_by(Conversation.started_at.desc()).offset(skip).limit(limit).all()
@@ -475,42 +517,34 @@ def export_conversations(ids: str = "", start: str = "", end: str = "", db: Sess
         raise HTTPException(status_code=400, detail="En az bir filtre gerekli: ids ya da tarih aralığı.")
 
     convs = q.order_by(Conversation.started_at).all()
-    conv_ids = [c.id for c in convs]
+    return _conversations_csv_response(db, convs)
 
-    msgs_by_conv = {}
-    if conv_ids:
-        msgs = (
-            db.query(ConversationMessage)
-            .filter(ConversationMessage.conversation_id.in_(conv_ids))
-            .order_by(ConversationMessage.created_at, ConversationMessage.id)
-            .all()
-        )
-        for m in msgs:
-            msgs_by_conv.setdefault(m.conversation_id, []).append(m)
 
-    buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
-    writer.writerow([
-        "konusma_id", "konusma_tarihi", "ip", "talep_durumu",
-        "mesaj_tarihi", "rol", "icerik", "kaynak", "puan",
-    ])
-    for c in convs:
-        conv_date = c.started_at.isoformat() if c.started_at else ""
-        for m in msgs_by_conv.get(c.id, []):
-            writer.writerow([
-                c.id, conv_date, c.ip_address or "", c.talep_status,
-                m.created_at.isoformat() if m.created_at else "",
-                m.role, m.content, m.source or "",
-                m.rating if m.rating is not None else "",
-            ])
+class ConversationExportRequest(BaseModel):
+    ids: List[int] = []
 
-    data = buf.getvalue().encode("utf-8-sig")
-    logger.info(f"Konuşma export: {len(convs)} konuşma dışa aktarıldı.")
-    return Response(
-        content=data,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=konusmalar_export.csv"},
+
+@app.post("/api/conversations/export")
+def export_conversations_post(body: ConversationExportRequest, db: Session = Depends(get_db)):
+    """Seçili konuşmaları transkript CSV olarak dışa aktarır. 'Tümünü seç'
+    binlerce id üretebildiği için (URL sınırına takılmamak adına) POST kullanılır."""
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="ids gerekli.")
+    convs = (
+        db.query(Conversation)
+        .filter(Conversation.id.in_(body.ids))
+        .order_by(Conversation.started_at)
+        .all()
     )
+    return _conversations_csv_response(db, convs)
+
+
+@app.get("/api/conversations/ids")
+def list_conversation_ids(search: str = "", db: Session = Depends(get_db)):
+    """Filtreye uyan TÜM konuşma id'lerini döner (sayfalama yok) — 'tümünü seç' için."""
+    q = _apply_conversation_search(db.query(Conversation.id), db, search)
+    rows = q.order_by(Conversation.started_at.desc()).all()
+    return {"ids": [r[0] for r in rows]}
 
 
 @app.get("/api/conversations/{conversation_id}")

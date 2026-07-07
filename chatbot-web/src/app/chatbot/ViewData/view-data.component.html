@@ -192,34 +192,33 @@
                 <label class="text-[11px] text-slate-500 dark:text-slate-400">Başlangıç</label>
                 <input type="date" [(ngModel)]="convStart" (change)="onConvDateChange()"
                     class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
-                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-800/50"/>
             </div>
             <div class="flex flex-col gap-1">
                 <label class="text-[11px] text-slate-500 dark:text-slate-400">Bitiş</label>
                 <input type="date" [(ngModel)]="convEnd" (change)="onConvDateChange()"
                     class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
-                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-800/50"/>
+                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-800/50"/>
             </div>
         </div>
     </div>
 
-    <!-- Body -->
-    <div class="p-4 md:p-5 grid gap-6 lg:grid-cols-2 bg-slate-50/30 dark:bg-transparent">
+    <!-- Body — metrikler alt alta, ayrı kartlarda -->
+    <div class="p-4 md:p-5 flex flex-col gap-5 bg-slate-50/30 dark:bg-transparent">
 
         <!-- Yıldız dağılımı (bar) -->
-        <div>
+        <div class="rounded-lg border border-gray-100 dark:border-slate-800 bg-white/70 dark:bg-slate-900/40 p-4">
             <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Yıldız Dağılımı</h3>
-            <div style="height: 260px;">
+            <div style="height: 300px;">
                 <canvas baseChart [type]="'bar'" [data]="ratingChartData()" [options]="ratingChartOptions"></canvas>
             </div>
         </div>
 
-        <!-- Olumlu/olumsuz (doughnut) + talep kartları -->
-        <div class="flex flex-col gap-5">
-            <div>
+        <!-- Sonuç (Olumlu / Olumsuz) -->
+        <div class="rounded-lg border border-gray-100 dark:border-slate-800 bg-white/70 dark:bg-slate-900/40 p-4">
                 <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Sonuç (Olumlu / Olumsuz)</h3>
-                <div class="grid gap-4 sm:grid-cols-[minmax(0,190px)_1fr] items-center">
-                    <div class="mx-auto w-full max-w-[190px]" style="height: 190px;">
+                <div class="grid gap-5 sm:grid-cols-[minmax(0,240px)_1fr] items-center">
+                    <div class="mx-auto w-full max-w-[240px]" style="height: 220px;">
                         <canvas baseChart [type]="'doughnut'" [data]="outcomeChartData()" [options]="doughnutChartOptions"></canvas>
                     </div>
                     <div class="flex flex-col gap-2">
@@ -242,13 +241,13 @@
                 </div>
             </div>
 
-            <!-- Talep yönlendirmesi -->
-            <div>
+        <!-- Talep yönlendirmesi -->
+        <div class="rounded-lg border border-gray-100 dark:border-slate-800 bg-white/70 dark:bg-slate-900/40 p-4">
                 <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Talep Yönlendirmesi</h3>
                 <div class="grid gap-3 sm:grid-cols-3">
-                    <div class="rounded-lg border border-blue-200 dark:border-blue-500/40 bg-blue-50 dark:bg-blue-500/10 p-3">
-                        <p class="text-[11px] font-medium text-blue-700 dark:text-blue-300">Yönlendirilen</p>
-                        <p class="text-xl font-bold text-blue-800 dark:text-blue-200">{{ talepCounts().redirected }}</p>
+                    <div class="rounded-lg border border-brand-200 dark:border-brand-500/40 bg-brand-50 dark:bg-brand-500/10 p-3">
+                        <p class="text-[11px] font-medium text-brand-700 dark:text-brand-300">Yönlendirilen</p>
+                        <p class="text-xl font-bold text-brand-800 dark:text-brand-200">{{ talepCounts().redirected }}</p>
                     </div>
                     <div class="rounded-lg border border-amber-200 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 p-3">
                         <p class="text-[11px] font-medium text-amber-700 dark:text-amber-300">Oluşturmadan giden</p>
@@ -260,6 +259,5 @@
                     </div>
                 </div>
             </div>
-        </div>
     </div>
 </section>
