@@ -11,6 +11,7 @@ from llm_provider import LLMFactory
 from calendar_utils import format_calendar_answer, match_calendar_entry
 from pydantic import BaseModel
 from typing import Optional, List
+from concurrent.futures import ThreadPoolExecutor
 import os
 import logging
 import time
@@ -59,37 +60,6 @@ def get_db():
 def is_llm_enabled(db: Session):
     config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
     return config.value.lower() == "true" if config else False
-
-def _llm_select_answer(q: str, qdrant_hits: list):
-    """Selector mantığını korur: tek soruda mevcut davranış, çoklu soruda
-    her alt soru için ayrı retrieval + ayrı seçim yapıp cevapları birleştirir.
-
-    Tek bir birleşik sorgu için yapılan embedding/retrieval, ikinci soruyu
-    aday havuzundan dışarıda bırakabildiği için her alt soru kendi
-    retrieval'ı ile seçtirilir. Sorular noktalama olmadan yazılmış olsa bile
-    LLM ile ayrılır. Cevaplar yine birebir (verbatim) seçilir, asla üretilmez.
-    """
-    sub_questions = LLM_PROVIDER.split_questions(q)
-    if len(sub_questions) <= 1:
-        return LLM_PROVIDER.ask(q, qdrant_hits)
-
-    answers = []
-    for sub_q in sub_questions:
-        # Bir alt sorudaki hata (retrieval ya da seçim), diğer alt soruların
-        # başarılı cevaplarını kaybettirmemeli.
-        try:
-            hits = QDRANT_PROVIDER.search(sub_q, limit=5)
-            if not hits:
-                continue
-            ans = LLM_PROVIDER.ask(sub_q, hits)
-        except Exception:
-            continue
-        if ans and ans not in answers:
-            answers.append(ans)
-
-    if not answers:
-        return None
-    return "\n\n".join(answers)
 
 @app.on_event("startup")
 async def startup_event():
@@ -207,6 +177,188 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────
+#  Cevap Üretimi — LLM seçici ana yol + eşik yedeği
+# ─────────────────────────────────────────────
+#
+#  Tasarım: Takvim artık bir "ön kapı" değil, aday havuzundaki bir kayıttır.
+#  LLM açıkken her soru (alt sorulara bölünüp) QnA + takvim adaylarından
+#  oluşan TEK bir havuzdan birebir (verbatim) seçtirilir; LLM asla cevap
+#  üretmez. Böylece "vize sınavına nasıl çalışmalıyım" gibi sorular yanlışlıkla
+#  bir tarihe düşmez; gerçek cevap yoksa dürüstçe "uygun yok" (None) döner.
+#
+#  LLM kapalı / hatalı / hiçbir aday seçmezse, bugünkü eşik tabanlı yola
+#  (takvim kelime eşleşmesi → Meili ≥0.90 → Qdrant >0.75) düşülür; böylece
+#  anahtar bozulsa bile sistem çökmez, en fazla eski davranışa geriler.
+
+
+def _meili_search_safe(query: str, limit: int) -> list:
+    """Circuit-breaker'lı Meili araması. Meili çökükse boş liste döner ve
+    CIRCUIT_BREAKER_TIME saniye boyunca Meili'yi atlar (her istekte yavaş
+    hataya düşmemek için)."""
+    now = time.time()
+    if not MEILI_STATUS["healthy"] and (now - MEILI_STATUS["last_check"] <= CIRCUIT_BREAKER_TIME):
+        return []
+    try:
+        hits = MEILI_PROVIDER.search(query, limit=limit)
+        MEILI_STATUS["healthy"] = True
+        return hits
+    except Exception:
+        MEILI_STATUS["healthy"] = False
+        MEILI_STATUS["last_check"] = now
+        logger.error(f"⚠️ MeiliSearch hatası — {CIRCUIT_BREAKER_TIME} sn atlanacak.")
+        return []
+
+
+def _build_candidate_pool(query: str, calendar_entries: list) -> list:
+    """Bir (alt) soru için LLM seçiciye verilecek aday havuzunu kurar:
+    Qdrant (semantik) + Meili (anahtar kelime) QnA adayları + TÜM takvim
+    kayıtları. Takvim kayıtları, kelime örtüşmesinin kaçırdığı ("güz dönemi
+    başlangıcı" gibi) soruları LLM semantik olarak yakalayabilsin diye
+    tümüyle eklenir (yalnızca 19 kayıt). Cevaba göre tekilleştirilir."""
+    raw = []
+    try:
+        raw.extend(QDRANT_PROVIDER.search(query, limit=8))
+    except Exception:
+        pass
+    raw.extend(_meili_search_safe(query, limit=5))
+
+    pool = [{"question": c.get("question"), "answer": c.get("answer")} for c in raw]
+
+    for e in calendar_entries:
+        # period ("Güz Dönemi" vb.) sorunun hangi döneme ait olduğunu
+        # LLM'in ayırt edebilmesi için soru metnine dahil edilir.
+        pool.append({
+            "question": f"{e.period} {e.event}".strip() + " ne zaman?",
+            "answer": format_calendar_answer(e.period, e.event, e.start_date, e.end_date),
+        })
+
+    seen = set()
+    unique = []
+    for c in pool:
+        a = c["answer"]
+        if a and a not in seen:
+            seen.add(a)
+            unique.append(c)
+    return unique
+
+
+def _select_from_pool(query: str, calendar_entries: list) -> tuple:
+    """Bir (alt) soru için aday havuzunu kurup LLM'e birebir seçtirir.
+    (answer_or_None, reached_llm) döner. reached_llm=False YALNIZCA havuz
+    boşsa olur (retrieval çöktü ve takvim de yoksa) — bu durumda LLM hiç
+    çağrılmamıştır. ``LLM_PROVIDER.ask`` hata yükseltebilir (çağıran yakalar)."""
+    candidates = _build_candidate_pool(query, calendar_entries)
+    if not candidates:
+        return None, False
+    return LLM_PROVIDER.ask(query, candidates), True
+
+
+def _llm_answer(query: str, db: Session) -> Optional[str]:
+    """Ana yol: soruyu alt sorulara böler, her alt soru için birleşik aday
+    havuzundan (QnA + takvim) birebir cevap seçtirir, cevapları birleştirir.
+
+    Latency: 'soruyu böl' (split) ile 'tek soru olsaydı seç' (spekülatif seçim)
+    AYNI ANDA (paralel) çalıştırılır. Soru tek çıkarsa spekülatif seçim sonucu
+    kullanılır — iki LLM çağrısı ardışık değil yan yana olduğundan tek soru
+    ~yarı sürede döner. Çoklu çıkarsa spekülatif sonuç atılır ve her alt soru
+    için ayrı seçim yapılır (çoklu-soru doğruluğu korunur, split her zaman
+    çalıştığı için noktalama olmayan çoklu sorular da yakalanır).
+
+    Dönüş: birleşik cevap ya da 'uygun aday yok' için None. LLM'e HİÇ
+    ulaşılamazsa (tüm ask'ler hata) RuntimeError yükseltir ki _answer_question
+    tam eşik yedeğine (takvim kapısı dahil) düşsün."""
+    calendar_entries = db.query(AcademicCalendar).all()
+
+    ex = ThreadPoolExecutor(max_workers=2)
+    try:
+        split_future = ex.submit(LLM_PROVIDER.split_questions, query)
+        single_future = ex.submit(_select_from_pool, query, calendar_entries)
+
+        sub_questions = split_future.result() or [query]
+
+        if len(sub_questions) <= 1:
+            # Tek soru: paralel yürüyen spekülatif seçimi kullan.
+            try:
+                ans, reached = single_future.result()
+            except Exception:
+                raise RuntimeError("LLM erişilemedi (tek soru seçimi)")
+            if not reached:
+                raise RuntimeError("aday havuzu boş (retrieval)")
+            return ans  # None ise "uygun yok" (takvim kapısı açılmadan öneriye gider)
+    finally:
+        # Çoklu soruda spekülatif seçim boşa gider; arka planda bitmesine izin
+        # ver, sonucunu bekleme (wait=False).
+        ex.shutdown(wait=False)
+
+    # Çoklu soru: her alt soru için ayrı seçim (spekülatif sonuç atıldı).
+    answers = []
+    any_success = False  # en az bir alt soruda LLM'e ULAŞILDI mı?
+    for sub_q in sub_questions:
+        try:
+            ans, reached = _select_from_pool(sub_q, calendar_entries)
+            if reached:
+                any_success = True
+        except Exception:
+            continue
+        if ans and ans not in answers:
+            answers.append(ans)
+
+    if answers:
+        return "\n\n".join(answers)
+    if not any_success:
+        raise RuntimeError("LLM tüm alt sorularda erişilemedi")
+    return None
+
+
+def _fallback_answer(query: str, db: Session, use_calendar: bool = True) -> tuple:
+    """Eşik tabanlı yedek zincir. (answer, source) döner; bulunamazsa (None, "none").
+
+    ``use_calendar``: kelime tabanlı takvim kapısını çalıştır. Yalnızca LLM
+    tamamen erişilemezken (kapalı/hata) True olmalı. LLM çalışıp "uygun yok"
+    dediyse takvim zaten aday havuzundaydı ve LLM onu reddetti; o durumda bu
+    kapı yeniden AÇILMAMALI (yoksa "vize sınavına nasıl çalışmalıyım" gibi
+    sorular tekrar yanlışlıkla bir tarihe düşer)."""
+    if use_calendar and is_date_query(query):
+        cal = search_calendar(query, db, use_llm=False)
+        if cal:
+            return cal, "academic_calendar"
+
+    hits = _meili_search_safe(query, limit=3)
+    if hits and hits[0]["score"] >= 0.90:
+        return hits[0]["answer"], "meilisearch"
+
+    try:
+        qhits = QDRANT_PROVIDER.search(query, limit=5)
+        if qhits and qhits[0]["score"] > 0.75:
+            return qhits[0]["answer"], "qdrant_vector"
+    except Exception:
+        pass
+
+    return None, "none"
+
+
+def _answer_question(query: str, db: Session) -> tuple:
+    """Bir soruya cevap üretir. (answer, source) döner; cevap yoksa (None, "none").
+
+    - LLM açık ve seçim yaptı        → o cevap (source "llm").
+    - LLM açık ama "uygun yok" dedi   → yüksek-güven eşik hit'ine bak, ama takvim
+      kelime kapısını AÇMA (takvim zaten havuzdaydı, LLM reddetti).
+    - LLM kapalı ya da hata verdi     → tam eski eşik davranışı (takvim kapısı dahil)."""
+    if is_llm_enabled(db):
+        try:
+            ans = _llm_answer(query, db)
+            if ans:
+                return ans, "llm"
+            # LLM çalıştı ama uygun aday yok → takvim kapısı olmadan eşik yedeği.
+            return _fallback_answer(query, db, use_calendar=False)
+        except Exception as e:
+            logger.error(f"LLM ana yol hatası (yedeğe düşülüyor): {e}")
+
+    # LLM kapalı ya da hata → tam eski davranış.
+    return _fallback_answer(query, db, use_calendar=True)
+
+
+# ─────────────────────────────────────────────
 #  Query Logging (arka planda, yanıt yolunu etkilemez)
 # ─────────────────────────────────────────────
 
@@ -281,8 +433,6 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
         return {"answer": "Lütfen bir soru yazın."}
 
     ip = request.client.host if request.client else None
-    current_time = time.time()
-    meili_hits = []
 
     # İlk mesajda conversation oluştur, kullanıcı mesajını kaydet.
     # Best-effort: kayıt başarısız olursa (ör. tablo henüz yoksa) cevap yolu
@@ -299,45 +449,12 @@ async def widget_chat(body: WidgetChatRequest, request: Request, background_task
             pass
         conv = None
 
-    # --- ADIM 0: AKADEMİK TAKVİM KONTROLÜ ---
-    if is_date_query(q):
-        cal_answer = search_calendar(q, db, is_llm_enabled(db))
-        if cal_answer:
-            background_tasks.add_task(_log_query, "academic_calendar", "success", ip)
-            return _widget_reply(db, conv, cal_answer, "academic_calendar")
-
-    # MeiliSearch
-    try:
-        if MEILI_STATUS["healthy"] or (current_time - MEILI_STATUS["last_check"] > CIRCUIT_BREAKER_TIME):
-            meili_hits = MEILI_PROVIDER.search(q, limit=3)
-            MEILI_STATUS["healthy"] = True
-            if meili_hits and meili_hits[0]["score"] >= 0.90:
-                background_tasks.add_task(_log_query, "meilisearch", "success", ip)
-                return _widget_reply(db, conv, meili_hits[0]["answer"], "meilisearch")
-    except Exception:
-        MEILI_STATUS["healthy"] = False
-        MEILI_STATUS["last_check"] = current_time
-        meili_hits = []
-
-    # Qdrant
-    qdrant_hits = []
-    try:
-        qdrant_hits = QDRANT_PROVIDER.search(q, limit=5)
-        if qdrant_hits and qdrant_hits[0]["score"] > 0.75:
-            background_tasks.add_task(_log_query, "qdrant_vector", "success", ip)
-            return _widget_reply(db, conv, qdrant_hits[0]["answer"], "qdrant_vector")
-    except Exception:
-        qdrant_hits = []
-
-    # LLM (RAG fallback) — selector mode: picks verbatim answer or None
-    if is_llm_enabled(db) and qdrant_hits:
-        try:
-            answer = _llm_select_answer(q, qdrant_hits)
-            if answer:
-                background_tasks.add_task(_log_query, "llm", "success", ip)
-                return _widget_reply(db, conv, answer, "llm")
-        except Exception:
-            pass
+    # Cevap üret: LLM seçici ana yol (birleşik QnA + takvim havuzu, çoklu soru)
+    # + eşik yedeği. Takvim artık ön kapı değil, havuzdaki bir aday.
+    answer, source = _answer_question(q, db)
+    if answer:
+        background_tasks.add_task(_log_query, source, "success", ip)
+        return _widget_reply(db, conv, answer, source)
 
     # Öneriler
     try:
@@ -587,81 +704,25 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
 @app.get("/api/search")
 async def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(..., min_length=2), db: Session = Depends(get_db)):
     ip = request.client.host if request.client else None
-    current_time = time.time()
-    meili_hits = []
 
     try:
-        # --- ADIM 0: AKADEMİK TAKVİM KONTROLÜ ---
-        if is_date_query(q):
-            cal_answer = search_calendar(q, db, is_llm_enabled(db))
-            if cal_answer:
-                background_tasks.add_task(_log_query, "academic_calendar", "success", ip)
-                return {
-                    "source": "academic_calendar",
-                    "status": "success",
-                    "answer": cal_answer,
-                    "question": q
-                }
+        # Cevap üret: LLM seçici ana yol (birleşik QnA + takvim havuzu, çoklu
+        # soru) + eşik yedeği. Takvim artık ön kapı değil, havuzdaki bir aday.
+        answer, source = _answer_question(q, db)
+        if answer:
+            background_tasks.add_task(_log_query, source, "success", ip)
+            return {
+                "source": source,
+                "status": "success",
+                "answer": answer,
+                "question": q,
+            }
 
-        # --- ADIM 1: MEILISEARCH (KEYWORD SEARCH) ---
-        if MEILI_STATUS["healthy"] or (current_time - MEILI_STATUS["last_check"] > CIRCUIT_BREAKER_TIME):
-            try:
-                meili_hits = MEILI_PROVIDER.search(q, limit=3)
-                MEILI_STATUS["healthy"] = True
-
-                if meili_hits and meili_hits[0]['score'] >= 0.90:
-                    background_tasks.add_task(_log_query, "meilisearch", "success", ip)
-                    return {
-                        "source": "meilisearch",
-                        "status": "success",
-                        "answer": meili_hits[0]['answer'],
-                        "question": meili_hits[0]['question'],
-                        "score": meili_hits[0]['score']
-                    }
-            except Exception as e:
-                MEILI_STATUS["healthy"] = False
-                MEILI_STATUS["last_check"] = current_time
-                logger.error(f"⚠️ MeiliSearch çöktü! {CIRCUIT_BREAKER_TIME} saniye boyunca Qdrant kullanılacak.")
-        else:
-            logger.info("⚡ Circuit Breaker aktif: MeiliSearch atlanıyor...")
-
-        # --- ADIM 2: QDRANT (SEMANTIC SEARCH) ---
-        try:
-            qdrant_hits = QDRANT_PROVIDER.search(q, limit=5)
-            if qdrant_hits and qdrant_hits[0]['score'] > 0.75:
-                background_tasks.add_task(_log_query, "qdrant_vector", "success", ip)
-                return {
-                    "source": "qdrant_vector",
-                    "status": "success",
-                    "answer": qdrant_hits[0]['answer'],
-                    "question": qdrant_hits[0]['question'],
-                    "score": qdrant_hits[0]['score']
-                }
-        except Exception as e:
-            logger.error(f"Qdrant hatası: {str(e)}")
-            qdrant_hits = []
-
-        # --- ADIM 3: LLM FALLBACK (RAG) — selector mode: picks verbatim answer or None ---
-        if is_llm_enabled(db) and qdrant_hits:
-            try:
-                answer = _llm_select_answer(q, qdrant_hits)
-                if answer:
-                    background_tasks.add_task(_log_query, "llm", "success", ip)
-                    return {
-                        "source": "llm",
-                        "status": "success",
-                        "answer": answer,
-                        "question": q,
-                        "context_used": [h['question'] for h in qdrant_hits]
-                    }
-            except Exception as e:
-                logger.error(f"LLM Hatası: {str(e)}")
-
-        # --- ADIM 4: SUGGESTIONS ---
+        # Cevap yok → öneriler
         suggestions = []
         try:
             suggestions = MEILI_PROVIDER.get_suggestions(q, limit=20)
-        except:
+        except Exception:
             pass
 
         background_tasks.add_task(_log_query, "none", "suggest", ip)
@@ -1002,7 +1063,7 @@ def get_stats(db: Session = Depends(get_db)):
         {"today": today_start_utc}
     ).fetchall()
 
-    sources = {"meilisearch": 0, "qdrant_vector": 0, "llm": 0, "none": 0}
+    sources = {"meilisearch": 0, "qdrant_vector": 0, "llm": 0, "academic_calendar": 0, "none": 0}
     for row in source_rows:
         if row.source in sources:
             sources[row.source] = row.cnt
