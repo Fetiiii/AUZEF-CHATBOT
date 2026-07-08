@@ -42,7 +42,10 @@ class BaseLLMProvider(ABC):
         system = (
             "Sen bir soru-cevap seçici asistansın. "
             "Sana verilen aday cevaplar arasından kullanıcının sorusuna en uygun olanı seçersin. "
-            "Kendi cevabını asla üretmezsin, yalnızca bir sayı yazarsın."
+            "Kendi cevabını asla üretmezsin, yalnızca bir sayı yazarsın. "
+            "Kullanıcı bir tarih/zaman soruyorsa (ör. 'ne zaman', 'hangi tarih') ve adaylardan "
+            "biri SOMUT bir tarih içeriyorsa, 'akademik takvimden bakınız' gibi genel/yönlendirici "
+            "bir cevaba göre bu somut tarihli adayı tercih et."
         )
         user = (
             f"Kullanıcı sorusu: {question}\n\n"

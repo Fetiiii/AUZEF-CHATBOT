@@ -215,22 +215,29 @@ def _build_candidate_pool(query: str, calendar_entries: list) -> list:
     kayıtları. Takvim kayıtları, kelime örtüşmesinin kaçırdığı ("güz dönemi
     başlangıcı" gibi) soruları LLM semantik olarak yakalayabilsin diye
     tümüyle eklenir (yalnızca 19 kayıt). Cevaba göre tekilleştirilir."""
+    pool = []
+
+    # Takvim adaylarını havuzun BAŞINA koy. "Final ne zaman" gibi bir tarih
+    # sorusunda, aynı konudaki genel/yönlendirici bir QnA ("sınav tarihleri
+    # akademik takvimden yayınlanır") çoğu zaman aramada üst sırada çıkıyor;
+    # somut takvim tarihi listenin sonunda kalırsa LLM konum yanlılığıyla genel
+    # cevabı seçebiliyor. Takvimi öne almak (prompt'taki "somut tarihi tercih et"
+    # kuralıyla birlikte) somut tarihin seçilmesini sağlar.
+    for e in calendar_entries:
+        # period ("Güz"/"Bahar") sorunun hangi döneme ait olduğunu LLM'in ayırt
+        # edebilmesi için soru metnine dahil edilir.
+        pool.append({
+            "question": f"{e.period} {e.event}".strip() + " ne zaman?",
+            "answer": format_calendar_answer(e.period, e.event, e.start_date, e.end_date),
+        })
+
     raw = []
     try:
         raw.extend(QDRANT_PROVIDER.search(query, limit=8))
     except Exception:
         pass
     raw.extend(_meili_search_safe(query, limit=5))
-
-    pool = [{"question": c.get("question"), "answer": c.get("answer")} for c in raw]
-
-    for e in calendar_entries:
-        # period ("Güz Dönemi" vb.) sorunun hangi döneme ait olduğunu
-        # LLM'in ayırt edebilmesi için soru metnine dahil edilir.
-        pool.append({
-            "question": f"{e.period} {e.event}".strip() + " ne zaman?",
-            "answer": format_calendar_answer(e.period, e.event, e.start_date, e.end_date),
-        })
+    pool.extend({"question": c.get("question"), "answer": c.get("answer")} for c in raw)
 
     seen = set()
     unique = []
