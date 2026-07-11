@@ -1,10 +1,11 @@
-import { ChangeDetectionStrategy, Component, HostListener } from '@angular/core';
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { ThemeService, ThemeMode } from '../../shared/theme.service';
 import { I18nService } from '../../shared/i18n.service';
+import { ChatbotAuthService } from '../../services/services/chatbot/chatbot-auth.service';
 
 @Component({
   standalone: true,
@@ -32,10 +33,12 @@ export class SignInComponent {
     private fb: FormBuilder,
     private router: Router,
     private route: ActivatedRoute,
+    private auth: ChatbotAuthService,
+    private cdr: ChangeDetectorRef,
     public theme: ThemeService,
     public i18n: I18nService
   ) {
-    const remembered = localStorage.getItem('chatbot_remember_id');
+    const remembered = this.auth.getRememberedEmail();
     if (remembered) {
       this.form.patchValue({ identifier: remembered, remember: true });
     }
@@ -118,39 +121,34 @@ export class SignInComponent {
     this.loading = true;
     this.loginErrorMessage = null;
 
-    const username = (this.form.value.identifier || '').trim();
-    const password = String(this.form.value.password || '').trim();
+    const email = (this.form.value.identifier || '').trim();
+    const password = String(this.form.value.password || '');
     const remember = !!this.form.value.remember;
-
-    // ✅ Remember
-    if (remember) localStorage.setItem('chatbot_remember_id', username);
-    else localStorage.removeItem('chatbot_remember_id');
 
     // ✅ ReturnUrl (örn: /chatbot/document-upload)
     const returnUrl = (this.route.snapshot.queryParamMap.get('returnUrl') || '').trim();
 
-    // ✅ Basit kontrol
-    const ok = username.toLowerCase() === 'fb' && password === '1';
-
-    if (!ok) {
+    // Gerçek oturum: backend parolayı doğrular, HttpOnly session cookie kurar.
+    // (Eski istemci-taraflı fb/1 kontrolü kaldırıldı — bundle'ı okuyan herkes
+    // görebiliyordu ve localStorage bayrağı DevTools'tan set edilebiliyordu.)
+    this.auth.login({ email, password, remember }).subscribe((res) => {
       this.loading = false;
-      this.loginErrorMessage = 'Kullanıcı adı veya parola hatalı.';
-      return;
-    }
 
-    // ✅ “logged-in” işareti (guard sonra buna bakabilir)
-    localStorage.setItem('csm_chatbot_auth', '1');
+      if (!res.ok) {
+        this.loginErrorMessage = res.message ?? 'Giriş başarısız.';
+        this.cdr.markForCheck();
+        return;
+      }
 
-    this.loading = false;
+      const target = this.safeReturnUrl(returnUrl) || this.AFTER_LOGIN_URL;
 
-    const target = this.safeReturnUrl(returnUrl) || this.AFTER_LOGIN_URL;
-
-    this.router
-      .navigateByUrl(target, { replaceUrl: true })
-      .then((navOk) => {
-        if (!navOk) window.location.assign(target);
-      })
-      .catch(() => window.location.assign(target));
+      this.router
+        .navigateByUrl(target, { replaceUrl: true })
+        .then((navOk) => {
+          if (!navOk) window.location.assign(target);
+        })
+        .catch(() => window.location.assign(target));
+    });
   }
 
   private safeReturnUrl(url: string): string | null {

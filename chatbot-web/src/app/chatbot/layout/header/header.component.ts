@@ -17,6 +17,7 @@ import { filter, takeUntil } from 'rxjs/operators';
 
 import { I18nService } from 'src/app/shared/i18n.service';
 import { ThemeMode, ThemeService } from 'src/app/shared/theme.service';
+import { ChatbotAuthService } from 'src/app/services/services/chatbot/chatbot-auth.service';
 
 
 type UserStatus = 'available' | 'away';
@@ -39,8 +40,8 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
   userStatus: UserStatus = 'available';
 
-  // DEFAULT isim
-  userName = 'Çağrı Personeli';
+  // Oturumdaki kullanıcıdan doldurulur (guard geçtiği için önbellekte hazırdır)
+  userName = 'Personel';
 
   // Başlık artık signal → OnPush ile sorunsuz
   pageTitle = signal<string>('');
@@ -52,9 +53,14 @@ export class HeaderComponent implements OnInit, OnDestroy {
     public i18n: I18nService,
     private eRef: ElementRef,
     private router: Router,
+    private auth: ChatbotAuthService,
   ) { }
 
   ngOnInit(): void {
+    // Oturum kullanıcısını göster (guard sayesinde login'den geçilmiş durumda)
+    const u = this.auth.user();
+    if (u) this.userName = u.full_name || u.email;
+
     // İlk yüklemede geçerli route başlığını çek
     this.updateTitleFromRouteTree();
 
@@ -209,7 +215,10 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
   logout() {
     this.userMenuOpen = false;
-    localStorage.removeItem('chatbot_remember_id');
-    this.router.navigate(['/chatbot/sign-in']);
+    // Backend'deki oturumu kapat (DB'den silinir → cookie anında geçersizleşir),
+    // sonra login'e dön. "Beni hatırla" e-postasına dokunulmaz.
+    this.auth.logout().subscribe(() => {
+      this.router.navigate(['/chatbot/sign-in']);
+    });
   }
 }
