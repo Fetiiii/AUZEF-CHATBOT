@@ -96,6 +96,17 @@ def is_llm_enabled(db: Session):
     config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
     return config.value.lower() == "true" if config else False
 
+@app.get("/health")
+def health(db: Session = Depends(get_db)):
+    """Container healthcheck ucu: public ve ucuz, DB bağlantısını doğrular.
+
+    Eski healthcheck /api/config/llm kullanıyordu; o uç artık oturum koruması
+    kapsamında olduğundan ADMIN_AUTH_ENFORCED=true iken 401 dönüp container'ı
+    'unhealthy' yapardı (ve frontend hiç başlamazdı)."""
+    db.execute(text("SELECT 1"))
+    return {"ok": True}
+
+
 @app.on_event("startup")
 async def startup_event():
     try:

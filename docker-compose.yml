@@ -120,7 +120,10 @@ services:
       qdrant:
         condition: service_started
     healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8000/api/config/llm || exit 1" ]
+      # /health: public + ucuz (SELECT 1). /api/config/llm KULLANMA — o uç
+      # oturum korumasında; ADMIN_AUTH_ENFORCED=true iken 401 döner ve
+      # container sonsuza dek unhealthy kalırdı.
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1" ]
       interval: 15s
       timeout: 10s
       retries: 5
