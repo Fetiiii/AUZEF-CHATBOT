@@ -81,24 +81,15 @@ export class HeaderComponent implements OnInit, OnDestroy {
       )
       .subscribe(() => this.updateTitleFromRouteTree());
 
-    // Kullanıcı adını localStorage'dan çek (chatbot tarafı)
-    this.setUserNameFromStorage();
+    // NOT: Eskiden burada localStorage'dan (chatbot_remember_id) isim okunup
+    // userName EZİLİYORDU — "Beni hatırla"ya yazılan ham e-posta (kullanıcının
+    // yazdığı büyük/küçük harfle) full_name'in üzerine biniyordu. Oturum
+    // kullanıcısının tek kaynağı artık yukarıdaki user$ aboneliğidir.
   }
 
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
-  }
-
-  // === User name ===
-  private setUserNameFromStorage(): void {
-    const storedName =
-      localStorage.getItem('chatbot_operator_name') ??
-      localStorage.getItem('chatbot_remember_id');
-
-    if (storedName && storedName.trim() !== '') {
-      this.userName = storedName;
-    }
   }
 
   // === Global click / esc ===
