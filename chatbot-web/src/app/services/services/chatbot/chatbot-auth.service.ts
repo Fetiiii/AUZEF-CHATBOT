@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
+import { BehaviorSubject, Observable, of } from 'rxjs';
 import { catchError, map, tap } from 'rxjs/operators';
 import {
     AdminUser,
@@ -24,9 +24,15 @@ import {
 export class ChatbotAuthService {
     private readonly REMEMBER_KEY = 'chatbot_remember_id';
 
-    private currentUser: AdminUser | null = null;
+    /** Reaktif kullanıcı durumu: header gibi bileşenler init sırasına
+     *  bağımlı kalmadan (login/me hangi anda dönerse dönsün) güncellenir. */
+    readonly user$ = new BehaviorSubject<AdminUser | null>(null);
 
     constructor(private http: HttpClient) { }
+
+    private setUser(u: AdminUser | null): void {
+        this.user$.next(u ?? null);
+    }
 
     login(req: ChatbotLoginRequest): Observable<ChatbotLoginResponse> {
         const email = (req.email || '').trim();
@@ -37,13 +43,13 @@ export class ChatbotAuthService {
             })
             .pipe(
                 tap((res) => {
-                    this.currentUser = res.user ?? null;
+                    this.setUser(res.user);
                     if (req.remember) localStorage.setItem(this.REMEMBER_KEY, email);
                     else localStorage.removeItem(this.REMEMBER_KEY);
                 }),
                 map((res) => ({ ok: true, user: res.user } as ChatbotLoginResponse)),
                 catchError((err: HttpErrorResponse) => {
-                    this.currentUser = null;
+                    this.setUser(null);
                     let message = 'Sunucuya ulaşılamadı. Lütfen tekrar deneyin.';
                     if (err.status === 401) {
                         message = 'E-posta ya da parola hatalı.';
@@ -58,12 +64,12 @@ export class ChatbotAuthService {
 
     /** Oturum geçerli mi? Bellekte kullanıcı varsa hızlı döner; yoksa backend'e sorar. */
     checkSession(): Observable<boolean> {
-        if (this.currentUser) return of(true);
+        if (this.user$.value) return of(true);
         return this.http.get<{ user: AdminUser }>('/api/auth/me').pipe(
-            tap((res) => (this.currentUser = res.user ?? null)),
+            tap((res) => this.setUser(res.user)),
             map((res) => !!res.user),
             catchError(() => {
-                this.currentUser = null;
+                this.setUser(null);
                 return of(false);
             })
         );
@@ -76,18 +82,18 @@ export class ChatbotAuthService {
             // Backend'e ulaşılamasa bile yerel durumu temizle; cookie süresi
             // dolunca oturum zaten geçersizleşir.
             catchError(() => of(void 0)),
-            tap(() => (this.currentUser = null))
+            tap(() => this.setUser(null))
         );
     }
 
-    /** Guard geçtikten sonra bileşenlerin (ör. header) kullanıcıyı okuması için. */
+    /** Anlık (senkron) okuma; reaktif kullanım için user$'a abone olun. */
     user(): AdminUser | null {
-        return this.currentUser;
+        return this.user$.value;
     }
 
     /** 401 interceptor'ı için: yerel önbelleği düşür (yönlendirme interceptor'da). */
     clearLocalSession(): void {
-        this.currentUser = null;
+        this.setUser(null);
     }
 
     getRememberedEmail(): string | null {

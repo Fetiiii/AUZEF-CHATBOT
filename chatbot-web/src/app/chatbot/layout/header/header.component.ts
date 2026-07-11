@@ -1,5 +1,6 @@
 import {
   ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   ElementRef,
   EventEmitter,
@@ -40,8 +41,9 @@ export class HeaderComponent implements OnInit, OnDestroy {
 
   userStatus: UserStatus = 'available';
 
-  // Oturumdaki kullanıcıdan doldurulur (guard geçtiği için önbellekte hazırdır)
+  // Oturumdaki kullanıcıdan doldurulur (user$ aboneliğiyle — init sırasından bağımsız)
   userName = 'Personel';
+  userEmail = '';
 
   // Başlık artık signal → OnPush ile sorunsuz
   pageTitle = signal<string>('');
@@ -54,12 +56,19 @@ export class HeaderComponent implements OnInit, OnDestroy {
     private eRef: ElementRef,
     private router: Router,
     private auth: ChatbotAuthService,
+    private cdr: ChangeDetectorRef,
   ) { }
 
   ngOnInit(): void {
-    // Oturum kullanıcısını göster (guard sayesinde login'den geçilmiş durumda)
-    const u = this.auth.user();
-    if (u) this.userName = u.full_name || u.email;
+    // Oturum kullanıcısını REAKTİF izle: login/me cevabı hangi anda gelirse
+    // gelsin isim güncellenir (tek seferlik okuma init sırasına bağımlıydı).
+    // markForCheck: OnPush bileşende abonelik callback'i görünümü kirletmez,
+    // elle işaretlenmeli.
+    this.auth.user$.pipe(takeUntil(this.destroy$)).subscribe((u) => {
+      this.userName = (u?.full_name || '').trim() || u?.email || 'Personel';
+      this.userEmail = u?.email || '';
+      this.cdr.markForCheck();
+    });
 
     // İlk yüklemede geçerli route başlığını çek
     this.updateTitleFromRouteTree();

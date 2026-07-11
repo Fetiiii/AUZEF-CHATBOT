@@ -61,8 +61,14 @@
                                         stroke-linejoin="round" />
                                 </svg>
                             </span>
-                            <span class="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                {{ userName }}
+                            <span class="flex flex-col leading-tight">
+                                <span class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                    {{ userName }}
+                                </span>
+                                <span *ngIf="userEmail && userEmail !== userName"
+                                    class="text-[11px] text-slate-500 dark:text-slate-400 max-w-[160px] truncate">
+                                    {{ userEmail }}
+                                </span>
                             </span>
                         </div>
                         <button type="button" class="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800"
