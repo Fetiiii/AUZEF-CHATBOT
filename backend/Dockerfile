@@ -12,7 +12,9 @@ WORKDIR /app
 
 # Önce sadece requirements — layer cache için
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# --timeout/--retries: torch gibi ~GB'lik paketlerde tek bir ağ kesintisi
+# 25+ dakikalık build'i baştan başlatmasın (yaşandı: pip urllib3 hatasıyla öldü).
+RUN pip install --no-cache-dir --timeout 120 --retries 10 -r requirements.txt
 
 # Sonra kaynak kod
 COPY . .
