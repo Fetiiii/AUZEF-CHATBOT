@@ -35,7 +35,10 @@ from database import SessionLocal, AdminUser, AdminSession
 
 COOKIE_NAME = "auzef_admin_session"
 SESSION_HOURS = 12
-AUTH_ENFORCED = (os.getenv("ADMIN_AUTH_ENFORCED") or "false").strip().lower() == "true"
+# Varsayılan TRUE (güvenli varsayılan): env unutulursa sistem AÇIK değil KAPALI
+# kalır — admin paneli login sayfası üzerinden her zaman erişilebilir.
+# Yalnızca yerel geliştirmede bilinçli olarak false yapılır.
+AUTH_ENFORCED = (os.getenv("ADMIN_AUTH_ENFORCED") or "true").strip().lower() == "true"
 # Yerel geliştirme (http://localhost) için ADMIN_COOKIE_SECURE=false yapılabilir;
 # production'da true kalmalı (cookie yalnızca HTTPS üzerinden taşınır).
 COOKIE_SECURE = (os.getenv("ADMIN_COOKIE_SECURE") or "true").strip().lower() == "true"
