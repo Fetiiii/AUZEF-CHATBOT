@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 from openai import OpenAI
 from google import genai
+from google.genai import types as genai_types
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -53,12 +54,14 @@ class BaseLLMProvider(ABC):
         return system, user
 
     def _parse_selection(self, raw: str, context_list: list) -> Optional[str]:
-        try:
-            idx = int(raw.strip())
+        # İlk sayıyı regex ile çek: model "3." veya "[3]" gibi yazarsa da
+        # seçim kaybolmasın. (Eskiden int() ValueError → geçerli seçim çöpe
+        # gidiyor, sistem gereksiz yere eşik yedeğine düşüyordu.)
+        m = re.search(r"\d+", raw or "")
+        if m:
+            idx = int(m.group())
             if 1 <= idx <= len(context_list):
                 return context_list[idx - 1]['answer']
-        except (ValueError, IndexError):
-            pass
         return None
 
     def _build_split_prompt(self, message: str) -> tuple:
@@ -152,9 +155,15 @@ class GeminiProvider(BaseLLMProvider):
         self.model = model
 
     def _complete(self, system: str, user: str, max_tokens: int = 5) -> str:
+        # max_tokens/temperature diğer sağlayıcılarla tutarlı geçilir; yoksa
+        # Gemini uzun/serbest cevap verip sayı-seçim parse'ını bozabiliyor.
         response = self.client.models.generate_content(
             model=self.model,
-            contents=f"{system}\n\n{user}"
+            contents=f"{system}\n\n{user}",
+            config=genai_types.GenerateContentConfig(
+                max_output_tokens=max_tokens,
+                temperature=0,
+            ),
         )
         return response.text
 

@@ -63,8 +63,13 @@ def sync_meilisearch(db):
 
     client = meilisearch.Client(meili_url, meili_key)
 
-    view_data = db.execute(text("SELECT * FROM qna_search_view")).mappings().all()
-    documents = [dict(row) for row in view_data]
+    # Yalnızca aktif kayıtlar (status = 1) indekslenir; status alanı dokümana taşınmaz.
+    view_data = db.execute(text("SELECT * FROM qna_search_view WHERE status = 1")).mappings().all()
+    documents = []
+    for row in view_data:
+        doc = dict(row)
+        doc.pop("status", None)
+        documents.append(doc)
 
     index = client.index('auzef_qna_index')
     index.add_documents(documents)

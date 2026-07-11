@@ -9,7 +9,9 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:password123@localhost:5432/auzef_bot")
 
-engine = create_engine(DATABASE_URL)
+# pool_pre_ping: havuzdaki bağlantı kopmuşsa (ör. Postgres yeniden başladı)
+# sorgudan önce test edilip tazelenir — yoksa ilk istekler OperationalError alır.
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=1800)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -68,7 +70,7 @@ class Conversation(Base):
     # declined    = kullanıcı "Hayır" dedi
     # redirected  = kullanıcı "Evet", talep sayfasına yönlendirildi
     talep_status = Column(String(20), default="not_offered")
-    started_at = Column(DateTime, server_default=func.now())
+    started_at = Column(DateTime, server_default=func.now(), index=True)  # liste sıralaması + tarih filtreleri
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     messages = relationship("ConversationMessage", back_populates="conversation", cascade="all, delete-orphan")
@@ -82,7 +84,7 @@ class ConversationMessage(Base):
     source = Column(String(20), nullable=True)     # bot: meilisearch|qdrant_vector|llm|academic_calendar|none
     rating = Column(SmallInteger, nullable=True)   # bot cevabına verilen puan (1-5); NULL = verilmedi
     rating_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)  # aktif kullanıcı sorgusu (>= :since)
 
     conversation = relationship("Conversation", back_populates="messages")
 
@@ -101,6 +103,9 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
     # View oluşturma SQL'i (PostgreSQL specific)
+    # NOT: status sütunu eklendi (pasif kayıtların indekslerden düşülmesi için).
+    # CREATE OR REPLACE VIEW mevcut sütunların yerini değiştiremediğinden
+    # önce DROP edilir (boot sırasında, uvicorn başlamadan çalışır — güvenli).
     view_sql = """
     CREATE OR REPLACE VIEW qna_search_view AS
     SELECT
@@ -108,7 +113,8 @@ def init_db():
         q.question_text AS question,
         q.answer_text AS answer,
         ARRAY_REMOVE(ARRAY_AGG(DISTINCT qq.query_text), NULL) AS queries,
-        ARRAY_REMOVE(ARRAY_AGG(DISTINCT t.name), NULL) AS tags
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT t.name), NULL) AS tags,
+        q.status
     FROM qna q
     LEFT JOIN qna_queries qq ON qq.qna_id = q.id
     LEFT JOIN qna_tags qt ON qt.qna_id = q.id
@@ -116,9 +122,21 @@ def init_db():
     GROUP BY q.id;
     """
 
+    # Var olan (create_all'un dokunmadığı) tablolara da index'leri uygula.
+    # Alembic olmadığı için "IF NOT EXISTS" ile her boot'ta idempotent çalışır.
+    # İsimler SQLAlchemy'nin index=True adlandırmasıyla (ix_<tablo>_<sütun>)
+    # aynı tutuldu ki taze kurulumda çift index oluşmasın.
+    index_sql = [
+        "CREATE INDEX IF NOT EXISTS ix_conversations_started_at ON conversations (started_at)",
+        "CREATE INDEX IF NOT EXISTS ix_conversation_messages_created_at ON conversation_messages (created_at)",
+    ]
+
     with engine.connect() as conn:
         from sqlalchemy import text
+        conn.execute(text("DROP VIEW IF EXISTS qna_search_view"))
         conn.execute(text(view_sql))
+        for stmt in index_sql:
+            conn.execute(text(stmt))
         conn.commit()
-        print("✅ Veritabanı tabloları ve 'qna_search_view' oluşturuldu.")
+        print("✅ Veritabanı tabloları, index'ler ve 'qna_search_view' oluşturuldu.")
    

@@ -45,7 +45,8 @@ def sync_postgres_to_qdrant():
 
     print("🚀 Vektör senkronizasyonu başlıyor...")
 
-    view_data = db.execute(text("SELECT * FROM qna_search_view")).mappings().all()
+    # Yalnızca aktif kayıtlar (status = 1) vektörlenir; pasifler indekse girmez.
+    view_data = db.execute(text("SELECT * FROM qna_search_view WHERE status = 1")).mappings().all()
 
     if not view_data:
         print("ℹ️ Veritabanında işlenecek veri yok.")

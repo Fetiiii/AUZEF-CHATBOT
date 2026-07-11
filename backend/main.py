@@ -26,10 +26,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AUZEF Akıllı Asistan API")
 
+# allow_credentials=False: widget cookie kullanmaz; "*" + credentials birleşimi
+# zaten spec'e aykırıdır (tarayıcı reddeder) ve ileride cookie tabanlı admin
+# oturumu geldiğinde sessizce kırılırdı. Admin istekleri aynı origin'den
+# geldiği için CORS'a hiç takılmaz.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,7 +51,28 @@ QDRANT_PROVIDER = QdrantProvider(
     model_name="nezahatkorkmaz/turkce-embedding-bge-m3"
 )
 
-LLM_PROVIDER = LLMFactory.create_provider(os.getenv("LLM_PROVIDER"))
+def _create_llm_provider():
+    """LLM sağlayıcısını kurar; kurulamazsa None döner (uygulama ÇÖKMEZ).
+
+    Eskiden env eksik/yanlışken import anında ValueError yükselir ve tüm
+    backend açılamazdı — LLM'e hiç ihtiyaç duymayan eşik yedeği de dahil.
+    Şimdi bir config hatası yalnızca LLM yolunu kapatır; sistem eşik
+    yedeğiyle (Meili/Qdrant/takvim) çalışmaya devam eder."""
+    name = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    if not name:
+        logger.warning("LLM_PROVIDER tanımlı değil — LLM yolu devre dışı, eşik yedeğiyle çalışılacak.")
+        return None
+    try:
+        return LLMFactory.create_provider(name)
+    except Exception as e:
+        logger.error(f"LLM sağlayıcı kurulamadı ({name!r}): {e} — LLM yolu devre dışı, eşik yedeğiyle devam.")
+        return None
+
+LLM_PROVIDER = _create_llm_provider()
+
+# Girdi sınırları: sınırsız mesaj = embedding CPU'su + LLM token maliyeti (DoS yüzeyi).
+MAX_MESSAGE_LEN = 1000
+MAX_IMPORT_BYTES = 5 * 1024 * 1024  # CSV import dosya boyutu üst sınırı
 
 # DB Dependency
 def get_db():
@@ -58,6 +83,10 @@ def get_db():
         db.close()
 
 def is_llm_enabled(db: Session):
+    # Sağlayıcı hiç kurulamadıysa (env eksik/yanlış) LLM yolu denenmez bile;
+    # DB'deki anahtar açık olsa dahi eşik yedeğiyle devam edilir.
+    if LLM_PROVIDER is None:
+        return False
     config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
     return config.value.lower() == "true" if config else False
 
@@ -153,7 +182,7 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
     if not entries:
         return None
 
-    if use_llm:
+    if use_llm and LLM_PROVIDER is not None:
         candidates = [
             {
                 "question": f"{e.event} ne zaman?",
@@ -432,12 +461,19 @@ def _widget_reply(db: Session, conv: Optional[Conversation], answer: str, source
 #  Widget Chat Adapter
 # ─────────────────────────────────────────────
 
+# DİKKAT: bu endpoint bilinçli olarak SYNC (def) tanımlı. İçindeki tüm işler
+# (SQLAlchemy, Meili HTTP, model.encode, LLM çağrısı) bloklayıcıdır; "async def"
+# olsaydı bir LLM çağrısı boyunca worker'ın event loop'u kilitlenir, diğer TÜM
+# istekler dururdu. Sync def'i FastAPI threadpool'da çalıştırır (eşzamanlılık ~40).
 @app.post("/widget-chat")
-async def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Embed widget için basit adapter: {message} → {answer}"""
     q = body.message.strip()
     if not q:
         return {"answer": "Lütfen bir soru yazın."}
+    if len(q) > MAX_MESSAGE_LEN:
+        # Sınırsız girdi = embedding CPU'su + LLM token maliyeti. Nazikçe kes.
+        return {"answer": f"Sorunuz çok uzun. Lütfen {MAX_MESSAGE_LEN} karakterden kısa şekilde yazın."}
 
     ip = request.client.host if request.client else None
 
@@ -524,6 +560,18 @@ def _apply_conversation_search(q, db: Session, search: str):
     return q.filter(or_(*conds))
 
 
+def _csv_safe(value) -> str:
+    """CSV formül enjeksiyonuna karşı hücre koruması.
+
+    Kullanıcı metni CSV'ye ham yazılırsa "=HYPERLINK(...)" gibi bir mesaj,
+    dosyayı Excel'de açan yöneticinin makinesinde formül olarak ÇALIŞIR.
+    Tehlikeli önekleri (' ile) etkisizleştiriyoruz."""
+    s = "" if value is None else str(value)
+    if s and s[0] in ("=", "+", "-", "@", "\t"):
+        return "'" + s
+    return s
+
+
 def _conversations_csv_response(db: Session, convs) -> Response:
     """Verilen konuşmaları transkript (her mesaj bir satır) CSV olarak döner."""
     conv_ids = [c.id for c in convs]
@@ -550,7 +598,7 @@ def _conversations_csv_response(db: Session, convs) -> Response:
             writer.writerow([
                 c.id, conv_date, c.ip_address or "", c.talep_status,
                 m.created_at.isoformat() if m.created_at else "",
-                m.role, m.content, m.source or "",
+                m.role, _csv_safe(m.content), m.source or "",
                 m.rating if m.rating is not None else "",
             ])
 
@@ -708,8 +756,9 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
 #  SEARCH (Orijinal endpoint korundu)
 # ─────────────────────────────────────────────
 
+# Sync def: bloklayıcı iş içerir (bkz. widget_chat üzerindeki not).
 @app.get("/api/search")
-async def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(..., min_length=2), db: Session = Depends(get_db)):
+def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(..., min_length=2, max_length=1000), db: Session = Depends(get_db)):
     ip = request.client.host if request.client else None
 
     try:
@@ -740,9 +789,12 @@ async def search(request: Request, background_tasks: BackgroundTasks, q: str = Q
             "suggestions": suggestions
         }
 
-    except Exception as e:
+    except Exception:
+        # Hata ayrıntısı istemciye SIZDIRILMAZ (bağlantı dizesi/host adı içerebilir);
+        # tam traceback sunucu loguna yazılır.
+        logger.exception("Arama sırasında beklenmeyen hata")
         background_tasks.add_task(_log_query, "none", "error", ip)
-        return {"status": "error", "message": f"Sistem genel hatası: {str(e)}"}
+        return {"status": "error", "message": "Beklenmeyen bir sistem hatası oluştu. Lütfen tekrar deneyin."}
 
 
 # ─────────────────────────────────────────────
@@ -758,8 +810,13 @@ def get_qna_view_dict(db: Session, qna_id: int):
 
 def sync_providers(db: Session, qna_id: int):
     doc = get_qna_view_dict(db, qna_id)
-    if not doc:
+    if not doc or doc.get("status") != 1:
+        # Kayıt silinmiş YA DA pasife alınmış (status != 1): arama indekslerinde
+        # kalmasın. Eskiden pasif kayıtlar indekslerde sonsuza dek kalıyor ve
+        # bot pasif cevapları vermeye devam ediyordu.
+        remove_from_providers(qna_id)
         return
+    doc.pop("status", None)  # arama dokümanına status taşımaya gerek yok
     try:
         MEILI_PROVIDER.add_documents([doc])
     except Exception as e:
@@ -896,10 +953,13 @@ def delete_qna(qna_id: int, db: Session = Depends(get_db)):
 #  CSV Import
 # ─────────────────────────────────────────────
 
+# Sync def: satır satır DB insert + provider sync bloklayıcıdır (bkz. widget_chat notu).
 @app.post("/api/qna/import")
-async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """CSV dosyasından toplu QnA içe aktarır. Format: question;answer;tags;query_1;...;query_20"""
-    content = await file.read()
+    content = file.file.read(MAX_IMPORT_BYTES + 1)
+    if len(content) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Dosya çok büyük (limit 5 MB).")
     try:
         text_content = content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -909,8 +969,11 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
     inserted_ids = []
 
     for row in reader:
-        question = row.get('question', '').strip()
-        answer = row.get('answer', '').strip()
+        # "or ''": DictReader eksik (kısa) satırlarda değeri None yapar; .strip()
+        # patlamasın. (Sütun hiç yoksa .get zaten '' döndürür ama satır kısaysa
+        # anahtar None değerle VAR olur.)
+        question = (row.get('question') or '').strip()
+        answer = (row.get('answer') or '').strip()
         if not question or not answer:
             continue
 
@@ -921,7 +984,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         qna_id = result[0]
         inserted_ids.append(qna_id)
 
-        tags_val = row.get('tags', '')
+        tags_val = row.get('tags') or ''
         if tags_val and tags_val.strip():
             for tag_name in [t.strip() for t in tags_val.split(',') if t.strip()]:
                 tag_res = db.execute(
@@ -934,7 +997,7 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 )
 
         for i in range(1, 21):
-            query_val = row.get(f'query_{i}', '').strip()
+            query_val = (row.get(f'query_{i}') or '').strip()
             if query_val:
                 db.execute(
                     text("INSERT INTO qna_queries (qna_id, query_text) VALUES (:q_id, :qt)"),
@@ -1247,14 +1310,17 @@ def delete_calendar(cal_id: int, db: Session = Depends(get_db)):
     return None
 
 
+# Sync def: bloklayıcı DB işleri içerir (bkz. widget_chat notu).
 @app.post("/api/academic-calendar/import")
-async def import_calendar_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_calendar_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """CSV dosyasından toplu takvim verisi içe aktarır.
     Kabul edilen formatlar (virgül veya noktalı virgül):
       Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi
       period;event;start_date;end_date
     """
-    content = await file.read()
+    content = file.file.read(MAX_IMPORT_BYTES + 1)
+    if len(content) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Dosya çok büyük (limit 5 MB).")
     try:
         text_content = content.decode("utf-8-sig")
     except UnicodeDecodeError:
