@@ -29,10 +29,13 @@ services:
         max-file: "3"
 
   # ─── 2. pgAdmin (sadece geliştirme — production'da kapalı) ──────────────
+  # "dev" profiliyle çalışır: docker compose --profile dev up -d pgadmin
+  # Profil sayesinde normal "docker compose up" production'da pgAdmin'i AÇMAZ.
   pgadmin:
     image: dpage/pgadmin4
     container_name: auzef_pgadmin
     restart: unless-stopped
+    profiles: ["dev"]
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@mail.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
@@ -94,8 +97,9 @@ services:
       dockerfile: Dockerfile
     container_name: auzef_backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    # GÜVENLİK: backend host'a YAYINLANMAZ (ports yok) — dış dünya yalnızca
+    # nginx (frontend) üzerinden erişir. Aksi halde TLS, güvenlik başlıkları
+    # ve admin koruması atlanarak :8000'e doğrudan ulaşılabilirdi.
     env_file:
       - .env
     environment:
@@ -146,6 +150,9 @@ services:
       - "443:443"
     volumes:
       - ./ssl/certs:/etc/nginx/ssl:ro
+      # Admin API uçları için geçici Basic Auth (gerçek kullanıcı sistemi
+      # gelene kadar). Dosya yoksa admin uçları kilitli kalır (fail-closed).
+      - ./ssl/htpasswd:/etc/nginx/htpasswd:ro
     depends_on:
       backend:
         condition: service_healthy
