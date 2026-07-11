@@ -22,6 +22,9 @@ sentence-transformers
 openai
 google-genai
 
+# Auth (admin kullanıcı sistemi)
+bcrypt
+
 # Utilities
 pydantic
 python-dotenv

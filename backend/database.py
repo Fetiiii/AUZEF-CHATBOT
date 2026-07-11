@@ -88,6 +88,32 @@ class ConversationMessage(Base):
 
     conversation = relationship("Conversation", back_populates="messages")
 
+# ── Admin kullanıcı sistemi ──────────────────────────────────────────────────
+# Sınırlı sayıda personel için oturum tabanlı yönetim erişimi.
+# Parolalar bcrypt ile hash'lenir; oturum token'ları DB'de SHA-256 hash'iyle
+# saklanır (DB sızsa bile ham token ele geçmez).
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+    id = Column(BigInteger, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(100), nullable=False)   # bcrypt
+    full_name = Column(String(100), nullable=True)
+    is_active = Column(SmallInteger, default=1)           # 0 = erişim kapalı (personel ayrıldı vb.)
+    created_at = Column(DateTime, server_default=func.now())
+
+    sessions = relationship("AdminSession", back_populates="user", cascade="all, delete-orphan")
+
+class AdminSession(Base):
+    __tablename__ = "admin_sessions"
+    id = Column(BigInteger, primary_key=True, index=True)
+    token_hash = Column(String(64), unique=True, nullable=False)  # sha256(token) hex
+    user_id = Column(BigInteger, ForeignKey("admin_users.id", ondelete="CASCADE"), nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    user = relationship("AdminUser", back_populates="sessions")
+
 class AcademicCalendar(Base):
     __tablename__ = "academic_calendar"
     id = Column(BigInteger, primary_key=True, index=True)

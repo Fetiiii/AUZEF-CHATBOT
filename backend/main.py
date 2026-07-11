@@ -6,6 +6,7 @@ import io
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar, Conversation, ConversationMessage
+from auth import router as auth_router, AdminAuthMiddleware
 from providers import MeiliSearchProvider, QdrantProvider
 from llm_provider import LLMFactory
 from calendar_utils import format_calendar_answer, match_calendar_entry
@@ -37,6 +38,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Admin oturum sistemi: /api/auth/* uçları + (ADMIN_AUTH_ENFORCED=true iken)
+# yönetim uçlarını oturuma bağlayan middleware. Ayrıntı ve geçiş planı: auth.py
+app.include_router(auth_router)
+app.add_middleware(AdminAuthMiddleware)
 
 MEILI_PROVIDER = MeiliSearchProvider(
     url=os.getenv("MEILI_URL"),
