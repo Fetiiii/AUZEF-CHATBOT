@@ -1,6 +1,45 @@
 services:
+  # ── Backend: yerel dev'de cookie HTTP üzerinden taşınabilsin ──────────────────
+  # Admin oturum cookie'si production'da Secure (yalnız HTTPS). Dev'de http://localhost
+  # üzerinden login'in çalışması için Secure kapatılır (bkz. auth.py COOKIE_SECURE).
+  backend:
+    environment:
+      ADMIN_COOKIE_SECURE: "false"
+
+  # ── nginx frontend (statik) — port 80'de kalır; dev'de zorunlu değil ─────────
   frontend:
     ports:
       - "80:80"
     volumes:
       - ./chatbot-web/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+
+  # ── frontend-dev: hot reload (ng serve) — sadece geliştirme ──────────────────
+  # http://localhost:4200 → canlı yeniden yükleme. /api, /widget-chat, /health
+  # aynı-origin proxy ile backend'e gider (proxy.conf.docker.json), böylece
+  # oturum cookie'si korunur. node_modules ayrı volume'da tutulur; ilk açılışta
+  # bir kez kurulur, sonraki açılışlar hızlıdır. --poll: bind-mount'ta (Windows)
+  # dosya değişikliklerinin algılanması için gereklidir.
+  frontend-dev:
+    image: node:20-alpine
+    working_dir: /app
+    # Tek satır / liste formu: YAML folded scalar (>) fazladan girintili satırlarda
+    # newline bırakıp --proxy-config'i ayrı komuta düşürüyordu; bu form o tuzağı önler.
+    command: ["sh", "-c", "[ -d node_modules/@angular/cli ] || npm ci --legacy-peer-deps; exec npx ng serve --host 0.0.0.0 --port 4200 --poll 1000 --proxy-config proxy.conf.docker.json"]
+    environment:
+      NG_CLI_ANALYTICS: "false"
+    volumes:
+      - ./chatbot-web:/app
+      - frontend_dev_node_modules:/app/node_modules
+    ports:
+      - "4200:4200"
+    depends_on:
+      backend:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  frontend_dev_node_modules:
