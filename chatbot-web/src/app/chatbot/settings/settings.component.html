@@ -1,0 +1,212 @@
+<!-- ────────────────────────────────────────────────────── -->
+<!-- Ayarlar — yalnızca super admin                         -->
+<!-- ────────────────────────────────────────────────────── -->
+
+<!-- TOAST -->
+@if (toastMessage()) {
+  <div
+    class="fixed top-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium transition-all"
+    [class]="toastType() === 'success'
+      ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/60 dark:border-emerald-700 dark:text-emerald-200'
+      : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-950/60 dark:border-red-700 dark:text-red-200'">
+    {{ toastMessage() }}
+  </div>
+}
+
+<div class="p-4 md:p-6 space-y-6 max-w-5xl">
+
+  <div>
+    <h1 class="text-lg font-bold text-slate-800 dark:text-slate-100">Ayarlar</h1>
+    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+      LLM yapılandırması ve kullanıcı yönetimi · Bu sayfaya yalnızca super admin erişebilir
+    </p>
+  </div>
+
+  <!-- ══ LLM AYARLARI ══════════════════════════════════ -->
+  <section class="rounded-xl border bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-700 shadow-sm">
+    <div class="px-5 py-4 border-b border-gray-100 dark:border-slate-800">
+      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">LLM Ayarları</h2>
+    </div>
+
+    <div class="p-5 space-y-5">
+      <!-- Aç/Kapa -->
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex flex-col leading-tight">
+          <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">LLM Desteği</span>
+          <span class="text-xs text-slate-400 dark:text-slate-500">
+            {{ llm()?.enabled ? 'Aktif — cevap seçimi LLM ile yapılır' : 'Kapalı — yalnızca eşik tabanlı arama' }}
+          </span>
+        </div>
+        <button type="button" (click)="toggleLLM()" [disabled]="llmSaving() || !llm()"
+          class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent
+                 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-brand-800/40
+                 disabled:opacity-60 disabled:cursor-not-allowed"
+          [class]="llm()?.enabled ? 'bg-brand-800' : 'bg-slate-300 dark:bg-slate-600'"
+          [attr.aria-pressed]="llm()?.enabled" aria-label="LLM Aç/Kapat">
+          <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200"
+            [class]="llm()?.enabled ? 'translate-x-5' : 'translate-x-0'"></span>
+        </button>
+      </div>
+
+      <hr class="border-gray-100 dark:border-slate-800" />
+
+      <!-- OpenRouter anahtarı -->
+      <div class="space-y-2">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">OpenRouter API Anahtarı</span>
+          @if (llm(); as l) {
+            <span class="text-[11px] px-2 py-0.5 rounded-full border"
+              [class]="l.key_source === 'db'
+                ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/50 dark:text-violet-300 dark:border-violet-800'
+                : l.key_source === 'env'
+                  ? 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800'
+                  : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800'">
+              {{ l.key_source === 'db' ? 'Panelden girildi' : l.key_source === 'env' ? 'Sunucu .env' : 'Anahtar yok' }}
+            </span>
+          }
+        </div>
+
+        <p class="text-xs text-slate-400 dark:text-slate-500">
+          Mevcut anahtar:
+          <code class="font-mono">{{ llm()?.openrouter_key_masked || '—' }}</code>
+          · Yeni anahtar girildiğinde tüm sunucu kopyalarına anında yansır, deploy gerekmez.
+        </p>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <input type="password" [(ngModel)]="newApiKey" placeholder="sk-or-v1-..."
+            autocomplete="off"
+            class="flex-1 min-w-[260px] px-3 py-2 rounded-lg border text-sm font-mono
+                   bg-white dark:bg-slate-950 border-gray-200 dark:border-slate-700
+                   text-slate-800 dark:text-slate-100 placeholder:text-slate-400
+                   focus:outline-none focus:ring-2 focus:ring-brand-800/40" />
+          <button type="button" (click)="saveApiKey()" [disabled]="llmSaving() || !newApiKey.trim()"
+            class="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-brand-800 hover:bg-brand-700
+                   disabled:opacity-50 disabled:cursor-not-allowed">
+            Kaydet
+          </button>
+          @if (llm()?.key_source === 'db') {
+            <button type="button" (click)="clearApiKey()" [disabled]="llmSaving()"
+              class="px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 dark:border-slate-700
+                     text-slate-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800
+                     disabled:opacity-50">
+              Panel anahtarını sil
+            </button>
+          }
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ KULLANICI YÖNETİMİ ════════════════════════════ -->
+  <section class="rounded-xl border bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-700 shadow-sm">
+    <div class="px-5 py-4 border-b border-gray-100 dark:border-slate-800">
+      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Kullanıcı Yönetimi</h2>
+      <p class="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+        Editör: içerik düzenler · Admin: + konuşmalar ve istatistikler · Super Admin: + bu sayfa
+      </p>
+    </div>
+
+    <!-- Kullanıcı listesi -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs text-slate-400 dark:text-slate-500 border-b border-gray-100 dark:border-slate-800">
+            <th class="px-5 py-2.5 font-medium">E-posta</th>
+            <th class="px-3 py-2.5 font-medium">Ad Soyad</th>
+            <th class="px-3 py-2.5 font-medium">Rol</th>
+            <th class="px-3 py-2.5 font-medium">Durum</th>
+            <th class="px-3 py-2.5 font-medium text-right pr-5">İşlem</th>
+          </tr>
+        </thead>
+        <tbody>
+          @if (usersLoading()) {
+            <tr><td colspan="5" class="px-5 py-6 text-center text-slate-400">Yükleniyor…</td></tr>
+          }
+          @for (u of users(); track u.id) {
+            <tr class="border-b border-gray-50 dark:border-slate-800/60"
+                [class.opacity-50]="!u.is_active">
+              <td class="px-5 py-3 font-medium text-slate-800 dark:text-slate-100">
+                {{ u.email }}
+                @if (isSelf(u)) {
+                  <span class="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-slate-800 text-slate-500">siz</span>
+                }
+              </td>
+              <td class="px-3 py-3 text-slate-600 dark:text-slate-300">{{ u.full_name || '—' }}</td>
+              <td class="px-3 py-3">
+                <!-- Kendi rolü değiştirilemez (backend de reddeder) -->
+                <select [ngModel]="u.role" (ngModelChange)="onRoleChange(u, $event)"
+                  [disabled]="isSelf(u) || savingUserId() === u.id"
+                  class="px-2 py-1.5 rounded-lg border text-xs bg-white dark:bg-slate-950
+                         border-gray-200 dark:border-slate-700 text-slate-700 dark:text-slate-200
+                         disabled:opacity-60 disabled:cursor-not-allowed">
+                  @for (r of roles; track r.value) {
+                    <option [ngValue]="r.value">{{ r.label }}</option>
+                  }
+                </select>
+              </td>
+              <td class="px-3 py-3">
+                <span class="text-[11px] px-2 py-0.5 rounded-full border"
+                  [class]="u.is_active
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
+                    : 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/50 dark:text-red-300 dark:border-red-800'">
+                  {{ u.is_active ? 'Aktif' : 'Pasif' }}
+                </span>
+              </td>
+              <td class="px-3 py-3 text-right pr-5 whitespace-nowrap">
+                <button type="button" (click)="resetPassword(u)" [disabled]="savingUserId() === u.id"
+                  class="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 dark:border-slate-700
+                         text-slate-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800 disabled:opacity-50">
+                  Parola sıfırla
+                </button>
+                @if (!isSelf(u)) {
+                  <button type="button" (click)="toggleActive(u)" [disabled]="savingUserId() === u.id"
+                    class="ml-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border disabled:opacity-50"
+                    [class]="u.is_active
+                      ? 'border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40'
+                      : 'border-emerald-200 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-400 dark:hover:bg-emerald-950/40'">
+                    {{ u.is_active ? 'Pasifleştir' : 'Aktifleştir' }}
+                  </button>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Yeni kullanıcı -->
+    <div class="px-5 py-4 border-t border-gray-100 dark:border-slate-800 bg-gray-50/60 dark:bg-slate-950/40 rounded-b-xl">
+      <h3 class="text-xs font-bold text-slate-600 dark:text-slate-300 mb-3">Yeni Kullanıcı Ekle</h3>
+      <div class="flex flex-wrap items-center gap-2">
+        <input type="email" [(ngModel)]="newUser.email" placeholder="e-posta@istanbul.edu.tr"
+          autocomplete="off"
+          class="flex-1 min-w-[220px] px-3 py-2 rounded-lg border text-sm bg-white dark:bg-slate-950
+                 border-gray-200 dark:border-slate-700 text-slate-800 dark:text-slate-100
+                 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-800/40" />
+        <input type="text" [(ngModel)]="newUser.full_name" placeholder="Ad Soyad (opsiyonel)"
+          class="flex-1 min-w-[160px] px-3 py-2 rounded-lg border text-sm bg-white dark:bg-slate-950
+                 border-gray-200 dark:border-slate-700 text-slate-800 dark:text-slate-100
+                 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-800/40" />
+        <select [(ngModel)]="newUser.role"
+          class="px-3 py-2 rounded-lg border text-sm bg-white dark:bg-slate-950
+                 border-gray-200 dark:border-slate-700 text-slate-700 dark:text-slate-200">
+          @for (r of roles; track r.value) {
+            <option [ngValue]="r.value">{{ r.label }}</option>
+          }
+        </select>
+        <input type="password" [(ngModel)]="newUser.password" placeholder="Parola (min 10)"
+          autocomplete="new-password"
+          class="min-w-[160px] px-3 py-2 rounded-lg border text-sm bg-white dark:bg-slate-950
+                 border-gray-200 dark:border-slate-700 text-slate-800 dark:text-slate-100
+                 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-800/40" />
+        <button type="button" (click)="createUser()"
+          [disabled]="creating() || !newUser.email.trim() || !newUser.password"
+          class="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-brand-800 hover:bg-brand-700
+                 disabled:opacity-50 disabled:cursor-not-allowed">
+          {{ creating() ? 'Ekleniyor…' : 'Ekle' }}
+        </button>
+      </div>
+    </div>
+  </section>
+
+</div>

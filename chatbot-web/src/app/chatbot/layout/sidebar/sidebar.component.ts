@@ -8,7 +8,10 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { I18nService } from 'src/app/shared/i18n.service';
+import { ChatbotAuthService } from 'src/app/services/services/chatbot/chatbot-auth.service';
+import { roleLevel } from 'src/app/services/models/chatbot/chatbot-auth.model';
 
 type ActiveUser = { name: string; avatar: string; online: boolean };
 
@@ -32,10 +35,27 @@ export class ChatbotSidebarComponent implements OnChanges {
   // ✅ I18n key + label
   private loginLabelSig = signal<string>('');
 
+  // Oturumdaki kullanıcının rol seviyesi (menü öğelerini yetkiye göre gizlemek
+  // için — gerçek yaptırım backend'dedir, burası yalnızca UX).
+  private roleLevelSig = signal<number>(0);
+
   constructor(
     public i18n: I18nService,
+    private auth: ChatbotAuthService,
   ) {
+    this.auth.user$.pipe(takeUntilDestroyed()).subscribe((u) => {
+      this.roleLevelSig.set(roleLevel(u?.role));
+    });
+  }
 
+  /** Konuşmalar + İzleme Paneli: en az admin */
+  canSeeAdmin(): boolean {
+    return this.roleLevelSig() >= 2;
+  }
+
+  /** Ayarlar: yalnızca super_admin */
+  canSeeSuper(): boolean {
+    return this.roleLevelSig() >= 3;
   }
 
   ngOnChanges(changes: SimpleChanges): void {

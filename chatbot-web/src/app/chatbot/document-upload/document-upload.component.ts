@@ -19,7 +19,6 @@ import {
 } from 'ag-grid-community';
 
 import { QnaApiService, QnAItem } from '../../services/services/chatbot/qna-api.service';
-import { ConfigApiService } from '../../services/services/chatbot/config-api.service';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -132,8 +131,6 @@ export class DocumentUploadComponent implements OnInit {
   // ── State ─────────────────────────────────────────
   loading = signal(true);
   saving = signal(false);
-  llmEnabled = signal(false);
-  llmToggling = signal(false);
   addingRow = signal(false);
   hasPendingChanges = signal(false);
   toastMessage = signal<string | null>(null);
@@ -148,7 +145,6 @@ export class DocumentUploadComponent implements OnInit {
 
   constructor(
     private qnaApi: QnaApiService,
-    private configApi: ConfigApiService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -162,39 +158,18 @@ export class DocumentUploadComponent implements OnInit {
   }
 
   private loadAll(): void {
+    // LLM aç/kapa ayarları artık Ayarlar sayfasında (yalnızca super admin).
     this.loading.set(true);
-    let qnaLoaded = false;
-    let llmLoaded = false;
-
-    const checkDone = () => {
-      if (qnaLoaded && llmLoaded) {
-        this.loading.set(false);
-        this.cdr.markForCheck();
-      }
-    };
-
     this.qnaApi.getAll().subscribe({
       next: (data) => {
         this.rowData = data;
-        qnaLoaded = true;
-        checkDone();
+        this.loading.set(false);
+        this.cdr.markForCheck();
       },
       error: () => {
         this.showToast('Veriler yüklenemedi.', 'error');
-        qnaLoaded = true;
-        checkDone();
-      },
-    });
-
-    this.configApi.getLLMStatus().subscribe({
-      next: (cfg) => {
-        this.llmEnabled.set(cfg.enabled);
-        llmLoaded = true;
-        checkDone();
-      },
-      error: () => {
-        llmLoaded = true;
-        checkDone();
+        this.loading.set(false);
+        this.cdr.markForCheck();
       },
     });
   }
@@ -281,22 +256,6 @@ export class DocumentUploadComponent implements OnInit {
     });
   }
 
-  toggleLLM(): void {
-    this.llmToggling.set(true);
-    const next = !this.llmEnabled();
-    this.configApi.setLLMStatus(next).subscribe({
-      next: (res) => {
-        this.llmEnabled.set(res.enabled);
-        this.llmToggling.set(false);
-        this.showToast(res.message, 'success');
-        this.cdr.markForCheck();
-      },
-      error: () => {
-        this.llmToggling.set(false);
-        this.showToast('LLM ayarı değiştirilemedi.', 'error');
-      },
-    });
-  }
 
   private refreshData(): void {
     this.qnaApi.getAll().subscribe({

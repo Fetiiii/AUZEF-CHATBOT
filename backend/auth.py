@@ -47,6 +47,16 @@ COOKIE_SECURE = (os.getenv("ADMIN_COOKIE_SECURE") or "true").strip().lower() == 
 # bilgisi yanıt süresinden sızmasın (timing attack).
 _DUMMY_HASH = bcrypt.hashpw(b"dummy-timing-guard", bcrypt.gensalt()).decode()
 
+# ── Rol hiyerarşisi ──────────────────────────────────────────────────────────
+# Sayı büyüdükçe yetki artar; bir uca erişim "en az şu seviye" ile tanımlanır.
+ROLE_LEVEL = {"editor": 1, "admin": 2, "super_admin": 3}
+VALID_ROLES = set(ROLE_LEVEL)
+
+
+def role_level(role: Optional[str]) -> int:
+    """Bilinmeyen/boş rol 0 döner → hiçbir korumalı uca erişemez (fail-closed)."""
+    return ROLE_LEVEL.get((role or "").strip(), 0)
+
 
 # ── Saf yardımcılar ───────────────────────────────────────────────────────────
 
@@ -124,7 +134,7 @@ class LoginRequest(BaseModel):
 
 
 def _user_dict(user: AdminUser) -> dict:
-    return {"id": user.id, "email": user.email, "full_name": user.full_name}
+    return {"id": user.id, "email": user.email, "full_name": user.full_name, "role": user.role}
 
 
 # Sync def: bcrypt/DB bloklayıcıdır — threadpool'da çalışır (bkz. main.py notu).
@@ -169,12 +179,32 @@ def me(session_token: str = Cookie(default="", alias=COOKIE_NAME), db: Session =
 
 
 # ── Koruma middleware'i ──────────────────────────────────────────────────────
-# nginx'teki geçici kalkanla AYNI yol deseni: yönetim uçları oturum ister,
-# widget'ın kullandığı uçlar public kalır. Router refactor'ü yapıldığında bu
-# middleware yerine APIRouter(dependencies=[...]) tercih edilebilir.
+# Yönetim uçları oturum + yeterli ROL ister; widget'ın kullandığı uçlar public
+# kalır. Kurallar sırayla denenir, İLK eşleşen kural geçerlidir (en özel kural
+# en üstte). Router refactor'ü yapıldığında bu middleware yerine
+# APIRouter(dependencies=[...]) tercih edilebilir.
 
-_PROTECTED_RE = re.compile(r"^/api/(qna|conversations|config|stats|academic-calendar)")
 _PUBLIC_RE = re.compile(r"^/api/conversations/\d+/talep$")  # widget talep yanıtı
+
+# (desen, gereken en düşük rol) — yetki matrisi:
+#   editor      → içerik (QnA, akademik takvim, import/export)
+#   admin       → + konuşmalar, istatistikler
+#   super_admin → + ayarlar (kullanıcılar, LLM, API anahtarı)
+_ROLE_RULES = [
+    (re.compile(r"^/api/settings"), "super_admin"),
+    (re.compile(r"^/api/(conversations|stats)"), "admin"),
+    (re.compile(r"^/api/(qna|academic-calendar)"), "editor"),
+]
+
+
+def required_role_for(path: str) -> Optional[str]:
+    """Yol için gereken en düşük rolü döner; korumasızsa None."""
+    if _PUBLIC_RE.match(path):
+        return None
+    for pattern, role in _ROLE_RULES:
+        if pattern.match(path):
+            return role
+    return None
 
 
 def _lookup_user(token: str) -> Optional[AdminUser]:
@@ -187,11 +217,13 @@ def _lookup_user(token: str) -> Optional[AdminUser]:
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        path = request.url.path
-        if AUTH_ENFORCED and _PROTECTED_RE.match(path) and not _PUBLIC_RE.match(path):
+        required = required_role_for(request.url.path) if AUTH_ENFORCED else None
+        if required is not None:
             token = request.cookies.get(COOKIE_NAME, "")
             # DB sorgusu bloklayıcı — event loop'u kilitlememek için threadpool'da.
             user = await run_in_threadpool(_lookup_user, token) if token else None
             if user is None:
                 return JSONResponse({"detail": "Oturum gerekli."}, status_code=401)
+            if role_level(user.role) < role_level(required):
+                return JSONResponse({"detail": "Bu işlem için yetkiniz yok."}, status_code=403)
         return await call_next(request)

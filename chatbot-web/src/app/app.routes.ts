@@ -54,7 +54,7 @@ export const routes: Routes = [
           import('./chatbot/ViewData/view-data.component').then(
             (m) => m.ViewDataComponent
           ),
-        data: { title: 'nav.chatbot.view-data' }
+        data: { title: 'nav.chatbot.view-data', minRole: 'admin' }
       },
 
       {
@@ -63,7 +63,16 @@ export const routes: Routes = [
           import('./chatbot/conversations/conversations.component').then(
             (m) => m.ConversationsComponent
           ),
-        data: { title: 'nav.chatbot.conversations' }
+        data: { title: 'nav.chatbot.conversations', minRole: 'admin' }
+      },
+
+      {
+        path: 'settings',
+        loadComponent: () =>
+          import('./chatbot/settings/settings.component').then(
+            (m) => m.SettingsComponent
+          ),
+        data: { title: 'nav.chatbot.settings', minRole: 'super_admin' }
       }
     ]
   },

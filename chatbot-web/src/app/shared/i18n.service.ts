@@ -66,6 +66,7 @@ const TR: Dict = {
   'nav.chatbot.academic-calendar': 'Akademik Takvim',
   'nav.chatbot.conversations': 'Konuşmalar',
   'nav.chatbot.view-data': 'İzleme Paneli',
+  'nav.chatbot.settings': 'Ayarlar',
   'nav.chatbot.chat': 'Chatbot',
 
   // GENERAL SIGN- IN CARD
@@ -305,6 +306,7 @@ const EN: Dict = {
   'nav.chatbot.academic-calendar': 'Academic Calendar',
   'nav.chatbot.conversations': 'Conversations',
   'nav.chatbot.view-data': 'Monitoring',
+  'nav.chatbot.settings': 'Settings',
   'nav.chatbot.chat': 'Chatbot',
 
 

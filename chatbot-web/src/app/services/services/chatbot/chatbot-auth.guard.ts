@@ -1,16 +1,19 @@
 import { inject } from '@angular/core';
-import { CanActivateFn, Router, UrlTree } from '@angular/router';
+import { ActivatedRouteSnapshot, CanActivateFn, Router, UrlTree } from '@angular/router';
 import { Observable, map } from 'rxjs';
 
 import { ChatbotAuthService } from './chatbot-auth.service';
+import { roleLevel } from '../../models/chatbot/chatbot-auth.model';
 
 /**
- * Oturum tabanlı guard: backend'e /api/auth/me sorarak cookie'nin geçerli
- * olduğunu doğrular (async). Eski localStorage bayrağı kaldırıldı — DevTools
- * üzerinden set edilebiliyordu, gerçek koruma sağlamıyordu.
+ * Oturum + ROL guard'ı:
+ * 1) Backend'e /api/auth/me sorarak cookie'nin geçerli olduğunu doğrular (async).
+ * 2) Route data'sında minRole varsa kullanıcının rol seviyesini kontrol eder;
+ *    yetersizse herkese açık varsayılan sayfaya yönlendirir.
+ * Gerçek yaptırım backend middleware'indedir (403) — bu guard yalnızca UX içindir.
  */
 export const chatbotAuthGuard: CanActivateFn = (
-    _,
+    route: ActivatedRouteSnapshot,
     state
 ): boolean | Observable<boolean | UrlTree> => {
     const router = inject(Router);
@@ -25,13 +28,20 @@ export const chatbotAuthGuard: CanActivateFn = (
     // ✅ sadece /chatbot alanını koru
     if (!url.startsWith('/chatbot')) return true;
 
+    const minRole: string | undefined = route?.data?.['minRole'];
+
     return auth.checkSession().pipe(
-        map((ok) =>
-            ok
-                ? true
-                : router.createUrlTree(['/chatbot/sign-in'], {
-                      queryParams: { returnUrl: rawUrl }
-                  })
-        )
+        map((ok) => {
+            if (!ok) {
+                return router.createUrlTree(['/chatbot/sign-in'], {
+                    queryParams: { returnUrl: rawUrl }
+                });
+            }
+            if (minRole && roleLevel(auth.user()?.role) < roleLevel(minRole)) {
+                // Yetkisi olmayan sayfa: en düşük rolün erişebildiği sayfaya dön.
+                return router.createUrlTree(['/chatbot/document-upload']);
+            }
+            return true;
+        })
     );
 };

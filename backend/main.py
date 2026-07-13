@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar, Conversation, ConversationMessage
 from auth import router as auth_router, AdminAuthMiddleware
+from settings_api import router as settings_router, OPENROUTER_KEY_CONFIG
 from providers import MeiliSearchProvider, QdrantProvider
-from llm_provider import LLMFactory
+from llm_provider import LLMFactory, OpenRouterProvider
 from calendar_utils import format_calendar_answer, match_calendar_entry
 from pydantic import BaseModel
 from typing import Optional, List
@@ -40,8 +41,9 @@ app.add_middleware(
 )
 
 # Admin oturum sistemi: /api/auth/* uçları + (ADMIN_AUTH_ENFORCED=true iken)
-# yönetim uçlarını oturuma bağlayan middleware. Ayrıntı ve geçiş planı: auth.py
+# yönetim uçlarını oturum ve ROL koşuluna bağlayan middleware. Ayrıntı: auth.py
 app.include_router(auth_router)
+app.include_router(settings_router)  # yalnızca super_admin (middleware kilitler)
 app.add_middleware(AdminAuthMiddleware)
 
 MEILI_PROVIDER = MeiliSearchProvider(
@@ -76,6 +78,38 @@ def _create_llm_provider():
 
 LLM_PROVIDER = _create_llm_provider()
 
+# Ayarlar sayfasından girilen OpenRouter anahtarı için dinamik sağlayıcı durumu.
+# Her worker kendi kopyasını tutar; anahtar HER İSTEKTE DB'den okunduğu için
+# panelden yapılan değişiklik tüm worker'lara bir sonraki istekte yansır
+# (deploy/restart gerekmez).
+_dyn_llm = {"provider": None, "key": None}
+
+
+def get_llm_provider(db: Session):
+    """Etkin LLM sağlayıcısını döner (yoksa None).
+
+    LLM_PROVIDER=openrouter iken anahtar önceliği: DB (ayarlar sayfası) → .env.
+    Anahtar değiştiyse istemci yeniden kurulur (ucuz). Diğer sağlayıcılarda
+    (openai/gemini) boot'ta kurulan statik sağlayıcı kullanılır."""
+    name = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    if name != "openrouter":
+        return LLM_PROVIDER
+
+    row = db.query(SystemConfig).filter(SystemConfig.key == OPENROUTER_KEY_CONFIG).first()
+    key = (row.value if row else None) or os.getenv("OPENROUTER_API_KEY") or None
+    if not key:
+        return None
+    if _dyn_llm["provider"] is None or _dyn_llm["key"] != key:
+        try:
+            _dyn_llm["provider"] = OpenRouterProvider(api_key=key)
+            _dyn_llm["key"] = key
+        except Exception as e:
+            logger.error(f"OpenRouter sağlayıcısı kurulamadı: {e}")
+            _dyn_llm["provider"] = None
+            _dyn_llm["key"] = None
+    return _dyn_llm["provider"]
+
+
 # Girdi sınırları: sınırsız mesaj = embedding CPU'su + LLM token maliyeti (DoS yüzeyi).
 MAX_MESSAGE_LEN = 1000
 MAX_IMPORT_BYTES = 5 * 1024 * 1024  # CSV import dosya boyutu üst sınırı
@@ -89,9 +123,9 @@ def get_db():
         db.close()
 
 def is_llm_enabled(db: Session):
-    # Sağlayıcı hiç kurulamadıysa (env eksik/yanlış) LLM yolu denenmez bile;
-    # DB'deki anahtar açık olsa dahi eşik yedeğiyle devam edilir.
-    if LLM_PROVIDER is None:
+    # Kullanılabilir bir sağlayıcı yoksa (anahtar ne DB'de ne .env'de) LLM yolu
+    # denenmez bile; DB'deki LLM_ENABLED açık olsa dahi eşik yedeğiyle devam edilir.
+    if get_llm_provider(db) is None:
         return False
     config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
     return config.value.lower() == "true" if config else False
@@ -140,9 +174,6 @@ class QnABulkUpdateItem(BaseModel):
     question_text: Optional[str] = None
     answer_text: Optional[str] = None
     status: Optional[int] = None
-
-class LLMConfigRequest(BaseModel):
-    enabled: bool
 
 class WidgetChatRequest(BaseModel):
     message: str
@@ -199,7 +230,8 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
     if not entries:
         return None
 
-    if use_llm and LLM_PROVIDER is not None:
+    prov = get_llm_provider(db) if use_llm else None
+    if prov is not None:
         candidates = [
             {
                 "question": f"{e.event} ne zaman?",
@@ -208,7 +240,7 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
             for e in entries
         ]
         try:
-            answer = LLM_PROVIDER.ask(query, candidates)
+            answer = prov.ask(query, candidates)
             if answer:
                 return answer
         except Exception as e:
@@ -295,15 +327,15 @@ def _build_candidate_pool(query: str, calendar_entries: list) -> list:
     return unique
 
 
-def _select_from_pool(query: str, calendar_entries: list) -> tuple:
+def _select_from_pool(query: str, calendar_entries: list, prov) -> tuple:
     """Bir (alt) soru için aday havuzunu kurup LLM'e birebir seçtirir.
     (answer_or_None, reached_llm) döner. reached_llm=False YALNIZCA havuz
     boşsa olur (retrieval çöktü ve takvim de yoksa) — bu durumda LLM hiç
-    çağrılmamıştır. ``LLM_PROVIDER.ask`` hata yükseltebilir (çağıran yakalar)."""
+    çağrılmamıştır. ``prov.ask`` hata yükseltebilir (çağıran yakalar)."""
     candidates = _build_candidate_pool(query, calendar_entries)
     if not candidates:
         return None, False
-    return LLM_PROVIDER.ask(query, candidates), True
+    return prov.ask(query, candidates), True
 
 
 def _llm_answer(query: str, db: Session) -> Optional[str]:
@@ -321,11 +353,14 @@ def _llm_answer(query: str, db: Session) -> Optional[str]:
     ulaşılamazsa (tüm ask'ler hata) RuntimeError yükseltir ki _answer_question
     tam eşik yedeğine (takvim kapısı dahil) düşsün."""
     calendar_entries = db.query(AcademicCalendar).all()
+    prov = get_llm_provider(db)
+    if prov is None:
+        raise RuntimeError("LLM sağlayıcısı yok (anahtar DB'de/env'de bulunamadı)")
 
     ex = ThreadPoolExecutor(max_workers=2)
     try:
-        split_future = ex.submit(LLM_PROVIDER.split_questions, query)
-        single_future = ex.submit(_select_from_pool, query, calendar_entries)
+        split_future = ex.submit(prov.split_questions, query)
+        single_future = ex.submit(_select_from_pool, query, calendar_entries, prov)
 
         sub_questions = split_future.result() or [query]
 
@@ -348,7 +383,7 @@ def _llm_answer(query: str, db: Session) -> Optional[str]:
     any_success = False  # en az bir alt soruda LLM'e ULAŞILDI mı?
     for sub_q in sub_questions:
         try:
-            ans, reached = _select_from_pool(sub_q, calendar_entries)
+            ans, reached = _select_from_pool(sub_q, calendar_entries, prov)
             if reached:
                 any_success = True
         except Exception:
@@ -1064,33 +1099,9 @@ def export_qna(db: Session = Depends(get_db)):
     )
 
 
-# ─────────────────────────────────────────────
-#  LLM Konfigürasyonu
-# ─────────────────────────────────────────────
-
-@app.get("/api/config/llm")
-def get_llm_config(db: Session = Depends(get_db)):
-    """LLM_ENABLED değerini döner."""
-    config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
-    enabled = config.value.lower() == "true" if config else False
-    return {"enabled": enabled}
-
-
-@app.put("/api/config/llm")
-def set_llm_config(body: LLMConfigRequest, db: Session = Depends(get_db)):
-    """LLM_ENABLED değerini günceller."""
-    config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
-    new_value = "true" if body.enabled else "false"
-
-    if config:
-        config.value = new_value
-    else:
-        config = SystemConfig(key="LLM_ENABLED", value=new_value)
-        db.add(config)
-
-    db.commit()
-    logger.info(f"LLM durumu güncellendi: {new_value}")
-    return {"enabled": body.enabled, "message": f"LLM {'etkinleştirildi' if body.enabled else 'devre dışı bırakıldı'}."}
+# NOT: Eski /api/config/llm uçları kaldırıldı — LLM aç/kapa ve OpenRouter
+# anahtarı artık ayarlar sayfasının API'sinde: /api/settings/llm
+# (settings_api.py, yalnızca super_admin).
 
 
 # ─────────────────────────────────────────────

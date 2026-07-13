@@ -99,6 +99,11 @@ class AdminUser(Base):
     email = Column(String(255), unique=True, nullable=False)
     password_hash = Column(String(100), nullable=False)   # bcrypt
     full_name = Column(String(100), nullable=True)
+    # Yetki matrisi (auth.py ROLE_LEVEL):
+    #   editor      → içerik (QnA, takvim, import/export)
+    #   admin       → editor + konuşmalar + istatistikler
+    #   super_admin → admin + ayarlar sayfası (kullanıcı yönetimi, LLM, API anahtarı)
+    role = Column(String(20), nullable=False, default="admin")
     is_active = Column(SmallInteger, default=1)           # 0 = erişim kapalı (personel ayrıldı vb.)
     created_at = Column(DateTime, server_default=func.now())
 
@@ -155,6 +160,11 @@ def init_db():
     index_sql = [
         "CREATE INDEX IF NOT EXISTS ix_conversations_started_at ON conversations (started_at)",
         "CREATE INDEX IF NOT EXISTS ix_conversation_messages_created_at ON conversation_messages (created_at)",
+        # Rol sistemi migration'ı: kolon create_all ile YENİ kurulumlarda gelir,
+        # var olan tabloya boot'ta eklenir. Mevcut kullanıcılar 'admin' olur
+        # (bugüne kadar sahip olmadıkları TEK şey yeni ayarlar sayfasıdır);
+        # ilk super_admin CLI ile atanır: create_admin.py <email> --role super_admin
+        "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'admin'",
     ]
 
     with engine.connect() as conn:

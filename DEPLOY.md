@@ -62,22 +62,43 @@ cat ~/auzef_backup_YYYYMMDD.sql | docker exec -i auzef_db psql -U admin -d auzef
 
 ---
 
-## 👤 Admin Kullanıcı Yönetimi (gerektikçe)
+## 👤 Kullanıcılar ve Roller
 
-Yönetim paneline giriş, oturum tabanlı kimlik doğrulamayla korunur
-(`backend/auth.py`). Kullanıcılar sunucuda CLI ile yönetilir:
+Üç rol vardır (yetki matrisi):
+
+| Sayfa / API | editor | admin | super_admin |
+|---|---|---|---|
+| QnA + Akademik Takvim + Import/Export | ✅ | ✅ | ✅ |
+| Konuşmalar + İstatistikler | ❌ | ✅ | ✅ |
+| Ayarlar (kullanıcılar, LLM, API anahtarı) | ❌ | ❌ | ✅ |
+
+**Gündelik kullanıcı yönetimi panelden yapılır:** Ayarlar sayfası (yalnızca
+super_admin) kullanıcı ekleme, rol değiştirme, parola sıfırlama ve
+pasifleştirme işlemlerinin tamamını içerir. CLI yalnızca BOOTSTRAP ve acil
+durum içindir:
 
 ```bash
-# Yeni personel (parola gizli sorulur, en az 10 karakter)
+# İlk super_admin'i oluştur (parola gizli sorulur, en az 10 karakter)
 docker exec -it auzef_backend python create_admin.py ad.soyad@istanbul.edu.tr --name "Ad Soyad"
+# (CLI'dan yeni kullanıcının varsayılan rolü super_admin'dir)
 
-# Parola sıfırlama = aynı komut (mevcut e-posta ile çalıştırın;
-# eski oturumları da güvenlik gereği kapatır)
-docker exec -it auzef_backend python create_admin.py ad.soyad@istanbul.edu.tr
+# Var olan kullanıcıyı super_admin'e yükselt — parola sorulduğunda BOŞ
+# bırakırsanız parola DEĞİŞMEZ:
+docker exec -it auzef_backend python create_admin.py ad.soyad@istanbul.edu.tr --role super_admin
 
-# Personel ayrıldı → erişimi ANINDA kapat (açık oturumları da siler)
+# Acil durum: erişimi ANINDA kapat (açık oturumları da siler)
 docker exec -it auzef_backend python create_admin.py ad.soyad@istanbul.edu.tr --deactivate
 ```
+
+**Rol sistemi migration notu (tek seferlik):** rol sisteminden önce açılmış
+kullanıcılar ilk boot'ta otomatik olarak `admin` rolü alır (kaybettikleri tek
+şey yeni Ayarlar sayfasıdır). Deploy'dan sonra kendi hesabınızı yukarıdaki
+komutla super_admin'e yükseltin.
+
+**LLM ayarları:** LLM aç/kapa ve OpenRouter API anahtarı artık Ayarlar
+sayfasındadır. Panelden girilen anahtar DB'de tutulur ve `.env`'dekini ezer;
+değişiklik deploy/restart GEREKTİRMEZ (tüm worker'lara bir sonraki istekte
+yansır). Panel anahtarı silinirse `.env`'e geri dönülür.
 
 ---
 

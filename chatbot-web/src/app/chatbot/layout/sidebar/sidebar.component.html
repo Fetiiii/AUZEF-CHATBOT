@@ -48,8 +48,8 @@
                     </span>
                 </a>
 
-                <!-- Konuşmalar -->
-                <a routerLink="/chatbot/conversations" routerLinkActive="active-sb" class="sidebar-item"
+                <!-- Konuşmalar (en az admin) -->
+                <a *ngIf="canSeeAdmin()" routerLink="/chatbot/conversations" routerLinkActive="active-sb" class="sidebar-item"
                     [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
                     [attr.title]="collapsed ? i18n.t('nav.chatbot.conversations') : null">
                     <span class="icon-box">
@@ -62,8 +62,8 @@
                     </span>
                 </a>
 
-                <!-- İzleme Paneli -->
-                <a routerLink="/chatbot/view-data" routerLinkActive="active-sb" class="sidebar-item"
+                <!-- İzleme Paneli (en az admin) -->
+                <a *ngIf="canSeeAdmin()" routerLink="/chatbot/view-data" routerLinkActive="active-sb" class="sidebar-item"
                     [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
                     [attr.title]="collapsed ? i18n.t('nav.chatbot.view-data') : null">
                     <span class="icon-box">
@@ -78,6 +78,20 @@
                     </span>
                 </a>
 
+                <!-- Ayarlar (yalnızca super admin) -->
+                <a *ngIf="canSeeSuper()" routerLink="/chatbot/settings" routerLinkActive="active-sb" class="sidebar-item"
+                    [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
+                    [attr.title]="collapsed ? i18n.t('nav.chatbot.settings') : null">
+                    <span class="icon-box">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </span>
+                    <span class="min-w-0" *ngIf="!collapsed">
+                        <div class="truncate font-medium">{{ i18n.t('nav.chatbot.settings') }}</div>
+                    </span>
+                </a>
 
             </div>
         </nav>

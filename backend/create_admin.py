@@ -1,25 +1,49 @@
 """Admin kullanıcısı oluşturma/güncelleme CLI'ı.
 
-Kullanım (container içinde ya da yerelde):
-    python create_admin.py ornek@istanbul.edu.tr                # parolayı gizli sorar
-    python create_admin.py ornek@istanbul.edu.tr --name "Ad Soyad"
-    python create_admin.py ornek@istanbul.edu.tr --deactivate   # erişimi kapat
+Bu CLI esas olarak İLK super_admin'i oluşturmak (bootstrap) ve panele
+girilemeyen acil durumlar içindir — gündelik kullanıcı yönetimi artık
+ayarlar sayfasından yapılır (yalnızca super_admin erişir).
 
-Var olan e-posta için çalıştırılırsa parolayı/adı GÜNCELLER (parola sıfırlama
-bu şekilde yapılır). Deaktive edilen kullanıcının açık oturumları da silinir.
+Kullanım (container içinde ya da yerelde):
+    python create_admin.py ornek@istanbul.edu.tr                     # yeni kullanıcı (super_admin)
+    python create_admin.py ornek@istanbul.edu.tr --role editor       # rol belirterek
+    python create_admin.py ornek@istanbul.edu.tr --name "Ad Soyad"
+    python create_admin.py ornek@istanbul.edu.tr --deactivate        # erişimi kapat
+
+Var olan e-posta için çalıştırılırsa GÜNCELLEME yapar:
+- Parola sorulduğunda BOŞ bırakılırsa parola değişmez (yalnızca rol/ad güncellenir).
+- Parola girilirse sıfırlanır ve açık oturumlar güvenlik gereği kapatılır.
+- --role yalnızca açıkça verildiyse mevcut kullanıcının rolünü değiştirir.
 """
 import argparse
 import getpass
 import sys
 
 from database import SessionLocal, AdminUser, AdminSession, init_db
-from auth import hash_password
+from auth import hash_password, VALID_ROLES
+
+
+def _ask_password(optional: bool) -> str:
+    prompt = "Parola (boş bırak = değiştirme): " if optional else "Parola: "
+    password = getpass.getpass(prompt)
+    if optional and not password:
+        return ""
+    if len(password) < 10:
+        print("❌ Parola en az 10 karakter olmalı.")
+        sys.exit(1)
+    if password != getpass.getpass("Parola (tekrar): "):
+        print("❌ Parolalar eşleşmiyor.")
+        sys.exit(1)
+    return password
 
 
 def main():
     parser = argparse.ArgumentParser(description="Admin kullanıcısı oluştur/güncelle")
     parser.add_argument("email", help="Kullanıcı e-postası")
     parser.add_argument("--name", default=None, help="Ad Soyad (opsiyonel)")
+    parser.add_argument("--role", default=None, choices=sorted(VALID_ROLES),
+                        help="Rol (yeni kullanıcıda varsayılan: super_admin; "
+                             "mevcut kullanıcıda yalnızca verilirse değiştirir)")
     parser.add_argument("--deactivate", action="store_true", help="Kullanıcının erişimini kapat")
     args = parser.parse_args()
 
@@ -40,28 +64,35 @@ def main():
             print(f"✅ Erişim kapatıldı ve açık oturumları silindi: {email}")
             return
 
-        password = getpass.getpass("Parola: ")
-        if len(password) < 10:
-            print("❌ Parola en az 10 karakter olmalı.")
-            sys.exit(1)
-        if password != getpass.getpass("Parola (tekrar): "):
-            print("❌ Parolalar eşleşmiyor.")
-            sys.exit(1)
-
         if user is None:
-            user = AdminUser(email=email, password_hash=hash_password(password), full_name=args.name, is_active=1)
+            # CLI'dan oluşturulan kullanıcı tipik olarak sistemin ilk yöneticisidir.
+            role = args.role or "super_admin"
+            password = _ask_password(optional=False)
+            user = AdminUser(email=email, password_hash=hash_password(password),
+                             full_name=args.name, role=role, is_active=1)
             db.add(user)
             db.commit()
-            print(f"✅ Admin kullanıcısı oluşturuldu: {email}")
-        else:
+            print(f"✅ Kullanıcı oluşturuldu: {email} (rol: {role})")
+            return
+
+        # Mevcut kullanıcı: güncelleme
+        changed = []
+        password = _ask_password(optional=True)
+        if password:
             user.password_hash = hash_password(password)
-            user.is_active = 1
-            if args.name:
-                user.full_name = args.name
-            # Parola değişti: eski oturumlar güvenlik gereği kapatılır.
             db.query(AdminSession).filter(AdminSession.user_id == user.id).delete()
-            db.commit()
-            print(f"✅ Kullanıcı güncellendi (parola sıfırlandı, oturumlar kapatıldı): {email}")
+            changed.append("parola sıfırlandı, oturumlar kapatıldı")
+        if args.role and args.role != user.role:
+            user.role = args.role
+            db.query(AdminSession).filter(AdminSession.user_id == user.id).delete()
+            changed.append(f"rol → {args.role}")
+        if args.name:
+            user.full_name = args.name
+            changed.append("ad güncellendi")
+        user.is_active = 1  # güncelleme = erişim açık kabul edilir
+
+        db.commit()
+        print(f"✅ Kullanıcı güncellendi: {email} ({'; '.join(changed) or 'değişiklik yok'})")
     finally:
         db.close()
 
