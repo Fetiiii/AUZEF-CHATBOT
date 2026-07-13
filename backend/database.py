@@ -65,6 +65,11 @@ class QueryLog(Base):
 class Conversation(Base):
     __tablename__ = "conversations"
     id = Column(BigInteger, primary_key=True, index=True)
+    # Sahiplik token'ı: konuşmayı BAŞLATAN tarayıcıya verilir; mesaj ekleme,
+    # puanlama ve talep yazma bu token'ı ister. id'ler ardışık sayı olduğu
+    # için token olmadan herkes başkasının konuşmasına yazabilir/puanlayabilirdi
+    # (istatistikleri sessizce bozar). NULL = eski kayıt → yazma reddedilir.
+    client_token = Column(String(64), nullable=True, index=True)
     ip_address = Column(String(45), nullable=True)
     # not_offered = puan >=4 olduğu için talep hiç sorulmadı
     # declined    = kullanıcı "Hayır" dedi
@@ -165,6 +170,10 @@ def init_db():
         # (bugüne kadar sahip olmadıkları TEK şey yeni ayarlar sayfasıdır);
         # ilk super_admin CLI ile atanır: create_admin.py <email> --role super_admin
         "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'admin'",
+        # Konuşma sahiplik token'ı (S5): eski satırlar NULL kalır → onlara
+        # yazma fail-closed reddedilir (tarihsel veri okunabilir, değiştirilemez).
+        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS client_token VARCHAR(64)",
+        "CREATE INDEX IF NOT EXISTS ix_conversations_client_token ON conversations (client_token)",
     ]
 
     with engine.connect() as conn:

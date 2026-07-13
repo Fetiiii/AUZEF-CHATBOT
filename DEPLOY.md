@@ -137,6 +137,25 @@ Güvenli varsayılan: `ADMIN_AUTH_ENFORCED` env'de hiç yoksa sistem **kilitli**
 
 ---
 
+## 🧪 Otomatik Testler
+
+Backend'in kalıcı test paketi `backend/tests/` altındadır: oturum sistemi,
+rol matrisi, ayarlar API'si, konuşma sahiplik token'ları (S5), istatistik
+agregasyonu ve saf yardımcı fonksiyonlar.
+
+```bash
+cd backend
+pip install -r requirements-dev.txt        # pytest + httpx (bir kez)
+python -m pytest tests/ -v                 # Docker gerekir: testler kendi
+                                           # throwaway Postgres'ini açar/kapatır
+# Hazır bir test DB'si kullanmak isterseniz:
+TEST_DATABASE_URL=postgresql://... python -m pytest tests/ -v
+```
+
+Testler gerçek uygulamayı (middleware dahil) gerçek Postgres'e karşı çalıştırır;
+arama/embedding sağlayıcıları stub'lanır (ağ/model gerekmez). **Backend'e
+dokunan her değişiklikten sonra suite'i çalıştırın.**
+
 ## 💻 Yerel Geliştirme / Test
 
 ```bash

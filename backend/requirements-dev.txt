@@ -1,0 +1,6 @@
+# Test bağımlılıkları (production imajına girmez)
+# Kullanım: pip install -r requirements-dev.txt && python -m pytest tests/ -v
+# Gereksinim: Docker (testler throwaway Postgres açar) ya da TEST_DATABASE_URL
+-r requirements.txt
+pytest
+httpx

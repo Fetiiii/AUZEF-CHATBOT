@@ -14,8 +14,10 @@ from calendar_utils import format_calendar_answer, match_calendar_entry
 from pydantic import BaseModel
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor
+import hmac
 import os
 import logging
+import secrets
 import time
 from datetime import datetime, timedelta
 
@@ -178,12 +180,18 @@ class QnABulkUpdateItem(BaseModel):
 class WidgetChatRequest(BaseModel):
     message: str
     conversation_id: Optional[int] = None
+    # Sahiplik token'ı: konuşma ilk cevapla birlikte verilir, sonraki
+    # mesajlarda geri gönderilir. Yanlış/eksik token = yeni konuşma açılır
+    # (öğrenci deneyimi asla kırılmaz, hijack imkânsızlaşır).
+    conversation_token: Optional[str] = None
 
 class RatingRequest(BaseModel):
     rating: int
+    conversation_token: Optional[str] = None
 
 class TalepRequest(BaseModel):
     status: str
+    conversation_token: Optional[str] = None
 
 # ── Academic Calendar Schemas ──
 class AcademicCalendarCreateRequest(BaseModel):
@@ -465,16 +473,30 @@ def _log_query(source: str, status: str, ip: Optional[str]):
 #  Conversation (sohbet) kalıcılığı
 # ─────────────────────────────────────────────
 
-def _get_or_create_conversation(db: Session, conversation_id: Optional[int], ip: Optional[str]) -> Conversation:
-    """Var olan conversation'ı getirir; yoksa (ilk mesaj) yenisini oluşturur."""
-    conv = None
+def _token_matches(conv: Optional[Conversation], token: Optional[str]) -> bool:
+    """Sahiplik kontrolü: token'sız (eski) konuşmalara yazma da reddedilir."""
+    return (
+        conv is not None
+        and bool(conv.client_token)
+        and bool(token)
+        and hmac.compare_digest(conv.client_token, token)
+    )
+
+
+def _get_or_create_conversation(db: Session, conversation_id: Optional[int], token: Optional[str], ip: Optional[str]) -> Conversation:
+    """Sahiplik token'ı doğrulanan conversation'ı getirir; doğrulanamazsa
+    (ilk mesaj, yanlış token, eski kayıt) YENİ konuşma açar.
+
+    id'ler ardışık olduğundan token'sız devam etmeye izin vermek, herkesin
+    başkasının konuşmasına mesaj yazabilmesi demekti (S5)."""
     if conversation_id:
         conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-    if conv is None:
-        conv = Conversation(ip_address=ip)
-        db.add(conv)
-        db.commit()
-        db.refresh(conv)
+        if _token_matches(conv, token):
+            return conv
+    conv = Conversation(ip_address=ip, client_token=secrets.token_urlsafe(24))
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
     return conv
 
 
@@ -497,6 +519,7 @@ def _widget_reply(db: Session, conv: Optional[Conversation], answer: str, source
         try:
             msg = _store_message(db, conv.id, "bot", answer, source=source)
             resp["conversation_id"] = conv.id
+            resp["conversation_token"] = conv.client_token
             resp["message_id"] = msg.id
         except Exception as e:
             logger.error(f"Bot mesajı kaydedilemedi (yanıt yolu etkilenmez): {e}")
@@ -534,7 +557,7 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     # etkilenmez; sadece bu sohbet loglanmaz.
     conv = None
     try:
-        conv = _get_or_create_conversation(db, body.conversation_id, ip)
+        conv = _get_or_create_conversation(db, body.conversation_id, body.conversation_token, ip)
         _store_message(db, conv.id, "user", q)
     except Exception as e:
         logger.error(f"Conversation kaydı yapılamadı (yanıt yolu etkilenmez): {e}")
@@ -570,12 +593,18 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
 
 @app.post("/api/messages/{message_id}/rating")
 def rate_message(message_id: int, body: RatingRequest, db: Session = Depends(get_db)):
-    """Bir bot cevabına verilen yıldız puanını (1-5) kaydeder."""
+    """Bir bot cevabına verilen yıldız puanını (1-5) kaydeder.
+
+    Sahiplik: mesajın ait olduğu konuşmanın token'ı istenir — id'ler ardışık
+    olduğu için token'sız herkes başkasının cevabını puanlayabilirdi (S5)."""
     if body.rating < 1 or body.rating > 5:
         raise HTTPException(status_code=400, detail="Puan 1-5 aralığında olmalı.")
     msg = db.query(ConversationMessage).filter(ConversationMessage.id == message_id).first()
     if not msg:
         raise HTTPException(status_code=404, detail="Mesaj bulunamadı.")
+    conv = db.query(Conversation).filter(Conversation.id == msg.conversation_id).first()
+    if not _token_matches(conv, body.conversation_token):
+        raise HTTPException(status_code=403, detail="Bu konuşma için yetkiniz yok.")
     msg.rating = body.rating
     msg.rating_at = datetime.utcnow()
     db.commit()
@@ -584,12 +613,16 @@ def rate_message(message_id: int, body: RatingRequest, db: Session = Depends(get
 
 @app.post("/api/conversations/{conversation_id}/talep")
 def set_talep_status(conversation_id: int, body: TalepRequest, db: Session = Depends(get_db)):
-    """Talep adımının sonucunu kaydeder: 'declined' (Hayır) veya 'redirected' (Evet)."""
+    """Talep adımının sonucunu kaydeder: 'declined' (Hayır) veya 'redirected' (Evet).
+
+    Sahiplik: konuşmanın token'ı istenir (bkz. rate_message notu)."""
     if body.status not in ("declined", "redirected"):
         raise HTTPException(status_code=400, detail="Geçersiz talep durumu.")
     conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conv:
         raise HTTPException(status_code=404, detail="Konuşma bulunamadı.")
+    if not _token_matches(conv, body.conversation_token):
+        raise HTTPException(status_code=403, detail="Bu konuşma için yetkiniz yok.")
     conv.talep_status = body.status
     db.commit()
     return {"ok": True}

@@ -251,7 +251,8 @@
   var isOpen   = false;
   var isExpanded = false;
   var isSending = false;
-  var _conversationId = null;   // ilk cevapta backend'den gelir, sonraki mesajlarda geri gönderilir
+  var _conversationId = null;    // ilk cevapta backend'den gelir, sonraki mesajlarda geri gönderilir
+  var _conversationToken = null; // sahiplik token'ı: mesaj yazma/puanlama/talep bunu ister
 
   // ── Toggle ──────────────────────────────────────────────────────────────────
   function setExpanded(v) {
@@ -302,12 +303,13 @@
     fetch(_apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, conversation_id: _conversationId })
+      body: JSON.stringify({ message: text, conversation_id: _conversationId, conversation_token: _conversationToken })
     })
       .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function (data) {
         typingEl.remove();
         if (data.conversation_id) { _conversationId = data.conversation_id; }
+        if (data.conversation_token) { _conversationToken = data.conversation_token; }
         var msgId = data.message_id;
         var answer = data.answer || 'Yanıt alınamadı.';
         appendBotMsg(answer, function () {
@@ -561,7 +563,7 @@
     fetch(_apiBase + '/api/messages/' + messageId + '/rating', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rating: rating })
+      body: JSON.stringify({ rating: rating, conversation_token: _conversationToken })
     }).catch(function () {});
   }
 
@@ -571,7 +573,7 @@
     fetch(_apiBase + '/api/conversations/' + _conversationId + '/talep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: status })
+      body: JSON.stringify({ status: status, conversation_token: _conversationToken })
     }).catch(function () {});
   }
 
