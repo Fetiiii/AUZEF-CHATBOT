@@ -32,6 +32,8 @@ docker ps        # auzef_backend "healthy" olana kadar bekleyin
 
 # 4) Doğrulama
 curl -s https://auzefasistan.istanbul.edu.tr/health      # → {"ok":true}
+#   nginx'i devre dışı bırakarak (container içinden) kontrol etmek isterseniz:
+#   docker exec auzef_backend wget -qO- http://localhost:8000/health
 ```
 
 **Notlar**
