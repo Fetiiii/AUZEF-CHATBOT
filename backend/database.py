@@ -33,6 +33,7 @@ class QnA(Base):
     # bırakıyor, status!=1 filtresi de bu kayıtları arama indeksinden DÜŞÜRÜYORDU
     # (CSV ile eklenen QnA'lar sessizce aranamaz oluyordu).
     status = Column(SmallInteger, nullable=False, server_default="1", default=1)
+    updated_by = Column(String(255), nullable=True)   # son düzenleyen kullanıcının e-postası (denetim izi)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -143,6 +144,7 @@ class AcademicCalendar(Base):
     event = Column(Text, nullable=False)               # Ara Sınav (Vize), Bütünleme, etc.
     start_date = Column(String(50), nullable=False)    # 08.11.2025
     end_date = Column(String(50), nullable=False)      # 09.11.2025
+    updated_by = Column(String(255), nullable=True)    # son düzenleyen kullanıcının e-postası (denetim izi)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -190,6 +192,10 @@ def init_db():
         # NULL kalmış (bu yüzden aranamaz olmuş) kayıtları aktife çek.
         "ALTER TABLE qna ALTER COLUMN status SET DEFAULT 1",
         "UPDATE qna SET status = 1 WHERE status IS NULL",
+        # Denetim izi: son düzenleyen kullanıcı (yanlış cevap üretildiğinde
+        # "kim/ne zaman değiştirdi" sorusunun cevabı).
+        "ALTER TABLE qna ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
+        "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
     ]
 
     with engine.connect() as conn:

@@ -17,25 +17,17 @@ from sqlalchemy.orm import Session
 
 from database import AdminSession, AdminUser, SystemConfig
 from auth import (
-    COOKIE_NAME,
     VALID_ROLES,
+    current_user as _current_user,
     get_db,
-    get_session_user,
     hash_password,
 )
-from fastapi import Cookie
 
 OPENROUTER_KEY_CONFIG = "OPENROUTER_API_KEY"
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
-
-def _current_user(session_token: str = Cookie(default="", alias=COOKIE_NAME), db: Session = Depends(get_db)) -> Optional[AdminUser]:
-    """İstek sahibinin kendisi (self-lockout korumaları için).
-
-    Middleware super_admin'i zaten doğruladı; enforcement kapalıyken (yerel
-    geliştirme) None dönebilir — o durumda self-koruma kontrolleri atlanır."""
-    return get_session_user(db, session_token)
+# _current_user: istek sahibi (self-lockout korumaları için) — auth.current_user.
 
 
 # ─────────────────────────────────────────────

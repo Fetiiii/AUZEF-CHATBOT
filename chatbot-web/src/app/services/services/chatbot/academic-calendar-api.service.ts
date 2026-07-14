@@ -8,6 +8,7 @@ export interface AcademicCalendarItem {
   event: string;
   start_date: string;
   end_date: string;
+  updated_by: string | null;
   created_at: string | null;
   updated_at: string | null;
 }

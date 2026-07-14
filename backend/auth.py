@@ -125,6 +125,18 @@ def get_db():
         db.close()
 
 
+def current_user(
+    session_token: str = Cookie(default="", alias=COOKIE_NAME),
+    db: Session = Depends(get_db),
+) -> Optional[AdminUser]:
+    """İstek sahibi kullanıcı (oturum geçerliyse), yoksa None.
+
+    Middleware erişimi zaten doğrular; bu dependency handler'a KULLANICIYI
+    verir (denetim izi/self-lockout için). Enforcement kapalıyken (yerel
+    geliştirme) None dönebilir."""
+    return get_session_user(db, session_token)
+
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 

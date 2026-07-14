@@ -6,7 +6,7 @@ import io
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import text, or_
 from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar, Conversation, ConversationMessage, utcnow
-from auth import router as auth_router, AdminAuthMiddleware
+from auth import router as auth_router, AdminAuthMiddleware, current_user
 from settings_api import router as settings_router, OPENROUTER_KEY_CONFIG
 from providers import MeiliSearchProvider, QdrantProvider
 from llm_provider import LLMFactory, OpenRouterProvider
@@ -998,6 +998,23 @@ def sync_providers_batch(db: Session, qna_ids: list):
         if qna_id not in active_ids:
             remove_from_providers(qna_id)
 
+def _actor_email(me) -> Optional[str]:
+    """Denetim izi için: istek sahibinin e-postası (oturum yoksa None)."""
+    return me.email if me is not None else None
+
+
+def _qna_dict(r: QnA) -> dict:
+    return {
+        "id": r.id,
+        "question_text": r.question_text,
+        "answer_text": r.answer_text,
+        "status": r.status,
+        "updated_by": r.updated_by,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
 @app.get("/api/qna")
 def list_qna(
     skip: int = 0,
@@ -1006,57 +1023,48 @@ def list_qna(
 ):
     """Tüm QnA kayıtlarını döner (AG Grid için)."""
     rows = db.query(QnA).order_by(QnA.id).offset(skip).limit(limit).all()
-    return [
-        {
-            "id": r.id,
-            "question_text": r.question_text,
-            "answer_text": r.answer_text,
-            "status": r.status,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-        }
-        for r in rows
-    ]
+    return [_qna_dict(r) for r in rows]
 
 
 @app.post("/api/qna", status_code=201)
-def create_qna(body: QnACreateRequest, db: Session = Depends(get_db)):
+def create_qna(body: QnACreateRequest, db: Session = Depends(get_db), me=Depends(current_user)):
     """Yeni QnA kaydı oluşturur."""
     row = QnA(
         question_text=body.question_text,
         answer_text=body.answer_text,
-        status=body.status if body.status is not None else 1
+        status=body.status if body.status is not None else 1,
+        updated_by=_actor_email(me),
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    
+
     # Sync with MeiliSearch & Qdrant
     sync_providers(db, row.id)
-    
-    return {
-        "id": row.id,
-        "question_text": row.question_text,
-        "answer_text": row.answer_text,
-        "status": row.status,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-    }
+
+    return _qna_dict(row)
 
 @app.put("/api/qna/bulk-update")
-def bulk_update_qna(items: List[QnABulkUpdateItem], db: Session = Depends(get_db)):
+def bulk_update_qna(items: List[QnABulkUpdateItem], db: Session = Depends(get_db), me=Depends(current_user)):
     """Birden fazla QnA kaydını tek seferde günceller (AG Grid toplu kaydetme)."""
+    actor = _actor_email(me)
     updated = []
     for item in items:
         row = db.query(QnA).filter(QnA.id == item.id).first()
         if not row:
             continue
+        changed = False
         if item.question_text is not None:
             row.question_text = item.question_text
+            changed = True
         if item.answer_text is not None:
             row.answer_text = item.answer_text
+            changed = True
         if item.status is not None:
             row.status = item.status
+            changed = True
+        if changed:
+            row.updated_by = actor
         updated.append(row.id)
     db.commit()
 
@@ -1066,7 +1074,7 @@ def bulk_update_qna(items: List[QnABulkUpdateItem], db: Session = Depends(get_db
     return {"updated_ids": updated, "count": len(updated)}
 
 @app.put("/api/qna/{qna_id}")
-def update_qna(qna_id: int, body: QnAUpdateRequest, db: Session = Depends(get_db)):
+def update_qna(qna_id: int, body: QnAUpdateRequest, db: Session = Depends(get_db), me=Depends(current_user)):
     """Tek bir QnA kaydını günceller."""
     row = db.query(QnA).filter(QnA.id == qna_id).first()
     if not row:
@@ -1078,6 +1086,7 @@ def update_qna(qna_id: int, body: QnAUpdateRequest, db: Session = Depends(get_db
         row.answer_text = body.answer_text
     if body.status is not None:
         row.status = body.status
+    row.updated_by = _actor_email(me)
 
     db.commit()
     db.refresh(row)
@@ -1085,14 +1094,7 @@ def update_qna(qna_id: int, body: QnAUpdateRequest, db: Session = Depends(get_db
     # Sync with MeiliSearch & Qdrant
     sync_providers(db, row.id)
 
-    return {
-        "id": row.id,
-        "question_text": row.question_text,
-        "answer_text": row.answer_text,
-        "status": row.status,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-    }
+    return _qna_dict(row)
 
 
 @app.delete("/api/qna/{qna_id}", status_code=204)
@@ -1116,8 +1118,9 @@ def delete_qna(qna_id: int, db: Session = Depends(get_db)):
 
 # Sync def: satır satır DB insert + provider sync bloklayıcıdır (bkz. widget_chat notu).
 @app.post("/api/qna/import")
-def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db), me=Depends(current_user)):
     """CSV dosyasından toplu QnA içe aktarır. Format: question;answer;tags;query_1;...;query_20"""
+    actor = _actor_email(me)
     content = file.file.read(MAX_IMPORT_BYTES + 1)
     if len(content) > MAX_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="Dosya çok büyük (limit 5 MB).")
@@ -1139,8 +1142,8 @@ def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
             continue
 
         result = db.execute(
-            text("INSERT INTO qna (question_text, answer_text, status) VALUES (:q, :a, 1) RETURNING id"),
-            {"q": question, "a": answer}
+            text("INSERT INTO qna (question_text, answer_text, status, updated_by) VALUES (:q, :a, 1, :by) RETURNING id"),
+            {"q": question, "a": answer, "by": actor}
         ).fetchone()
         qna_id = result[0]
         inserted_ids.append(qna_id)
@@ -1365,70 +1368,73 @@ def get_conversation_stats(start: str = "", end: str = "", db: Session = Depends
 #  Akademik Takvim CRUD
 # ─────────────────────────────────────────────
 
+def _calendar_dict(r: AcademicCalendar) -> dict:
+    return {
+        "id": r.id,
+        "period": r.period,
+        "event": r.event,
+        "start_date": r.start_date,
+        "end_date": r.end_date,
+        "updated_by": r.updated_by,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
 @app.get("/api/academic-calendar")
 def list_calendar(skip: int = 0, limit: int = 500, db: Session = Depends(get_db)):
     """Tüm akademik takvim kayıtlarını döner."""
     rows = db.query(AcademicCalendar).order_by(AcademicCalendar.id).offset(skip).limit(limit).all()
-    return [
-        {
-            "id": r.id,
-            "period": r.period,
-            "event": r.event,
-            "start_date": r.start_date,
-            "end_date": r.end_date,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-        }
-        for r in rows
-    ]
+    return [_calendar_dict(r) for r in rows]
 
 
 @app.post("/api/academic-calendar", status_code=201)
-def create_calendar(body: AcademicCalendarCreateRequest, db: Session = Depends(get_db)):
+def create_calendar(body: AcademicCalendarCreateRequest, db: Session = Depends(get_db), me=Depends(current_user)):
     """Yeni takvim kaydı oluşturur."""
     row = AcademicCalendar(
         period=body.period,
         event=body.event,
         start_date=body.start_date,
         end_date=body.end_date,
+        updated_by=_actor_email(me),
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return {
-        "id": row.id,
-        "period": row.period,
-        "event": row.event,
-        "start_date": row.start_date,
-        "end_date": row.end_date,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-    }
+    return _calendar_dict(row)
 
 
 @app.put("/api/academic-calendar/bulk-update")
-def bulk_update_calendar(items: List[AcademicCalendarBulkUpdateItem], db: Session = Depends(get_db)):
+def bulk_update_calendar(items: List[AcademicCalendarBulkUpdateItem], db: Session = Depends(get_db), me=Depends(current_user)):
     """Birden fazla takvim kaydını tek seferde günceller."""
+    actor = _actor_email(me)
     updated = []
     for item in items:
         row = db.query(AcademicCalendar).filter(AcademicCalendar.id == item.id).first()
         if not row:
             continue
+        changed = False
         if item.period is not None:
             row.period = item.period
+            changed = True
         if item.event is not None:
             row.event = item.event
+            changed = True
         if item.start_date is not None:
             row.start_date = item.start_date
+            changed = True
         if item.end_date is not None:
             row.end_date = item.end_date
+            changed = True
+        if changed:
+            row.updated_by = actor
         updated.append(row.id)
     db.commit()
     return {"updated_ids": updated, "count": len(updated)}
 
 
 @app.put("/api/academic-calendar/{cal_id}")
-def update_calendar(cal_id: int, body: AcademicCalendarUpdateRequest, db: Session = Depends(get_db)):
+def update_calendar(cal_id: int, body: AcademicCalendarUpdateRequest, db: Session = Depends(get_db), me=Depends(current_user)):
     """Tek bir takvim kaydını günceller."""
     row = db.query(AcademicCalendar).filter(AcademicCalendar.id == cal_id).first()
     if not row:
@@ -1441,17 +1447,10 @@ def update_calendar(cal_id: int, body: AcademicCalendarUpdateRequest, db: Sessio
         row.start_date = body.start_date
     if body.end_date is not None:
         row.end_date = body.end_date
+    row.updated_by = _actor_email(me)
     db.commit()
     db.refresh(row)
-    return {
-        "id": row.id,
-        "period": row.period,
-        "event": row.event,
-        "start_date": row.start_date,
-        "end_date": row.end_date,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-    }
+    return _calendar_dict(row)
 
 
 @app.delete("/api/academic-calendar/{cal_id}", status_code=204)
@@ -1467,12 +1466,13 @@ def delete_calendar(cal_id: int, db: Session = Depends(get_db)):
 
 # Sync def: bloklayıcı DB işleri içerir (bkz. widget_chat notu).
 @app.post("/api/academic-calendar/import")
-def import_calendar_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def import_calendar_csv(file: UploadFile = File(...), db: Session = Depends(get_db), me=Depends(current_user)):
     """CSV dosyasından toplu takvim verisi içe aktarır.
     Kabul edilen formatlar (virgül veya noktalı virgül):
       Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi
       period;event;start_date;end_date
     """
+    actor = _actor_email(me)
     content = file.file.read(MAX_IMPORT_BYTES + 1)
     if len(content) > MAX_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="Dosya çok büyük (limit 5 MB).")
@@ -1503,6 +1503,7 @@ def import_calendar_csv(file: UploadFile = File(...), db: Session = Depends(get_
             event=event,
             start_date=start,
             end_date=end or start,
+            updated_by=actor,
         ))
         inserted += 1
 

@@ -110,6 +110,15 @@ export class DocumentUploadComponent implements OnInit {
       },
     },
     {
+      field: 'updated_by',
+      headerName: 'Son düzenleyen',
+      width: 190,
+      editable: false,
+      sortable: true,
+      filter: true,
+      valueFormatter: (p) => p.value || '—',
+    },
+    {
       headerName: '',
       width: 56,
       editable: false,

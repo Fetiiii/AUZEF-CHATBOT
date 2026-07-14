@@ -7,6 +7,7 @@ export interface QnAItem {
   question_text: string;
   answer_text: string;
   status: number;
+  updated_by: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
