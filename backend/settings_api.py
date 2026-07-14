@@ -16,14 +16,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from database import AdminSession, AdminUser, SystemConfig
+from deps import OPENROUTER_KEY_CONFIG, get_db
 from auth import (
     VALID_ROLES,
     current_user as _current_user,
-    get_db,
     hash_password,
 )
-
-OPENROUTER_KEY_CONFIG = "OPENROUTER_API_KEY"
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 

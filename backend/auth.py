@@ -32,6 +32,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from database import SessionLocal, AdminUser, AdminSession, utcnow
+from deps import get_db  # tekil DB oturumu dependency'si (deps kanonik kaynak)
 
 COOKIE_NAME = "auzef_admin_session"
 SESSION_HOURS = 12
@@ -115,15 +116,6 @@ def delete_session(db: Session, token: str) -> None:
 
 
 # ── FastAPI router ────────────────────────────────────────────────────────────
-
-def get_db():
-    # main.get_db ile aynı; buradan import etmek döngüsel bağımlılık yaratırdı.
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 def current_user(
     session_token: str = Cookie(default="", alias=COOKIE_NAME),
