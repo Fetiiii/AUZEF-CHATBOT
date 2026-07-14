@@ -68,18 +68,18 @@ def test_llm_settings_roundtrip_and_masking(sup):
 
 def test_db_key_overrides_env_for_llm_provider(sup, db, monkeypatch):
     """get_llm_provider: DB anahtarı .env'i ezer ve değişince istemci yenilenir."""
-    import main
+    import deps
     monkeypatch.setenv("LLM_PROVIDER", "openrouter")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-envkey-0123456789")
 
-    p_env = main.get_llm_provider(db)
+    p_env = deps.get_llm_provider(db)
     assert p_env is not None
 
     sup.put("/api/settings/llm", json={"openrouter_api_key": "sk-or-v1-dbkey-0123456789xx"})
-    p_db = main.get_llm_provider(db)
+    p_db = deps.get_llm_provider(db)
     assert p_db is not None and p_db is not p_env      # anahtar değişti → yeni istemci
 
     # DB anahtarı silinince env'e dönülür
     sup.put("/api/settings/llm", json={"openrouter_api_key": ""})
-    p_back = main.get_llm_provider(db)
+    p_back = deps.get_llm_provider(db)
     assert p_back is not None and p_back is not p_db

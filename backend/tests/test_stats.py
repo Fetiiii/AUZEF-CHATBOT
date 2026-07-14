@@ -63,15 +63,15 @@ def _oracle(db, start, end):
     ("", ""), ("2026-06-10", ""), ("", "2026-06-20"), ("2026-06-05", "2026-07-01"),
 ])
 def test_sql_aggregation_matches_python_oracle(db, start, end):
-    import main
+    from routers.stats import get_conversation_stats
     _seed(db)
-    assert main.get_conversation_stats(start=start, end=end, db=db) == _oracle(db, start, end)
+    assert get_conversation_stats(start=start, end=end, db=db) == _oracle(db, start, end)
 
 
 def test_invalid_dates_rejected(db):
-    import main
+    from routers.stats import get_conversation_stats
     from fastapi import HTTPException
     with pytest.raises(HTTPException):
-        main.get_conversation_stats(start="dun", end="", db=db)
+        get_conversation_stats(start="dun", end="", db=db)
     with pytest.raises(HTTPException):
-        main.get_conversation_stats(start="", end="31-12-2026", db=db)
+        get_conversation_stats(start="", end="31-12-2026", db=db)

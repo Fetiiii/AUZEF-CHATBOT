@@ -61,7 +61,7 @@ def test_mask_key_never_leaks_middle():
 
 
 def test_csv_safe_neutralizes_formulas():
-    from main import _csv_safe
+    from csv_utils import csv_safe as _csv_safe
     assert _csv_safe("=HYPERLINK(1)") == "'=HYPERLINK(1)"
     assert _csv_safe("+SUM(A1)") == "'+SUM(A1)"
     assert _csv_safe("normal mesaj") == "normal mesaj"
@@ -69,7 +69,7 @@ def test_csv_safe_neutralizes_formulas():
 
 
 def test_is_date_query():
-    from main import is_date_query
+    from answer_pipeline import is_date_query
     assert is_date_query("final sınavı ne zaman")
     assert is_date_query("bütünleme tarihi")
     assert not is_date_query("şifremi unuttum")
