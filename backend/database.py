@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from sqlalchemy import Column, BigInteger, Text, SmallInteger, DateTime, ForeignKey, String, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -6,6 +7,13 @@ from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def utcnow() -> datetime:
+    """NAIVE UTC 'şimdi'. DB kolonları TIMESTAMP WITHOUT TIME ZONE olduğundan
+    tz-aware datetime karışıklık yaratır (karşılaştırma/saklama). datetime.utcnow()
+    Python'da deprecated olduğu için merkezî yardımcı: aware üret, tz'i düşür."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:password123@localhost:5432/auzef_bot")
 

@@ -5,7 +5,7 @@ import csv
 import io
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
-from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar, Conversation, ConversationMessage
+from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar, Conversation, ConversationMessage, utcnow
 from auth import router as auth_router, AdminAuthMiddleware
 from settings_api import router as settings_router, OPENROUTER_KEY_CONFIG
 from providers import MeiliSearchProvider, QdrantProvider
@@ -14,6 +14,7 @@ from calendar_utils import format_calendar_answer, match_calendar_entry
 from pydantic import BaseModel
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 import hmac
 import os
 import logging
@@ -28,7 +29,21 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="AUZEF Akıllı Asistan API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Başlangıç: Qdrant koleksiyonunu hazırla (on_event yerine lifespan —
+    # on_event Starlette'te deprecated). QDRANT_PROVIDER modül global'i,
+    # lifespan çalıştığında (import sonrası) tanımlı olur.
+    try:
+        QDRANT_PROVIDER.ensure_collection()
+        logger.info("Qdrant koleksiyonu hazır.")
+    except Exception as e:
+        logger.error(f"Qdrant collection init hatası: {e}")
+    yield
+
+
+app = FastAPI(title="AUZEF Akıllı Asistan API", lifespan=lifespan)
 
 # allow_credentials=False: widget cookie kullanmaz; "*" + credentials birleşimi
 # zaten spec'e aykırıdır (tarayıcı reddeder) ve ileride cookie tabanlı admin
@@ -141,15 +156,6 @@ def health(db: Session = Depends(get_db)):
     'unhealthy' yapardı (ve frontend hiç başlamazdı)."""
     db.execute(text("SELECT 1"))
     return {"ok": True}
-
-
-@app.on_event("startup")
-async def startup_event():
-    try:
-        QDRANT_PROVIDER.ensure_collection()
-        logger.info("Qdrant koleksiyonu hazır.")
-    except Exception as e:
-        logger.error(f"Qdrant collection init hatası: {e}")
 
 
 # Circuit Breaker Durumu
@@ -606,7 +612,7 @@ def rate_message(message_id: int, body: RatingRequest, db: Session = Depends(get
     if not _token_matches(conv, body.conversation_token):
         raise HTTPException(status_code=403, detail="Bu konuşma için yetkiniz yok.")
     msg.rating = body.rating
-    msg.rating_at = datetime.utcnow()
+    msg.rating_at = utcnow()
     db.commit()
     return {"ok": True}
 
@@ -1143,11 +1149,9 @@ def export_qna(db: Session = Depends(get_db)):
 
 @app.get("/api/stats")
 def get_stats(db: Session = Depends(get_db)):
-    from datetime import datetime, timedelta
-
     # Turkey is UTC+3 with no DST (since 2016)
     ISTANBUL_OFFSET = timedelta(hours=3)
-    now_utc = datetime.utcnow()
+    now_utc = utcnow()
     now_istanbul = now_utc + ISTANBUL_OFFSET
 
     # Midnight in Istanbul time, converted back to UTC for DB comparison

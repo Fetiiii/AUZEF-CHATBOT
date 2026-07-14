@@ -20,7 +20,7 @@ import hashlib
 import os
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import bcrypt
@@ -31,7 +31,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from database import SessionLocal, AdminUser, AdminSession
+from database import SessionLocal, AdminUser, AdminSession, utcnow
 
 COOKIE_NAME = "auzef_admin_session"
 SESSION_HOURS = 12
@@ -80,12 +80,12 @@ def _token_hash(token: str) -> str:
 def create_session(db: Session, user: AdminUser) -> str:
     """Yeni oturum açar, ham token'ı döner (yalnızca cookie'ye yazılır)."""
     # Süresi geçmiş oturumları fırsattan istifade temizle (tablo şişmesin).
-    db.query(AdminSession).filter(AdminSession.expires_at < datetime.utcnow()).delete()
+    db.query(AdminSession).filter(AdminSession.expires_at < utcnow()).delete()
     token = secrets.token_urlsafe(32)
     db.add(AdminSession(
         token_hash=_token_hash(token),
         user_id=user.id,
-        expires_at=datetime.utcnow() + timedelta(hours=SESSION_HOURS),
+        expires_at=utcnow() + timedelta(hours=SESSION_HOURS),
     ))
     db.commit()
     return token
@@ -99,7 +99,7 @@ def get_session_user(db: Session, token: str) -> Optional[AdminUser]:
         db.query(AdminSession)
         .filter(
             AdminSession.token_hash == _token_hash(token),
-            AdminSession.expires_at > datetime.utcnow(),
+            AdminSession.expires_at > utcnow(),
         )
         .first()
     )

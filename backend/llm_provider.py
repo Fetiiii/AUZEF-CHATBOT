@@ -116,19 +116,26 @@ class BaseLLMProvider(ABC):
         except Exception:
             return _regex_split(message)
 
+    def ask(self, question: str, context_list: list) -> Optional[str]:
+        """Aday havuzundan birebir seçim. Tüm sağlayıcılarda aynı: prompt kur,
+        tamamla, dönen numarayı çözümle. Sağlayıcıya özgü olan tek şey
+        ``_complete``tir."""
+        system, user = self._build_prompt(question, context_list)
+        raw = self._complete(system, user, max_tokens=5)
+        return self._parse_selection(raw, context_list)
+
     @abstractmethod
     def _complete(self, system: str, user: str, max_tokens: int = 5) -> str:
         """Sağlayıcıya özgü ham metin tamamlama çağrısı."""
         pass
 
-    @abstractmethod
-    def ask(self, question: str, context_list: list) -> Optional[str]:
-        pass
 
-
-class OpenAIProvider(BaseLLMProvider):
-    def __init__(self, model: str = "gpt-4o-mini"):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+class _OpenAICompatibleProvider(BaseLLMProvider):
+    """OpenAI Chat Completions uyumlu sağlayıcılar için ortak taban.
+    OpenAI ve OpenRouter YALNIZCA base_url + varsayılan model ile ayrışır;
+    istek gövdesi birebir aynıdır."""
+    def __init__(self, model: str, api_key: Optional[str], base_url: Optional[str] = None):
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
 
     def _complete(self, system: str, user: str, max_tokens: int = 5) -> str:
@@ -143,10 +150,21 @@ class OpenAIProvider(BaseLLMProvider):
         )
         return response.choices[0].message.content
 
-    def ask(self, question: str, context_list: list) -> Optional[str]:
-        system, user = self._build_prompt(question, context_list)
-        raw = self._complete(system, user, max_tokens=5)
-        return self._parse_selection(raw, context_list)
+
+class OpenAIProvider(_OpenAICompatibleProvider):
+    def __init__(self, model: str = "gpt-4o-mini"):
+        super().__init__(model=model, api_key=os.getenv("OPENAI_API_KEY"))
+
+
+class OpenRouterProvider(_OpenAICompatibleProvider):
+    def __init__(self, model: str = "openai/gpt-4o-mini", api_key: Optional[str] = None):
+        # api_key parametresi ayarlar sayfasından (DB) gelen anahtar için;
+        # verilmezse eski davranış (.env) korunur.
+        super().__init__(
+            model=model,
+            api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
+            base_url="https://openrouter.ai/api/v1",
+        )
 
 
 class GeminiProvider(BaseLLMProvider):
@@ -166,39 +184,6 @@ class GeminiProvider(BaseLLMProvider):
             ),
         )
         return response.text
-
-    def ask(self, question: str, context_list: list) -> Optional[str]:
-        system, user = self._build_prompt(question, context_list)
-        raw = self._complete(system, user, max_tokens=5)
-        return self._parse_selection(raw, context_list)
-
-
-class OpenRouterProvider(BaseLLMProvider):
-    def __init__(self, model: str = "openai/gpt-4o-mini", api_key: Optional[str] = None):
-        # api_key parametresi ayarlar sayfasından (DB) gelen anahtar için;
-        # verilmezse eski davranış (.env) korunur.
-        self.client = OpenAI(
-            api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
-            base_url="https://openrouter.ai/api/v1"
-        )
-        self.model = model
-
-    def _complete(self, system: str, user: str, max_tokens: int = 5) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user}
-            ],
-            max_tokens=max_tokens,
-            temperature=0,
-        )
-        return response.choices[0].message.content
-
-    def ask(self, question: str, context_list: list) -> Optional[str]:
-        system, user = self._build_prompt(question, context_list)
-        raw = self._complete(system, user, max_tokens=5)
-        return self._parse_selection(raw, context_list)
 
 
 class LLMFactory:
