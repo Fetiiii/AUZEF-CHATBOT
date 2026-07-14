@@ -53,22 +53,18 @@ def sync_postgres_to_qdrant():
         db.close()
         return
 
-    points = []
-    for row in view_data:
-        qna_id = row['id']
-        main_question = row['question']
-        answer_text = row['answer']
-
-        print(f"⏳ İşleniyor (ID: {qna_id}): {str(main_question)[:60]}...")
-
-        vector = model.encode(main_question).tolist()
-        points.append(
-            PointStruct(
-                id=qna_id,
-                vector=vector,
-                payload={"question": main_question, "answer": answer_text},
-            )
+    # Tüm soruları TEK batch'te encode et (satır satır encode'dan çok daha hızlı).
+    questions = [row['question'] for row in view_data]
+    print(f"⏳ {len(questions)} soru toplu encode ediliyor...")
+    vectors = model.encode(questions)
+    points = [
+        PointStruct(
+            id=row['id'],
+            vector=vec.tolist() if hasattr(vec, "tolist") else list(vec),
+            payload={"question": row['question'], "answer": row['answer']},
         )
+        for row, vec in zip(view_data, vectors)
+    ]
 
     if points:
         qdrant_client.upsert(collection_name=COLLECTION_NAME, points=points)

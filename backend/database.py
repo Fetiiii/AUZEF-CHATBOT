@@ -28,7 +28,11 @@ class QnA(Base):
     id = Column(BigInteger, primary_key=True, index=True)
     question_text = Column(Text, nullable=False)
     answer_text = Column(Text, nullable=False)
-    status = Column(SmallInteger, default=1)
+    # server_default: ham SQL INSERT (CSV import) status vermezse DB 1 atar.
+    # Eskiden yalnızca client-side default=1 vardı → raw INSERT status'u NULL
+    # bırakıyor, status!=1 filtresi de bu kayıtları arama indeksinden DÜŞÜRÜYORDU
+    # (CSV ile eklenen QnA'lar sessizce aranamaz oluyordu).
+    status = Column(SmallInteger, nullable=False, server_default="1", default=1)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -182,6 +186,10 @@ def init_db():
         # yazma fail-closed reddedilir (tarihsel veri okunabilir, değiştirilemez).
         "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS client_token VARCHAR(64)",
         "CREATE INDEX IF NOT EXISTS ix_conversations_client_token ON conversations (client_token)",
+        # qna.status: ham INSERT (CSV import) için DB default'u ata ve eski
+        # NULL kalmış (bu yüzden aranamaz olmuş) kayıtları aktife çek.
+        "ALTER TABLE qna ALTER COLUMN status SET DEFAULT 1",
+        "UPDATE qna SET status = 1 WHERE status IS NULL",
     ]
 
     with engine.connect() as conn:

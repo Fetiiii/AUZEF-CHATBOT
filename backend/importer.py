@@ -16,7 +16,7 @@ def import_real_data(file_path: str):
     for _, row in df.iterrows():
         # 1. Ana Soru ve Cevabı Kaydet (QnA)
         qna_result = db.execute(
-            text("INSERT INTO qna (question_text, answer_text) VALUES (:q, :a) RETURNING id"),
+            text("INSERT INTO qna (question_text, answer_text, status) VALUES (:q, :a, 1) RETURNING id"),
             {"q": row['question'], "a": row['answer']}
         ).fetchone()
         qna_id = qna_result[0]

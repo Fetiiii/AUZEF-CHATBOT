@@ -93,6 +93,26 @@ class QdrantProvider(BaseSearchProvider):
             points=[point]
         )
 
+    def upsert_points(self, items: list):
+        """Toplu upsert. items: [(id, question, answer), ...].
+
+        Soruların TAMAMINI tek batch'te encode eder ve tek upsert çağrısıyla
+        yükler — CSV import'ta satır satır encode + HTTP yerine (500 kayıt =
+        500 encode/istek) tek encode + tek istek (~10x+ hızlı)."""
+        if not items:
+            return
+        questions = [q for (_id, q, _a) in items]
+        vectors = self.model.encode(questions)  # 2B array: tek çağrıda toplu encode
+        points = [
+            PointStruct(
+                id=_id,
+                vector=vec.tolist() if hasattr(vec, "tolist") else list(vec),
+                payload={"question": q, "answer": a},
+            )
+            for (_id, q, a), vec in zip(items, vectors)
+        ]
+        self.client.upsert(collection_name=self.collection_name, points=points)
+
     def delete_point(self, point_id: int):
         self.client.delete(
             collection_name=self.collection_name,

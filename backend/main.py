@@ -927,6 +927,45 @@ def remove_from_providers(qna_id: int):
     except Exception as e:
         logger.error(f"Qdrant delete hatası: {e}")
 
+
+def sync_providers_batch(db: Session, qna_ids: list):
+    """Birden fazla QnA'yı TEK turda indeksler: tek view sorgusu + tek Meili
+    add_documents + tek Qdrant batch upsert. CSV import / toplu güncellemede
+    satır satır sync (N view sorgusu + N encode + N HTTP) yerine kullanılır.
+    Pasif/silinmiş (status != 1) istenen id'ler indekslerden düşülür."""
+    if not qna_ids:
+        return
+    rows = db.execute(
+        text("SELECT * FROM qna_search_view WHERE id = ANY(:ids)"),
+        {"ids": list(qna_ids)},
+    ).mappings().all()
+
+    active_docs = []
+    active_ids = set()
+    for row in rows:
+        d = dict(row)
+        if d.get("status") == 1:
+            d.pop("status", None)
+            active_docs.append(d)
+            active_ids.add(d["id"])
+
+    if active_docs:
+        try:
+            MEILI_PROVIDER.add_documents(active_docs)
+        except Exception as e:
+            logger.error(f"MeiliSearch batch sync hatası: {e}")
+        try:
+            QDRANT_PROVIDER.upsert_points(
+                [(d["id"], d["question"], d["answer"]) for d in active_docs]
+            )
+        except Exception as e:
+            logger.error(f"Qdrant batch sync hatası: {e}")
+
+    # İstenen ama aktif olmayan (pasif/silinmiş) kayıtlar indeksten düşülür.
+    for qna_id in qna_ids:
+        if qna_id not in active_ids:
+            remove_from_providers(qna_id)
+
 @app.get("/api/qna")
 def list_qna(
     skip: int = 0,
@@ -988,10 +1027,9 @@ def bulk_update_qna(items: List[QnABulkUpdateItem], db: Session = Depends(get_db
             row.status = item.status
         updated.append(row.id)
     db.commit()
-    
-    # Sync all updated records
-    for qna_id in updated:
-        sync_providers(db, qna_id)
+
+    # Toplu sync: tek turda indeksle (satır satır değil).
+    sync_providers_batch(db, updated)
 
     return {"updated_ids": updated, "count": len(updated)}
 
@@ -1069,7 +1107,7 @@ def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
             continue
 
         result = db.execute(
-            text("INSERT INTO qna (question_text, answer_text) VALUES (:q, :a) RETURNING id"),
+            text("INSERT INTO qna (question_text, answer_text, status) VALUES (:q, :a, 1) RETURNING id"),
             {"q": question, "a": answer}
         ).fetchone()
         qna_id = result[0]
@@ -1097,8 +1135,8 @@ def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
 
     db.commit()
 
-    for qna_id in inserted_ids:
-        sync_providers(db, qna_id)
+    # Toplu sync: tek encode + tek Meili + tek Qdrant upsert (satır satır değil).
+    sync_providers_batch(db, inserted_ids)
 
     logger.info(f"CSV import tamamlandı: {len(inserted_ids)} kayıt eklendi.")
     return {"imported": len(inserted_ids)}

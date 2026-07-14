@@ -65,21 +65,25 @@ def pytest_configure(config):
     class FakeMeili:
         hits = []          # testler doldurur: [{id,question,answer,score,source}]
         suggestions = []
+        add_calls = []     # her add_documents çağrısında eklenen doküman sayısı
 
         def __init__(self, *a, **k): ...
         def search(self, q, limit=3): return list(self.hits)[:limit]
         def get_suggestions(self, q, limit=3): return list(self.suggestions)[:limit]
-        def add_documents(self, docs): ...
+        def add_documents(self, docs): FakeMeili.add_calls.append(len(docs))
         def update_documents(self, docs): ...
         def delete_document(self, doc_id): ...
 
     class FakeQdrant:
         hits = []
+        batch_calls = []   # her upsert_points çağrısındaki öğe sayısı (batch kanıtı)
+        single_calls = 0   # upsert_point (tekil) çağrı sayısı
 
         def __init__(self, *a, **k): ...
         def ensure_collection(self): ...
         def search(self, q, limit=3): return list(self.hits)[:limit]
-        def upsert_point(self, *a, **k): ...
+        def upsert_point(self, *a, **k): FakeQdrant.single_calls += 1
+        def upsert_points(self, items): FakeQdrant.batch_calls.append(len(items))
         def delete_point(self, *a, **k): ...
 
     fake.MeiliSearchProvider = FakeMeili
@@ -118,11 +122,14 @@ def clean_tables():
             RESTART IDENTITY CASCADE
         """))
         conn.commit()
-    # Sahte arama sonuçlarını da sıfırla
+    # Sahte arama sonuçlarını + çağrı sayaçlarını sıfırla
     import providers
     providers.FakeMeili.hits = []
     providers.FakeMeili.suggestions = []
+    providers.FakeMeili.add_calls = []
     providers.FakeQdrant.hits = []
+    providers.FakeQdrant.batch_calls = []
+    providers.FakeQdrant.single_calls = 0
     yield
 
 
