@@ -74,7 +74,7 @@ def test_last_super_admin_protected(trio, login):
 
 
 def test_unknown_role_in_db_is_fail_closed(make_user, login, db):
-    from database import AdminUser
+    from core.database import AdminUser
     u = make_user("garip@iu.tr", role="admin")
     c = login("garip@iu.tr")
     db.query(AdminUser).filter(AdminUser.id == u.id).update({"role": "bozuk_rol"})

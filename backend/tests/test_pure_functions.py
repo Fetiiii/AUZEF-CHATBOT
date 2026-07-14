@@ -1,7 +1,7 @@
 """Saf fonksiyonlar: DB/ağ gerektirmez."""
-import calendar_utils
-import llm_provider
-from settings_api import mask_key
+import services.calendar_utils as calendar_utils
+import services.llm_provider as llm_provider
+from admin.settings_api import mask_key
 
 
 class _P(llm_provider.BaseLLMProvider):
@@ -61,7 +61,7 @@ def test_mask_key_never_leaks_middle():
 
 
 def test_csv_safe_neutralizes_formulas():
-    from csv_utils import csv_safe as _csv_safe
+    from services.csv_utils import csv_safe as _csv_safe
     assert _csv_safe("=HYPERLINK(1)") == "'=HYPERLINK(1)"
     assert _csv_safe("+SUM(A1)") == "'+SUM(A1)"
     assert _csv_safe("normal mesaj") == "normal mesaj"
@@ -69,7 +69,7 @@ def test_csv_safe_neutralizes_formulas():
 
 
 def test_is_date_query():
-    from answer_pipeline import is_date_query
+    from services.answer_pipeline import is_date_query
     assert is_date_query("final sınavı ne zaman")
     assert is_date_query("bütünleme tarihi")
     assert not is_date_query("şifremi unuttum")

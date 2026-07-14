@@ -68,10 +68,10 @@ Sistem ilk kez ayağa kalktığında veritabanı tabloları **otomatik oluşturu
 
 ```bash
 # 1. CSV verisini PostgreSQL + MeiliSearch'e aktar
-docker compose exec backend python importer.py
+docker compose exec backend python -m scripts.importer
 
 # 2. Vektörleri Qdrant'a yükle (semantic search için)
-docker compose exec backend python vector_sync.py
+docker compose exec backend python -m scripts.vector_sync
 ```
 
 ---
@@ -161,13 +161,14 @@ docker compose restart backend
 ```
 AUZEF CHATBOT/
 ├── backend/              # FastAPI uygulaması
-│   ├── main.py           # API endpoint'leri
-│   ├── database.py       # SQLAlchemy modeller
-│   ├── providers.py      # MeiliSearch + Qdrant
-│   ├── llm_provider.py   # LLM sağlayıcıları
-│   ├── importer.py       # CSV → DB aktarımı
-│   ├── vector_sync.py    # DB → Qdrant vektör senkronizasyonu
-│   ├── init_system.py    # İlk kurulum
+│   ├── main.py           # Uygulama montajı (uvicorn main:app)
+│   ├── core/             # Altyapı: database.py (modeller), deps.py (DB/sağlayıcı/LLM)
+│   ├── services/         # İş mantığı: answer_pipeline, providers (Meili+Qdrant),
+│   │                     #   llm_provider, calendar_utils, csv_utils
+│   ├── admin/            # Oturum + ayarlar: auth.py, settings_api.py
+│   ├── routers/          # API uçları: chat, conversations, qna, stats, calendar
+│   ├── scripts/          # Tek seferlik/CLI: importer, vector_sync, init_system, create_admin
+│   ├── tests/            # pytest paketi
 │   └── Dockerfile
 ├── chatbot-web/          # Angular 19 frontend
 │   ├── src/

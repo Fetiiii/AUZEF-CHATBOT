@@ -9,10 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 
-from database import QnA
-from deps import get_db, actor_email as _actor_email, MAX_IMPORT_BYTES, MEILI_PROVIDER, QDRANT_PROVIDER
-from csv_utils import stream_csv as _stream_csv
-from auth import current_user
+from core.database import QnA
+from core.deps import get_db, actor_email as _actor_email, MAX_IMPORT_BYTES, MEILI_PROVIDER, QDRANT_PROVIDER
+from services.csv_utils import stream_csv as _stream_csv
+from admin.auth import current_user
 
 logger = logging.getLogger("auzef")
 router = APIRouter()

@@ -11,9 +11,9 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from database import SessionLocal, SystemConfig, QueryLog, utcnow
-from providers import MeiliSearchProvider, QdrantProvider
-from llm_provider import LLMFactory, OpenRouterProvider
+from core.database import SessionLocal, SystemConfig, QueryLog, utcnow
+from services.providers import MeiliSearchProvider, QdrantProvider
+from services.llm_provider import LLMFactory, OpenRouterProvider
 
 logger = logging.getLogger("auzef")
 

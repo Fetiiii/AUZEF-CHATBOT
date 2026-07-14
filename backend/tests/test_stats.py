@@ -7,7 +7,7 @@ import pytest
 
 def _seed(db, n=120):
     """Deterministik ama karışık veri: talep durumları, puanlar, timestamp çakışmaları."""
-    from database import Conversation, ConversationMessage
+    from core.database import Conversation, ConversationMessage
     rnd = random.Random(42)
     base = datetime(2026, 6, 1, 10, 0, 0)
     statuses = ["not_offered", "declined", "redirected"]
@@ -27,7 +27,7 @@ def _seed(db, n=120):
 
 def _oracle(db, start, end):
     """Eski (satırları Python'a çekip sayan) implementasyonun birebir kopyası."""
-    from database import Conversation, ConversationMessage
+    from core.database import Conversation, ConversationMessage
     ISTANBUL_OFFSET = timedelta(hours=3)
     q = db.query(Conversation)
     if start:

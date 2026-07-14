@@ -1,4 +1,4 @@
-from database import init_db, SessionLocal, SystemConfig
+from core.database import init_db, SessionLocal, SystemConfig
 from sqlalchemy import text
 
 def setup():

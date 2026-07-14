@@ -8,9 +8,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import Conversation, ConversationMessage, utcnow
-from deps import get_db, log_query as _log_query, MEILI_PROVIDER, MAX_MESSAGE_LEN
-from answer_pipeline import answer_question as _answer_question
+from core.database import Conversation, ConversationMessage, utcnow
+from core.deps import get_db, log_query as _log_query, MEILI_PROVIDER, MAX_MESSAGE_LEN
+from services.answer_pipeline import answer_question as _answer_question
 
 logger = logging.getLogger("auzef")
 router = APIRouter()

@@ -12,9 +12,9 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from database import AcademicCalendar
-from calendar_utils import format_calendar_answer, match_calendar_entry
-from deps import get_llm_provider, is_llm_enabled, meili_search_safe, QDRANT_PROVIDER
+from core.database import AcademicCalendar
+from services.calendar_utils import format_calendar_answer, match_calendar_entry
+from core.deps import get_llm_provider, is_llm_enabled, meili_search_safe, QDRANT_PROVIDER
 
 logger = logging.getLogger("auzef")
 

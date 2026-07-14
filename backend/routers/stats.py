@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database import Conversation, utcnow
-from deps import get_db
+from core.database import Conversation, utcnow
+from core.deps import get_db
 
 router = APIRouter()
 

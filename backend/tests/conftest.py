@@ -90,10 +90,10 @@ def pytest_configure(config):
     fake.QdrantProvider = FakeQdrant
     fake.FakeMeili = FakeMeili   # testlerin erişimi için
     fake.FakeQdrant = FakeQdrant
-    sys.modules["providers"] = fake
+    sys.modules["services.providers"] = fake
 
     # 3) Şemayı kur
-    import database
+    import core.database as database
     database.init_db()
 
 
@@ -101,7 +101,7 @@ def pytest_configure(config):
 
 @pytest.fixture()
 def db():
-    from database import SessionLocal
+    from core.database import SessionLocal
     s = SessionLocal()
     try:
         yield s
@@ -112,7 +112,7 @@ def db():
 @pytest.fixture(autouse=True)
 def clean_tables():
     """Her test temiz tablolarla başlar (id sayaçları dahil)."""
-    from database import engine
+    from core.database import engine
     from sqlalchemy import text
     with engine.connect() as conn:
         conn.execute(text("""
@@ -123,7 +123,7 @@ def clean_tables():
         """))
         conn.commit()
     # Sahte arama sonuçlarını + çağrı sayaçlarını sıfırla
-    import providers
+    import services.providers as providers
     providers.FakeMeili.hits = []
     providers.FakeMeili.suggestions = []
     providers.FakeMeili.add_calls = []
@@ -148,8 +148,8 @@ def client(app):
 @pytest.fixture()
 def make_user(db):
     """Kullanıcı oluşturucu: make_user('x@iu.tr', role='admin', password=...)"""
-    from auth import hash_password
-    from database import AdminUser
+    from admin.auth import hash_password
+    from core.database import AdminUser
 
     def _make(email, role="admin", password="parola-1234", active=True, name=None):
         u = AdminUser(email=email, password_hash=hash_password(password),

@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from sqlalchemy import text
-from database import SessionLocal
+from core.database import SessionLocal
 from dotenv import load_dotenv
 
 load_dotenv()

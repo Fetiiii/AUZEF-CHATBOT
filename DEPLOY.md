@@ -79,15 +79,15 @@ durum içindir:
 
 ```bash
 # İlk super_admin'i oluştur (parola gizli sorulur, en az 10 karakter)
-docker exec -it auzef_backend python create_admin.py ad.soyad@istanbul.edu.tr --name "Ad Soyad"
+docker exec -it auzef_backend python -m scripts.create_admin ad.soyad@istanbul.edu.tr --name "Ad Soyad"
 # (CLI'dan yeni kullanıcının varsayılan rolü super_admin'dir)
 
 # Var olan kullanıcıyı super_admin'e yükselt — parola sorulduğunda BOŞ
 # bırakırsanız parola DEĞİŞMEZ:
-docker exec -it auzef_backend python create_admin.py ad.soyad@istanbul.edu.tr --role super_admin
+docker exec -it auzef_backend python -m scripts.create_admin ad.soyad@istanbul.edu.tr --role super_admin
 
 # Acil durum: erişimi ANINDA kapat (açık oturumları da siler)
-docker exec -it auzef_backend python create_admin.py ad.soyad@istanbul.edu.tr --deactivate
+docker exec -it auzef_backend python -m scripts.create_admin ad.soyad@istanbul.edu.tr --deactivate
 ```
 
 **Rol sistemi migration notu (tek seferlik):** rol sisteminden önce açılmış
@@ -171,7 +171,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 
 Yerel `.env`'e `ADMIN_AUTH_ENFORCED=false` ve `ADMIN_COOKIE_SECURE=false`
 eklemeyi unutmayın (ya da kilidi test etmek için `ENFORCED=true` bırakıp
-`create_admin.py` ile yerel kullanıcı oluşturun).
+`python -m scripts.create_admin` ile yerel kullanıcı oluşturun).
 
 ---
 

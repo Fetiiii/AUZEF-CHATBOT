@@ -27,7 +27,7 @@ def test_qna_export_roundtrip_columns(make_user, login):
 
 
 def test_calendar_export_comma_delimited(make_user, login, db):
-    from database import AcademicCalendar
+    from core.database import AcademicCalendar
     db.add(AcademicCalendar(period="Güz", event="Vize", start_date="01.11.2025", end_date="05.11.2025"))
     db.commit()
     make_user("editor@iu.tr", role="editor")
@@ -42,7 +42,7 @@ def test_calendar_export_comma_delimited(make_user, login, db):
 
 
 def test_conversations_export_streams_and_neutralizes_formula(make_user, login, db):
-    from database import Conversation, ConversationMessage
+    from core.database import Conversation, ConversationMessage
     conv = Conversation(ip_address="10.0.0.5", talep_status="declined", client_token="t1")
     db.add(conv); db.flush()
     db.add(ConversationMessage(conversation_id=conv.id, role="user", content="normal soru"))
@@ -70,7 +70,7 @@ def test_conversations_export_requires_admin(make_user, login):
 
 def test_qna_export_chunking_handles_many_rows(make_user, login, db):
     """500'lük öbekleme sınırının ötesinde de tüm satırlar gelmeli."""
-    from database import QnA
+    from core.database import QnA
     db.bulk_save_objects([QnA(question_text=f"S{i}", answer_text=f"C{i}", status=1) for i in range(1100)])
     db.commit()
     make_user("editor@iu.tr", role="editor")

@@ -68,7 +68,7 @@ def test_llm_settings_roundtrip_and_masking(sup):
 
 def test_db_key_overrides_env_for_llm_provider(sup, db, monkeypatch):
     """get_llm_provider: DB anahtarı .env'i ezer ve değişince istemci yenilenir."""
-    import deps
+    import core.deps as deps
     monkeypatch.setenv("LLM_PROVIDER", "openrouter")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-envkey-0123456789")
 

@@ -15,9 +15,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from database import AdminSession, AdminUser, SystemConfig
-from deps import OPENROUTER_KEY_CONFIG, get_db
-from auth import (
+from core.database import AdminSession, AdminUser, SystemConfig
+from core.deps import OPENROUTER_KEY_CONFIG, get_db
+from admin.auth import (
     VALID_ROLES,
     current_user as _current_user,
     hash_password,

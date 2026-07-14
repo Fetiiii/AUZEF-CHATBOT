@@ -1,7 +1,7 @@
 """CSV import: batch provider sync (satır satır değil) + doğru satır işleme."""
 import io
 
-import providers
+import services.providers as providers
 
 
 def _csv(rows_text: str):

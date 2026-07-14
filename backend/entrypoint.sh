@@ -2,7 +2,7 @@
 set -e
 
 echo "⏳ Veritabanı tabloları kontrol ediliyor..."
-python -c "from init_system import setup; setup()"
+python -c "from scripts.init_system import setup; setup()"
 
 echo "🚀 Backend başlatılıyor..."
 # --workers 2: embedding modeli HER worker'a ayrı yüklenir (yüzlerce MB - GB);

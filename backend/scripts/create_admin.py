@@ -19,8 +19,8 @@ import argparse
 import getpass
 import sys
 
-from database import SessionLocal, AdminUser, AdminSession, init_db
-from auth import hash_password, VALID_ROLES
+from core.database import SessionLocal, AdminUser, AdminSession, init_db
+from admin.auth import hash_password, VALID_ROLES
 
 
 def _ask_password(optional: bool) -> str:

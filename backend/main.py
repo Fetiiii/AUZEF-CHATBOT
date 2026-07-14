@@ -18,9 +18,9 @@ from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 load_dotenv()
 
-from deps import get_db, QDRANT_PROVIDER
-from auth import router as auth_router, AdminAuthMiddleware
-from settings_api import router as settings_router
+from core.deps import get_db, QDRANT_PROVIDER
+from admin.auth import router as auth_router, AdminAuthMiddleware
+from admin.settings_api import router as settings_router
 from routers.chat import router as chat_router
 from routers.conversations import router as conversations_router
 from routers.qna import router as qna_router

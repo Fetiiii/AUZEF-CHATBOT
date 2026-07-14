@@ -46,7 +46,7 @@ def test_fake_token_rejected(client, make_user):
 
 
 def test_deactivation_kills_live_session(login, make_user, db):
-    from database import AdminUser, AdminSession
+    from core.database import AdminUser, AdminSession
     u = make_user("a@iu.tr", role="editor")
     c = login("a@iu.tr")
     assert c.get("/api/qna").status_code == 200

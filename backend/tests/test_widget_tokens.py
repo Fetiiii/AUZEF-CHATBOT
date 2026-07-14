@@ -1,5 +1,5 @@
 """S5 — Konuşma sahiplik token'ları: widget akışı, hijack ve puan sahteciliği."""
-import providers
+import services.providers as providers
 
 
 def _seed_meili_hit():
@@ -72,7 +72,7 @@ def test_talep_requires_matching_token(client):
 
 def test_legacy_conversations_without_token_are_fail_closed(client, db):
     """Token kolonundan önceki (NULL) kayıtlar: okunur ama yazılamaz."""
-    from database import Conversation, ConversationMessage
+    from core.database import Conversation, ConversationMessage
     conv = Conversation(ip_address="10.0.0.1", client_token=None)
     db.add(conv); db.flush()
     msg = ConversationMessage(conversation_id=conv.id, role="bot", content="eski cevap")

@@ -9,9 +9,9 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from database import Conversation, ConversationMessage
-from deps import get_db
-from csv_utils import csv_safe as _csv_safe, stream_csv as _stream_csv
+from core.database import Conversation, ConversationMessage
+from core.deps import get_db
+from services.csv_utils import csv_safe as _csv_safe, stream_csv as _stream_csv
 
 logger = logging.getLogger("auzef")
 router = APIRouter()

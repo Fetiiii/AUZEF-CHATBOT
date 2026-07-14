@@ -31,8 +31,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from database import SessionLocal, AdminUser, AdminSession, utcnow
-from deps import get_db  # tekil DB oturumu dependency'si (deps kanonik kaynak)
+from core.database import SessionLocal, AdminUser, AdminSession, utcnow
+from core.deps import get_db  # tekil DB oturumu dependency'si (deps kanonik kaynak)
 
 COOKIE_NAME = "auzef_admin_session"
 SESSION_HOURS = 12
