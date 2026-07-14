@@ -1,9 +1,9 @@
 from fastapi import FastAPI, Query, Depends, HTTPException, Request, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 import csv
 import io
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import text, or_
 from database import SessionLocal, SystemConfig, QnA, QueryLog, AcademicCalendar, Conversation, ConversationMessage, utcnow
 from auth import router as auth_router, AdminAuthMiddleware
@@ -663,43 +663,80 @@ def _csv_safe(value) -> str:
     return s
 
 
-def _conversations_csv_response(db: Session, convs) -> Response:
-    """Verilen konuşmaları transkript (her mesaj bir satır) CSV olarak döner."""
-    conv_ids = [c.id for c in convs]
-    msgs_by_conv = {}
-    if conv_ids:
-        msgs = (
+def _stream_csv(header: list, rows_iter, filename: str, delimiter: str = ";") -> StreamingResponse:
+    """CSV'yi parça parça (streaming) döner — tüm dosyayı bellekte kurmaz.
+
+    rows_iter satır (liste) üreten bir generator'dır; DB'yi öbek öbek çekmesi
+    beklenir. Yaklaşık 32 KB biriktikçe bir parça yollanır. İlk parçada BOM
+    (\\ufeff) verilir ki Excel Türkçe karakterleri doğru göstersin."""
+    def _drain(buf: io.StringIO) -> str:
+        data = buf.getvalue()
+        buf.seek(0)
+        buf.truncate(0)
+        return data
+
+    def gen():
+        buf = io.StringIO()
+        writer = csv.writer(buf, delimiter=delimiter)
+        writer.writerow(header)
+        yield "﻿" + _drain(buf)   # BOM + başlık (Excel Türkçe)
+        for row in rows_iter:
+            writer.writerow(row)
+            if buf.tell() > 32768:
+                yield _drain(buf)
+        tail = _drain(buf)
+        if tail:
+            yield tail
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _conversation_rows(db: Session, conv_query):
+    """Konuşmaları öbek öbek (500'lük) çekip her mesaj için bir satır üretir.
+    Tüm transkripti aynı anda belleğe almaz; her öbekte o öbeğin mesajları
+    tek sorguyla çekilir (N+1 yok)."""
+    CHUNK = 500
+    ordered = conv_query.order_by(Conversation.started_at, Conversation.id)
+    offset = 0
+    while True:
+        convs = ordered.offset(offset).limit(CHUNK).all()
+        if not convs:
+            break
+        ids = [c.id for c in convs]
+        msgs_by_conv = {}
+        for m in (
             db.query(ConversationMessage)
-            .filter(ConversationMessage.conversation_id.in_(conv_ids))
+            .filter(ConversationMessage.conversation_id.in_(ids))
             .order_by(ConversationMessage.created_at, ConversationMessage.id)
             .all()
-        )
-        for m in msgs:
+        ):
             msgs_by_conv.setdefault(m.conversation_id, []).append(m)
+        for c in convs:
+            conv_date = c.started_at.isoformat() if c.started_at else ""
+            for m in msgs_by_conv.get(c.id, []):
+                yield [
+                    c.id, conv_date, c.ip_address or "", c.talep_status,
+                    m.created_at.isoformat() if m.created_at else "",
+                    m.role, _csv_safe(m.content), m.source or "",
+                    m.rating if m.rating is not None else "",
+                ]
+        offset += CHUNK
 
-    buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
-    writer.writerow([
+
+def _conversations_csv_response(db: Session, conv_query) -> StreamingResponse:
+    """Verilen konuşma SORGUSUNU transkript (her mesaj bir satır) CSV olarak
+    streaming döner. NOT: Artık materialize edilmiş liste değil, filtrelenmiş
+    bir Query bekler — böylece binlerce konuşma belleğe yüklenmez."""
+    header = [
         "konusma_id", "konusma_tarihi", "ip", "talep_durumu",
         "mesaj_tarihi", "rol", "icerik", "kaynak", "puan",
-    ])
-    for c in convs:
-        conv_date = c.started_at.isoformat() if c.started_at else ""
-        for m in msgs_by_conv.get(c.id, []):
-            writer.writerow([
-                c.id, conv_date, c.ip_address or "", c.talep_status,
-                m.created_at.isoformat() if m.created_at else "",
-                m.role, _csv_safe(m.content), m.source or "",
-                m.rating if m.rating is not None else "",
-            ])
-
-    data = buf.getvalue().encode("utf-8-sig")
-    logger.info(f"Konuşma export: {len(convs)} konuşma dışa aktarıldı.")
-    return Response(
-        content=data,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=konusmalar_export.csv"},
-    )
+    ]
+    logger.info("Konuşma export (streaming) başladı.")
+    return _stream_csv(header, _conversation_rows(db, conv_query), "konusmalar_export.csv")
 
 
 @app.get("/api/conversations")
@@ -779,8 +816,8 @@ def export_conversations(ids: str = "", start: str = "", end: str = "", db: Sess
     else:
         raise HTTPException(status_code=400, detail="En az bir filtre gerekli: ids ya da tarih aralığı.")
 
-    convs = q.order_by(Conversation.started_at).all()
-    return _conversations_csv_response(db, convs)
+    # Streaming: materialize etme, filtrelenmiş sorguyu ver (öbek öbek çekilir).
+    return _conversations_csv_response(db, q)
 
 
 class ConversationExportRequest(BaseModel):
@@ -793,13 +830,8 @@ def export_conversations_post(body: ConversationExportRequest, db: Session = Dep
     binlerce id üretebildiği için (URL sınırına takılmamak adına) POST kullanılır."""
     if not body.ids:
         raise HTTPException(status_code=400, detail="ids gerekli.")
-    convs = (
-        db.query(Conversation)
-        .filter(Conversation.id.in_(body.ids))
-        .order_by(Conversation.started_at)
-        .all()
-    )
-    return _conversations_csv_response(db, convs)
+    q = db.query(Conversation).filter(Conversation.id.in_(body.ids))
+    return _conversations_csv_response(db, q)
 
 
 @app.get("/api/conversations/ids")
@@ -1142,38 +1174,35 @@ def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     return {"imported": len(inserted_ids)}
 
 
+def _qna_rows(db: Session):
+    """QnA'ları öbek öbek (500'lük), tag/query'leri selectinload ile TEK
+    sorguda çekerek satırlar üretir (lazy-load N+1'i önlenir)."""
+    CHUNK = 500
+    offset = 0
+    while True:
+        rows = (
+            db.query(QnA)
+            .options(selectinload(QnA.tags), selectinload(QnA.queries))
+            .order_by(QnA.id)
+            .offset(offset).limit(CHUNK).all()
+        )
+        if not rows:
+            break
+        for r in rows:
+            queries = [q.query_text for q in r.queries[:20]]
+            queries += [""] * (20 - len(queries))  # 20 sütuna sabitle
+            yield [r.question_text, r.answer_text, ", ".join(t.name for t in r.tags)] + queries
+        offset += CHUNK
+
+
 @app.get("/api/qna/export")
 def export_qna(db: Session = Depends(get_db)):
-    """Tüm QnA verisini içe aktarma (import) formatında CSV olarak dışa aktarır.
-
-    Sütunlar import ile birebir aynıdır (question;answer;tags;query_1;...;query_20),
-    böylece dışa aktarılan dosya tekrar içe aktarılabilir (round-trip).
-    """
-    rows = db.query(QnA).order_by(QnA.id).all()
-
-    buf = io.StringIO()
-    fieldnames = ["question", "answer", "tags"] + [f"query_{i}" for i in range(1, 21)]
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, delimiter=";", extrasaction="ignore")
-    writer.writeheader()
-
-    for r in rows:
-        record = {
-            "question": r.question_text,
-            "answer": r.answer_text,
-            "tags": ", ".join(t.name for t in r.tags),
-        }
-        for i, query in enumerate(r.queries[:20], start=1):
-            record[f"query_{i}"] = query.query_text
-        writer.writerow(record)
-
-    # utf-8-sig (BOM) → Excel Türkçe karakterleri doğru gösterir; import BOM'u atlıyor.
-    data = buf.getvalue().encode("utf-8-sig")
-    logger.info(f"QnA export: {len(rows)} kayıt dışa aktarıldı.")
-    return Response(
-        content=data,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=qna_export.csv"},
-    )
+    """Tüm QnA verisini içe aktarma (import) formatında CSV olarak streaming
+    dışa aktarır. Sütunlar import ile birebir aynıdır
+    (question;answer;tags;query_1;...;query_20), böylece round-trip korunur."""
+    header = ["question", "answer", "tags"] + [f"query_{i}" for i in range(1, 21)]
+    logger.info("QnA export (streaming) başladı.")
+    return _stream_csv(header, _qna_rows(db), "qna_export.csv")
 
 
 # NOT: Eski /api/config/llm uçları kaldırıldı — LLM aç/kapa ve OpenRouter
@@ -1482,33 +1511,23 @@ def import_calendar_csv(file: UploadFile = File(...), db: Session = Depends(get_
     return {"imported": inserted}
 
 
+def _calendar_rows(db: Session):
+    CHUNK = 1000
+    offset = 0
+    while True:
+        rows = db.query(AcademicCalendar).order_by(AcademicCalendar.id).offset(offset).limit(CHUNK).all()
+        if not rows:
+            break
+        for r in rows:
+            yield [r.period, r.event, r.start_date, r.end_date]
+        offset += CHUNK
+
+
 @app.get("/api/academic-calendar/export")
 def export_calendar(db: Session = Depends(get_db)):
-    """Takvim verisini içe aktarma (import) formatında CSV olarak dışa aktarır.
-
-    Sütunlar import ile birebir aynıdır (Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi),
-    böylece dışa aktarılan dosya tekrar içe aktarılabilir (round-trip).
-    """
-    rows = db.query(AcademicCalendar).order_by(AcademicCalendar.id).all()
-
-    buf = io.StringIO()
-    fieldnames = ["Donem", "Etkinlik", "Baslangic_Tarihi", "Bitis_Tarihi"]
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, delimiter=",")
-    writer.writeheader()
-
-    for r in rows:
-        writer.writerow({
-            "Donem": r.period,
-            "Etkinlik": r.event,
-            "Baslangic_Tarihi": r.start_date,
-            "Bitis_Tarihi": r.end_date,
-        })
-
-    # utf-8-sig (BOM) → Excel Türkçe karakterleri doğru gösterir; import BOM'u atlıyor.
-    data = buf.getvalue().encode("utf-8-sig")
-    logger.info(f"Takvim export: {len(rows)} kayıt dışa aktarıldı.")
-    return Response(
-        content=data,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=akademik_takvim_export.csv"},
-    )
+    """Takvim verisini içe aktarma (import) formatında CSV olarak streaming
+    dışa aktarır. Sütunlar import ile birebir aynıdır
+    (Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi), round-trip korunur."""
+    header = ["Donem", "Etkinlik", "Baslangic_Tarihi", "Bitis_Tarihi"]
+    logger.info("Takvim export (streaming) başladı.")
+    return _stream_csv(header, _calendar_rows(db), "akademik_takvim_export.csv", delimiter=",")
