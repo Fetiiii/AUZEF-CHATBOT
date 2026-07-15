@@ -32,6 +32,10 @@ export interface LLMSettings {
     key_source: 'db' | 'env' | 'none';
 }
 
+export interface MaintenanceStatus {
+    on: boolean;
+}
+
 /** Ayarlar sayfası API'si — backend yalnızca super_admin'e izin verir. */
 @Injectable({ providedIn: 'root' })
 export class SettingsApiService {
@@ -57,5 +61,13 @@ export class SettingsApiService {
 
     updateLLM(body: { enabled?: boolean; openrouter_api_key?: string }): Observable<LLMSettings> {
         return this.http.put<LLMSettings>(`${this.base}/llm`, body);
+    }
+
+    getMaintenance(): Observable<MaintenanceStatus> {
+        return this.http.get<MaintenanceStatus>(`${this.base}/maintenance`);
+    }
+
+    updateMaintenance(on: boolean): Observable<MaintenanceStatus> {
+        return this.http.put<MaintenanceStatus>(`${this.base}/maintenance`, { on });
     }
 }

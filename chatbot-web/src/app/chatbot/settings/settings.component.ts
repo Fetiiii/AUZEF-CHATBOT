@@ -5,6 +5,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 
 import {
   LLMSettings,
+  MaintenanceStatus,
   SettingsApiService,
   SettingsUser
 } from '../../services/services/chatbot/settings-api.service';
@@ -13,7 +14,8 @@ import { AdminRole } from '../../services/models/chatbot/chatbot-auth.model';
 
 /**
  * Ayarlar sayfası — yalnızca super_admin (route guard + backend middleware).
- * İki bölüm: LLM ayarları (aç/kapa + OpenRouter anahtarı) ve kullanıcı yönetimi.
+ * Üç bölüm: bakım modu (widget'ı kapat/aç), LLM ayarları (aç/kapa +
+ * OpenRouter anahtarı) ve kullanıcı yönetimi.
  */
 @Component({
   standalone: true,
@@ -26,6 +28,10 @@ export class SettingsComponent implements OnInit {
   // ── Toast ──
   toastMessage = signal<string | null>(null);
   toastType = signal<'success' | 'error'>('success');
+
+  // ── Bakım modu ──
+  maintenance = signal<MaintenanceStatus | null>(null);
+  maintenanceSaving = signal(false);
 
   // ── LLM ──
   llm = signal<LLMSettings | null>(null);
@@ -54,6 +60,7 @@ export class SettingsComponent implements OnInit {
   ) {}
 
   ngOnInit(): void {
+    this.loadMaintenance();
     this.loadLLM();
     this.loadUsers();
   }
@@ -79,6 +86,39 @@ export class SettingsComponent implements OnInit {
 
   private errDetail(err: HttpErrorResponse, fallback: string): string {
     return err?.error?.detail || fallback;
+  }
+
+  // ── Bakım modu ──────────────────────────────────────
+
+  private loadMaintenance(): void {
+    this.api.getMaintenance().subscribe({
+      next: (s) => { this.maintenance.set(s); this.cdr.markForCheck(); },
+      error: () => this.showToast('Bakım modu durumu yüklenemedi.', 'error')
+    });
+  }
+
+  toggleMaintenance(): void {
+    const current = this.maintenance();
+    if (!current || this.maintenanceSaving()) return;
+    const next = !current.on;
+    // Açmak tüm öğrencileri etkiler — yanlışlıkla tek tıkla kapanmasın
+    if (next && !confirm('Bakım modu açılacak: widget TÜM öğrencilere kapanır ve "bakımdayız" mesajı gösterilir. Admin paneli açık kalır. Emin misiniz?')) {
+      return;
+    }
+    this.maintenanceSaving.set(true);
+    this.api.updateMaintenance(next).subscribe({
+      next: (s) => {
+        this.maintenance.set(s);
+        this.maintenanceSaving.set(false);
+        this.showToast(s.on
+          ? 'Bakım modu AÇILDI — widget öğrencilere kapalı.'
+          : 'Bakım modu kapatıldı — widget tekrar yayında.');
+      },
+      error: (err) => {
+        this.maintenanceSaving.set(false);
+        this.showToast(this.errDetail(err, 'Bakım modu değiştirilemedi.'), 'error');
+      }
+    });
   }
 
   // ── LLM ─────────────────────────────────────────────

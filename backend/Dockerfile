@@ -23,9 +23,13 @@ COPY . .
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
 # ─── Güvenlik: non-root kullanıcı ─────────────────────────────────────────────
+# /app/flags: bakım bayrağı volume'unun mount noktası. Named volume ilk
+# oluşturulduğunda sahiplik/izinler bu imaj dizininden kopyalanır; 0777
+# olmalı ki hem appuser (backend) hem nginx container'ı yazabilsin.
 RUN adduser --disabled-password --no-create-home --gecos "" appuser \
-    && mkdir -p /app/.cache/huggingface \
-    && chown -R appuser:appuser /app
+    && mkdir -p /app/.cache/huggingface /app/flags \
+    && chown -R appuser:appuser /app \
+    && chmod 0777 /app/flags
 
 USER appuser
 

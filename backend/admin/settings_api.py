@@ -4,11 +4,16 @@
 İçerik:
 - Kullanıcı yönetimi: listele / oluştur / güncelle (rol, ad, aktiflik, parola)
 - LLM ayarları: aç-kapa + OpenRouter API anahtarı (DB'de tutulur, .env'i ezer)
+- Bakım modu: widget'ı kapatan bayrak dosyası (nginx okur — bkz. nginx.conf)
 
 Kilitlenme korumaları:
 - Kullanıcı KENDİ rolünü/aktifliğini değiştiremez.
 - Son aktif super_admin pasifleştirilemez / rolü düşürülemez.
 """
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,6 +29,8 @@ from admin.auth import (
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+logger = logging.getLogger("auzef")
 
 # _current_user: istek sahibi (self-lockout korumaları için) — auth.current_user.
 
@@ -209,3 +216,45 @@ def update_llm_settings(body: LLMSettingsRequest, db: Session = Depends(get_db))
         _set_config(db, OPENROUTER_KEY_CONFIG, key)  # "" → sil, .env'e dön
     db.commit()
     return get_llm_settings(db)
+
+
+# ─────────────────────────────────────────────
+#  Bakım Modu (widget'ı kapat/aç)
+# ─────────────────────────────────────────────
+# Bayrak DB kaydı değil DOSYADIR: nginx (frontend container) aynı volume'u
+# mount eder ve dosya varken /widget-chat'e 503 döner. Böylece bakım modu
+# backend'den bağımsız yaşar — backend çökse bile bayrak çalışır ve acil
+# durumda bakim.sh aynı dosyayı SSH'dan yönetebilir. Panel açık kalır
+# (bayrak yalnızca widget ucunu kapatır), bakım panelden geri kapatılabilir.
+
+def _maintenance_flag() -> Path:
+    return Path(os.getenv("MAINTENANCE_FLAG_DIR", "/app/flags")) / "maintenance.flag"
+
+
+class MaintenanceRequest(BaseModel):
+    on: bool
+
+
+@router.get("/maintenance")
+def get_maintenance():
+    return {"on": _maintenance_flag().exists()}
+
+
+@router.put("/maintenance")
+def set_maintenance(body: MaintenanceRequest, me: Optional[AdminUser] = Depends(_current_user)):
+    flag = _maintenance_flag()
+    who = me.email if me else "bilinmiyor"
+    try:
+        if body.on:
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            # Denetim izi: kim/ne zaman açtı (bakim.sh status da gösterir)
+            flag.write_text(
+                f"{who} {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n",
+                encoding="utf-8",
+            )
+        else:
+            flag.unlink(missing_ok=True)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Bakım bayrağı yazılamadı: {e}")
+    logger.info("Bakım modu %s (%s)", "AÇILDI" if body.on else "kapatıldı", who)
+    return {"on": flag.exists()}

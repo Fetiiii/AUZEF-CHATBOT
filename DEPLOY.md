@@ -26,7 +26,8 @@ docker compose build backend frontend
 #   * yalnızca frontend/nginx ise:  docker compose build frontend
 #   * emin değilseniz ikisini de build edin — güvenli, sadece yavaş.
 
-# 3) Geçiş (~2-3 dk kesinti: backend embedding modelini yeniden yükler)
+# 3) Geçiş (~2-3 dk kesinti: backend embedding modelini yeniden yükler;
+#    bu pencerede öğrenci otomatik olarak "bakımdayız" mesajı görür)
 docker compose up -d
 docker ps        # auzef_backend "healthy" olana kadar bekleyin
 
@@ -43,6 +44,40 @@ curl -s https://auzefasistan.istanbul.edu.tr/health      # → {"ok":true}
   index'leri kendisi oluşturur/günceller (idempotent).
 - Build sırasında ağ kesilirse komutu tekrar çalıştırın — kaldığı katmandan
   devam eder (pip timeout/retry ayarlı).
+
+---
+
+## 🛠️ Bakım Modu
+
+Bakım modu yalnızca **widget'ı** kapatır (öğrenci "bakımdayız" mesajı görür);
+admin paneli ve `/api/` açık kalır, yani bakımı panelden geri kapatabilirsiniz.
+Bayrak `ops_flags` volume'unda bir dosyadır — deploy/restart onu silmez.
+
+Üç katman:
+
+1. **Planlı bakım (normal yol):** Panel → Ayarlar → *Bakım Modu* düğmesi
+   (yalnızca super_admin). Aç → işini yap → kapat.
+2. **Otomatik:** Backend'e ulaşılamıyorsa (çökme, deploy sırasındaki 2-3 dk'lık
+   model yüklemesi) nginx widget'a kendiliğinden aynı bakım yanıtını döner —
+   kimsenin bir şey açması gerekmez (`nginx.conf` → `error_page 502 503 504`).
+3. **Acil durum (backend/panel çalışmıyorken):** sunucuda SSH ile:
+
+```bash
+./bakim.sh          # ETKİLEŞİMLİ MENÜ: sistem durumu özeti (hangi container
+                    # ayakta, /health, bakım modu) + numaralı seçimler —
+                    # projeyi bilmeyen biri için bu yeterli
+./bakim.sh on       # widget'ı kapat
+./bakim.sh status   # kim/ne zaman açmış
+./bakim.sh off      # tekrar yayına al
+```
+
+Script bayrağı nginx container'ı üzerinden yönetir; backend'e hiç dokunmaz.
+Doğrulama: bakım açıkken `curl -s -o /dev/null -w "%{http_code}\n"
+-X POST https://auzefasistan.istanbul.edu.tr/widget-chat` → `503` olmalı.
+
+> Sunucu TAMAMEN çökmüşse (elektrik/disk): bu mekanizmaların hiçbiri çalışmaz;
+> widget host sayfada görünmez olur. Bu senaryo için dış uptime izleme +
+> kurumla konuşulacak durum sayfası ayrı bir iştir.
 
 ---
 

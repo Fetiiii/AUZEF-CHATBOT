@@ -112,6 +112,9 @@ services:
     volumes:
       - hf_cache:/app/.cache/huggingface
       - ./data:/app/data
+      # Bakım bayrağı: backend (panel butonu) yazar, nginx (frontend) okur.
+      # Dosya varken nginx /widget-chat'e 503 döner — bkz. nginx.conf.
+      - ops_flags:/app/flags
     depends_on:
       db:
         condition: service_healthy
@@ -153,6 +156,9 @@ services:
       - "443:443"
     volumes:
       - ./ssl/certs:/etc/nginx/ssl:ro
+      # Bakım bayrağı (rw: backend çökükken bakim.sh bu container
+      # üzerinden bayrağı yönetir — bkz. bakim.sh)
+      - ops_flags:/etc/nginx/flags
     depends_on:
       backend:
         condition: service_healthy
@@ -171,3 +177,4 @@ volumes:
   meili_data:
   qdrant_data:
   hf_cache:
+  ops_flags:

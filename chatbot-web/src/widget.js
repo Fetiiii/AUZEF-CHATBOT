@@ -393,9 +393,14 @@
           }
         });
       })
-      .catch(function () {
+      .catch(function (err) {
         typingEl.remove();
-        appendMsg('bot', 'Bağlantı hatası. Lütfen tekrar deneyin.');
+        // 503 = bakım: ya panelden bakım modu açıldı ya backend'e ulaşılamıyor
+        // (nginx @maintenance bloğu — deploy penceresi dahil). Diğer her hata
+        // (ağ kopması, 429 rate limit, 4xx/5xx) genel mesaja düşer.
+        appendMsg('bot', err === 503
+          ? 'Asistanımız şu anda bakım çalışması nedeniyle hizmet veremiyor. Lütfen daha sonra tekrar deneyiniz. 🛠️'
+          : 'Bağlantı hatası. Lütfen tekrar deneyin.');
       })
       .then(function () {
         isSending = false;
