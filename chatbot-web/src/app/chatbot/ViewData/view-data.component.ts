@@ -11,7 +11,7 @@ import { FormsModule } from '@angular/forms';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration, ChartData } from 'chart.js';
 import { Subscription, interval, startWith } from 'rxjs';
-import { StatsApiService } from '../../services/services/chatbot/stats-api.service';
+import { StatsApiService, TrafficMode, TrafficPoint } from '../../services/services/chatbot/stats-api.service';
 
 @Component({
   selector: 'app-view-data',
@@ -35,7 +35,17 @@ export class ViewDataComponent implements OnInit, OnDestroy {
   activeUsers = signal<number>(0);
   totalQueriesToday = signal<number>(0);
 
-  /* ── Hourly traffic line chart (24h) ── */
+  /* ── Sorgu trafiği (saatlik / haftalık / aylık) ── */
+  selectedMode = signal<TrafficMode>('hourly');
+  selectedDate = '';                       // '' = canlı/güncel dönem. hourly/weekly: YYYY-MM-DD, monthly: YYYY-MM
+  periodLabel = signal<string>('');
+  private trafficPoints: TrafficPoint[] = [];   // tooltip için ham noktalar
+
+  private readonly TR_MONTHS = [
+    'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+    'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'
+  ];
+
   hourlyLabels: string[] = [];
   hourlyChartData = signal<ChartData<'line'>>({ labels: [], datasets: [] });
 
@@ -51,7 +61,20 @@ export class ViewDataComponent implements OnInit, OnDestroy {
         bodyFont: { size: 11 },
         padding: 10,
         cornerRadius: 8,
-        displayColors: false
+        displayColors: false,
+        callbacks: {
+          // Başlık: haftalık/aylıkta "15 Temmuz 2026 Çarşamba", saatlikte tarih varsa gün + saat
+          title: (items) => {
+            const p = this.trafficPoints[items[0].dataIndex];
+            if (!p) return items[0].label;
+            if (this.selectedMode() === 'hourly') {
+              return p.date ? `${this.formatLongDate(p.date)} · ${p.label}` : p.label;
+            }
+            const day = p.date ? this.formatLongDate(p.date) : p.label;
+            return p.weekday ? `${day} ${p.weekday}` : day;
+          },
+          label: (item) => `Sorgu: ${item.parsed.y}`
+        }
       }
     },
     scales: {
@@ -191,14 +214,86 @@ export class ViewDataComponent implements OnInit, OnDestroy {
     });
   }
 
+  /* ── Trafik modu / dönem gezinme ── */
+
+  selectMode(mode: TrafficMode): void {
+    if (mode === this.selectedMode()) return;
+    // Tarih formatını mod ile uyumla: monthly YYYY-MM, diğerleri YYYY-MM-DD
+    if (this.selectedDate) {
+      if (mode === 'monthly') this.selectedDate = this.selectedDate.slice(0, 7);
+      else if (this.selectedDate.length === 7) this.selectedDate = `${this.selectedDate}-01`;
+    }
+    this.selectedMode.set(mode);
+    this.loadStats();
+  }
+
+  onDateChange(): void {
+    this.loadStats();
+  }
+
+  goToday(): void {
+    this.selectedDate = '';   // boş = backend güncel dönemi (canlı) hesaplar
+    this.loadStats();
+  }
+
+  prevPeriod(): void { this.shiftPeriod(-1); }
+  nextPeriod(): void { this.shiftPeriod(1); }
+
+  /** true iken "Sonraki" ve "Bugün" pasif olur (zaten güncel dönemdeyiz). */
+  isCurrentPeriod(): boolean {
+    if (!this.selectedDate) return true;
+    return this.selectedMode() === 'monthly'
+      ? this.selectedDate >= this.todayMonth()
+      : this.selectedDate >= this.todayDate();
+  }
+
+  private shiftPeriod(dir: -1 | 1): void {
+    if (this.selectedMode() === 'monthly') {
+      const base = this.selectedDate || this.todayMonth();
+      let [y, m] = base.split('-').map(Number);
+      m += dir;
+      if (m < 1) { m = 12; y--; } else if (m > 12) { m = 1; y++; }
+      const next = `${y}-${String(m).padStart(2, '0')}`;
+      if (dir === 1 && next > this.todayMonth()) return;   // geleceğe gitme
+      this.selectedDate = next;
+    } else {
+      const step = this.selectedMode() === 'weekly' ? 7 : 1;
+      const [y, m, d] = (this.selectedDate || this.todayDate()).split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      dt.setDate(dt.getDate() + dir * step);
+      const next = this.toISODate(dt);
+      if (dir === 1 && next > this.todayDate()) return;    // geleceğe gitme
+      this.selectedDate = next;
+    }
+    this.loadStats();
+  }
+
+  // Tarih seçicilerin [max] sınırı — geleceğe gidilmesini engeller
+  get todayDateMax(): string { return this.todayDate(); }
+  get todayMonthMax(): string { return this.todayMonth(); }
+
+  private todayDate(): string { return this.toISODate(new Date()); }
+
+  private todayMonth(): string {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  private formatLongDate(iso: string): string {
+    const [y, m, d] = iso.split('-').map(Number);
+    return `${d} ${this.TR_MONTHS[m - 1]} ${y}`;
+  }
+
   private loadStats(): void {
-    this.statsService.getStats().subscribe({
+    this.statsService.getStats(this.selectedMode(), this.selectedDate).subscribe({
       next: (stats) => {
         this.activeUsers.set(stats.active_users);
         this.totalQueriesToday.set(stats.total_queries_today);
+        this.periodLabel.set(stats.period_label);
 
-        const labels = stats.hourly.map(h => h.label);
-        const data = stats.hourly.map(h => h.count);
+        this.trafficPoints = stats.traffic;
+        const labels = stats.traffic.map(p => p.label);
+        const data = stats.traffic.map(p => p.count);
         this.hourlyLabels = labels;
         this.hourlyChartData.set({
           labels,

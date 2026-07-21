@@ -78,13 +78,79 @@
 
                 <div class="min-w-0">
                     <h2 class="text-base font-bold text-gray-800 dark:text-gray-100 truncate">
-                        Saatlik Sorgu Trafiği
+                        {{ selectedMode() === 'weekly' ? 'Haftalık' : selectedMode() === 'monthly' ? 'Aylık' : 'Saatlik' }}
+                        Sorgu Trafiği
                     </h2>
-                    <p class="text-[12px] md:text-[13px] text-slate-500 dark:text-slate-400">
-                        Son 24 saatte chatbot'a gelen sorgu sayısı — yoğun ve sakin saatleri görün.
+                    <p class="text-[12px] md:text-[13px] text-slate-500 dark:text-slate-400 truncate">
+                        {{ periodLabel() || 'Chatbot\'a gelen sorgu sayısı — yoğun ve sakin dönemleri görün.' }}
                     </p>
                 </div>
             </div>
+        </div>
+
+        <!-- Kontroller: mod seçimi + tarih seçici + gezinme -->
+        <div class="flex flex-wrap items-center gap-2">
+
+            <!-- Mod seçim (segmented) -->
+            <div class="inline-flex rounded-lg border border-slate-300 dark:border-slate-600 overflow-hidden">
+                <button type="button" (click)="selectMode('hourly')"
+                    class="px-3 h-9 text-sm font-medium transition-colors"
+                    [class]="selectedMode() === 'hourly'
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'">
+                    Saatlik
+                </button>
+                <button type="button" (click)="selectMode('weekly')"
+                    class="px-3 h-9 text-sm font-medium border-l border-slate-300 dark:border-slate-600 transition-colors"
+                    [class]="selectedMode() === 'weekly'
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'">
+                    Haftalık
+                </button>
+                <button type="button" (click)="selectMode('monthly')"
+                    class="px-3 h-9 text-sm font-medium border-l border-slate-300 dark:border-slate-600 transition-colors"
+                    [class]="selectedMode() === 'monthly'
+                        ? 'bg-violet-600 text-white'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'">
+                    Aylık
+                </button>
+            </div>
+
+            <!-- Önceki / Sonraki -->
+            <div class="inline-flex rounded-lg border border-slate-300 dark:border-slate-600 overflow-hidden">
+                <button type="button" (click)="prevPeriod()" aria-label="Önceki dönem"
+                    class="px-2.5 h-9 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300
+                           hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+                </button>
+                <button type="button" (click)="nextPeriod()" [disabled]="isCurrentPeriod()" aria-label="Sonraki dönem"
+                    class="px-2.5 h-9 border-l border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+                           text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800
+                           transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+                </button>
+            </div>
+
+            <!-- Tarih seçici: aylıkta ay, diğerlerinde gün -->
+            @if (selectedMode() === 'monthly') {
+                <input type="month" [(ngModel)]="selectedDate" (change)="onDateChange()" [max]="todayMonthMax"
+                    class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-800/50"/>
+            } @else {
+                <input type="date" [(ngModel)]="selectedDate" (change)="onDateChange()" [max]="todayDateMax"
+                    class="h-9 px-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+                           text-sm text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-brand-800/50"/>
+            }
+
+            <!-- Bugüne dön -->
+            <button type="button" (click)="goToday()" [disabled]="isCurrentPeriod()"
+                class="h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900
+                       text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800
+                       transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                Bugün
+            </button>
         </div>
     </div>
 

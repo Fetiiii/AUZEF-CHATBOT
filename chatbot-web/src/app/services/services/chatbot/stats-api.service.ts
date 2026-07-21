@@ -2,10 +2,23 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
+export type TrafficMode = 'hourly' | 'weekly' | 'monthly';
+
+export interface TrafficPoint {
+  label: string;              // x-ekseni etiketi (saat / kısa gün adı / gün numarası)
+  count: number;
+  date: string | null;        // YYYY-MM-DD (haftalık/aylık ve belirli gün için)
+  weekday: string | null;     // "Çarşamba" vb. (tooltip için)
+}
+
 export interface StatsResponse {
   active_users: number;
   total_queries_today: number;
-  hourly: { label: string; count: number }[];
+  mode: TrafficMode;
+  period_label: string;
+  traffic: TrafficPoint[];
+  /** @deprecated `traffic` ile aynı — geriye dönük uyum için tutuluyor */
+  hourly: TrafficPoint[];
   sources: {
     meilisearch: number;
     qdrant_vector: number;
@@ -27,8 +40,12 @@ export class StatsApiService {
 
   constructor(private http: HttpClient) {}
 
-  getStats(): Observable<StatsResponse> {
-    return this.http.get<StatsResponse>(this.base);
+  getStats(mode: TrafficMode = 'hourly', date = ''): Observable<StatsResponse> {
+    const q = new URLSearchParams();
+    if (mode) q.set('mode', mode);
+    if (date) q.set('date', date);
+    const qs = q.toString();
+    return this.http.get<StatsResponse>(qs ? `${this.base}?${qs}` : this.base);
   }
 
   getConversationStats(start: string, end: string): Observable<ConversationStats> {
