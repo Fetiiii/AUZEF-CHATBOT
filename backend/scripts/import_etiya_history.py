@@ -6,10 +6,12 @@ kimlik no gibi bilinen kalıplar best-effort regex ile maskelenir (tam bir
 PII taraması değildir — sadece bilinen kalıplar). Yalnızca yerel/staging
 bir veritabanında çalıştırılmalıdır.
 
-Kullanım (backend container içinde, cwd=/app):
-    python scripts/import_etiya_history.py --csv /app/data/EtiyaChatbot.csv --limit-sessions 500 --tag etiya_test
-    python scripts/import_etiya_history.py --csv /app/data/EtiyaChatbot.csv --tag etiya_2026_06
-    python scripts/import_etiya_history.py --delete-tag etiya_test
+Kullanım (backend container'ında). `core` paketinin bulunması için `-m`
+(modül) formuyla çalıştır — `python scripts/...` çalışmaz, çünkü /app
+sys.path'e girmez ("ModuleNotFoundError: No module named 'core'").
+    docker exec auzef_backend python -m scripts.import_etiya_history --csv /app/data/EtiyaChatbot.csv --limit-sessions 500 --tag etiya_test
+    docker exec auzef_backend python -m scripts.import_etiya_history --tag etiya_2026_06
+    docker exec auzef_backend python -m scripts.import_etiya_history --delete-tag etiya_test
 """
 import argparse
 import random
@@ -74,8 +76,13 @@ def delete_tag(tag: str):
     db = SessionLocal()
     try:
         res = db.execute(text("DELETE FROM conversations WHERE import_tag = :tag"), {"tag": tag})
+        # query_logs'un import_tag kolonu yok; import edilen trafik satırları
+        # source='etiya_import' ile işaretli — hepsini sil. (Gerçek/prod loglarının
+        # source'u asla 'etiya_import' olmadığı için bu silme güvenlidir.)
+        qres = db.execute(text("DELETE FROM query_logs WHERE source = 'etiya_import'"))
         db.commit()
-        print(f"🗑️  Silindi: {res.rowcount} konuşma (ve CASCADE ile mesajları), tag={tag}")
+        print(f"🗑️  Silindi: {res.rowcount} konuşma (+CASCADE mesajları), "
+              f"{qres.rowcount} query_log satırı, tag={tag}")
     finally:
         db.close()
 
@@ -120,6 +127,7 @@ def main():
     db = SessionLocal()
     total_convs = 0
     total_msgs = 0
+    total_qlogs = 0
     grouped = df.groupby("session_id", sort=False)
     batch_sids = []
     try:
@@ -151,19 +159,24 @@ def main():
 
             # 2) Bu batch'teki tüm mesajları topla, tek executemany ile ekle
             msg_rows = []
+            qlog_rows = []      # Trafik grafiği query_logs'u sayar → her KULLANICI
+                                # mesajı = bir sorgu (canlı davranışla aynı).
             for s in batch_sids:
                 g = grouped.get_group(s)
                 conv_id = sid_to_convid[s]
                 for _, r in g.iterrows():
                     role = "user" if r["direction"] == "Kullanıcı" else "bot"
                     content = mask(pick_content(r)) or ""
+                    created = r["message_time_tr"].to_pydatetime()
                     msg_rows.append({
                         "conversation_id": conv_id,
                         "role": role,
                         "content": content,
                         "source": "etiya_import",
-                        "created_at": r["message_time_tr"].to_pydatetime(),
+                        "created_at": created,
                     })
+                    if role == "user":
+                        qlog_rows.append({"created_at": created})
 
             if msg_rows:
                 db.execute(
@@ -174,16 +187,26 @@ def main():
                     ),
                     msg_rows,
                 )
+            if qlog_rows:
+                db.execute(
+                    text(
+                        "INSERT INTO query_logs (source, status, ip_address, created_at) "
+                        "VALUES ('etiya_import', 'success', NULL, :created_at)"
+                    ),
+                    qlog_rows,
+                )
             db.commit()
 
             total_convs += len(batch_sids)
             total_msgs += len(msg_rows)
+            total_qlogs += len(qlog_rows)
             print(f"   ... {total_convs:,}/{len(session_ids):,} oturum, {total_msgs:,} mesaj ({time.time()-t0:.1f}s)")
             batch_sids = []
     finally:
         db.close()
 
-    print(f"✅ Tamamlandı: {total_convs:,} konuşma, {total_msgs:,} mesaj eklendi ({time.time()-t0:.1f}s), tag={args.tag}")
+    print(f"✅ Tamamlandı: {total_convs:,} konuşma, {total_msgs:,} mesaj, "
+          f"{total_qlogs:,} query_log (trafik) eklendi ({time.time()-t0:.1f}s), tag={args.tag}")
     print(f"   Temizlemek için: python scripts/import_etiya_history.py --delete-tag {args.tag}")
 
 
