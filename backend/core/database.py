@@ -196,6 +196,15 @@ def init_db():
         # "kim/ne zaman değiştirdi" sorusunun cevabı).
         "ALTER TABLE qna ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
         "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
+        # Konuşma arama performansı: /api/conversations?search=... içerik
+        # araması ILIKE '%terim%' ile conversation_messages.content'i tarıyor
+        # (bkz. routers/conversations.py _apply_conversation_search). content
+        # üzerinde index yoktu → 505K satırda seq scan ~115ms. Trigram GIN
+        # index bunu ~1ms'e indiriyor (ölçüldü); WHERE role='user' partial
+        # index yapıyor çünkü arama zaten yalnızca kullanıcı mesajlarında.
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+        "CREATE INDEX IF NOT EXISTS ix_conversation_messages_content_trgm "
+        "ON conversation_messages USING gin (content gin_trgm_ops) WHERE role = 'user'",
     ]
 
     with engine.connect() as conn:
