@@ -62,9 +62,24 @@ export class ConversationsApiService {
     return this.http.get(`${this.base}/export?${q.toString()}`, { responseType: 'blob' });
   }
 
-  // Seçili id'lerin export'u — POST (binlerce id URL'e sığmasın diye)
+  // Seçili id'lerin export'u — POST (binlerce id URL'e sığmasın diye).
+  // Yalnızca ELLE seçilmiş (tamamı değil) küçük kümeler için kullanılır —
+  // "tümünü seç" exportBySearch kullanır (bkz. o metodun notu).
   exportByIds(ids: number[]): Observable<Blob> {
     return this.http.post(`${this.base}/export`, { ids }, { responseType: 'blob' });
+  }
+
+  // "Tümünü seç" export'u — id listesi GÖNDERMEZ, aynı arama filtresini
+  // backend'e verir. Eskiden allIds() + exportByIds() zinciriyle TÜM id'ler
+  // POST body'sinde gidiyordu; 592K konuşmada bu ~4MB'a çıkıp nginx'in
+  // varsayılan 1MB limitini aşıp 413 veriyordu (canlıda yakalandı).
+  // select_all=true ZORUNLU: search boş olsa bile (arama kutusu boşken
+  // "tümünü seç") backend bunu "filtre yok" ile karıştırıp 400 dönmemeli.
+  exportBySearch(search = ''): Observable<Blob> {
+    const q = new URLSearchParams();
+    q.set('select_all', 'true');
+    if (search) q.set('search', search);
+    return this.http.get(`${this.base}/export?${q.toString()}`, { responseType: 'blob' });
   }
 
   // Filtreye uyan TÜM id'ler ("tümünü seç" için)

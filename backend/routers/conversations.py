@@ -6,7 +6,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from core.database import Conversation, ConversationMessage
@@ -37,22 +37,43 @@ def _apply_conversation_search(q, db: Session, search: str):
 def _conversation_rows(db: Session, conv_query):
     """Konuşmaları öbek öbek (500'lük) çekip her mesaj için bir satır üretir.
     Tüm transkripti aynı anda belleğe almaz; her öbekte o öbeğin mesajları
-    tek sorguyla çekilir (N+1 yok)."""
+    tek sorguyla çekilir (N+1 yok).
+
+    Sayfalama OFFSET/LIMIT değil, keyset (seek): bir önceki öbeğin son
+    (started_at, id) çiftinden büyük satırları ister. OFFSET N, Postgres'in
+    ilk N satırı atlamak için taraması anlamına gelir — 592K konuşmada,
+    derin öbeklerde tek başına ~190ms'ye çıkıyordu (ölçüldü), toplam export'u
+    173sn'ye taşıyordu. Keyset her öbeği ~offset'ten bağımsız sabit maliyetle
+    çeker (started_at index'i üzerinden aralık taraması)."""
     CHUNK = 500
-    ordered = conv_query.order_by(Conversation.started_at, Conversation.id)
-    offset = 0
+    ordered_base = conv_query.order_by(Conversation.started_at, Conversation.id)
+    cursor = None  # (started_at, id) - bir önceki öbeğin son satırı
     while True:
-        convs = ordered.offset(offset).limit(CHUNK).all()
+        q = ordered_base
+        if cursor is not None:
+            q = conv_query.filter(
+                tuple_(Conversation.started_at, Conversation.id) > cursor
+            ).order_by(Conversation.started_at, Conversation.id)
+        convs = q.limit(CHUNK).all()
         if not convs:
             break
+        cursor = (convs[-1].started_at, convs[-1].id)
         ids = [c.id for c in convs]
-        msgs_by_conv = {}
-        for m in (
-            db.query(ConversationMessage)
-            .filter(ConversationMessage.conversation_id.in_(ids))
+        # ORM entity'leri değil, hafif Row nesneleri: 6.4M mesajda ORM
+        # hydration (identity map + instrumented attribute) maliyeti asıl
+        # darboğazdı — DB sorgusu ~2ms/öbek ölçülürken toplam export 114sn
+        # sürüyordu. select() + execute() (Core) bu overhead'i atlar.
+        msg_stmt = (
+            select(
+                ConversationMessage.conversation_id, ConversationMessage.created_at,
+                ConversationMessage.role, ConversationMessage.content,
+                ConversationMessage.source, ConversationMessage.rating,
+            )
+            .where(ConversationMessage.conversation_id.in_(ids))
             .order_by(ConversationMessage.created_at, ConversationMessage.id)
-            .all()
-        ):
+        )
+        msgs_by_conv = {}
+        for m in db.execute(msg_stmt):
             msgs_by_conv.setdefault(m.conversation_id, []).append(m)
         for c in convs:
             conv_date = c.started_at.isoformat() if c.started_at else ""
@@ -63,7 +84,6 @@ def _conversation_rows(db: Session, conv_query):
                     m.role, _csv_safe(m.content), m.source or "",
                     m.rating if m.rating is not None else "",
                 ]
-        offset += CHUNK
 
 
 def _conversations_csv_response(db: Session, conv_query) -> StreamingResponse:
@@ -84,11 +104,37 @@ def list_conversations(skip: int = 0, limit: int = 25, search: str = "", db: Ses
 
     Performans: her istek en fazla `limit` konuşma + o sayfaya ait mesajların
     tek bir toplu sorgusunu çeker (N+1 yok). Tüm veriyi asla aynı anda çekmez.
-    """
-    base = _apply_conversation_search(db.query(Conversation), db, search)
 
-    total = base.count()
-    convs = base.order_by(Conversation.started_at.desc()).offset(skip).limit(limit).all()
+    search doluyken filtre, content üzerinde ağır bir ILIKE alt sorgusu
+    içerir (bkz. _apply_conversation_search). Bunu count() + select() olarak
+    iki kez çalıştırmak geniş eşleşen terimlerde (6.4M mesajda ör. "öğrenci",
+    30K+ eşleşme) maliyeti ~2 katına çıkarıyordu (ölçüldü: 2.9sn). Bunun
+    yerine eşleşen id'ler TEK sorguyla materialize edilir; count + sayfalama
+    bu (ucuz) id listesi üzerinden yapılır. search boşken (asıl sık yol) eski
+    basit count()+select() korunur — COUNT(*) OVER() denendi ama LIMIT'ten
+    ÖNCE tüm eşleşen kümeyi materialize ettirdiği için index'in "ilk N satırda
+    dur" avantajını kaybettirip arama-yok durumunu YAVAŞLATTI (47ms→174ms,
+    ölçüldü) — o yüzden buraya alınmadı.
+    """
+    term = (search or "").strip()
+    if not term:
+        base = db.query(Conversation)
+        total = base.count()
+        convs = base.order_by(Conversation.started_at.desc()).offset(skip).limit(limit).all()
+    else:
+        matched_ids = [
+            r[0] for r in _apply_conversation_search(db.query(Conversation.id), db, term).all()
+        ]
+        total = len(matched_ids)
+        convs = (
+            db.query(Conversation)
+            .filter(Conversation.id.in_(matched_ids))
+            .order_by(Conversation.started_at.desc())
+            .offset(skip)
+            .limit(limit)
+            .all()
+            if matched_ids else []
+        )
 
     ids = [c.id for c in convs]
     stats = {}
@@ -126,13 +172,26 @@ def list_conversations(skip: int = 0, limit: int = 25, search: str = "", db: Ses
 
 
 @router.get("/api/conversations/export")
-def export_conversations(ids: str = "", start: str = "", end: str = "", db: Session = Depends(get_db)):
-    """Seçili konuşmaları (?ids=1,2,3) veya bir tarih aralığındaki
+def export_conversations(
+    ids: str = "", start: str = "", end: str = "", search: str = "", select_all: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Seçili konuşmaları (?ids=1,2,3), "tümünü seç" filtresini (?select_all=true,
+    opsiyonel ?search=...) veya bir tarih aralığındaki
     (?start=YYYY-MM-DD&end=YYYY-MM-DD) konuşmaları transkript olarak
     (her mesaj bir satır) CSV dışa aktarır.
 
     NOT: Bu rota, /{conversation_id} rotasından ÖNCE tanımlı olmalı; aksi
     halde "export" bir id sanılır.
+
+    ?select_all=true — "tümünü seç" akışı için: frontend eskiden filtreye uyan TÜM
+    id'leri çekip POST body'sinde gönderiyordu; 592K konuşmada bu ~4MB'a
+    çıkıp nginx'in varsayılan 1MB client_max_body_size'ını aşıp 413
+    veriyordu (canlıda yakalandı). id listesi yerine aynı filtre burada
+    server-side tekrar uygulanır — body boyutu veriden bağımsız kalır.
+    `search` ayrı bir dal değil `all` altında: arama kutusu boşken de
+    "tümünü seç" tüm konuşmaları kapsamalı (search='' → filtre yok anlamına
+    gelir, 400 DEĞİL) — bu yüzden search'ü tek başına kontrol ETMİYORUZ.
     """
     ISTANBUL_OFFSET = timedelta(hours=3)
     q = db.query(Conversation)
@@ -140,6 +199,8 @@ def export_conversations(ids: str = "", start: str = "", end: str = "", db: Sess
     id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
     if id_list:
         q = q.filter(Conversation.id.in_(id_list))
+    elif select_all:
+        q = _apply_conversation_search(q, db, search)
     elif start or end:
         if start:
             try:

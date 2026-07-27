@@ -152,6 +152,12 @@ export class ConversationsComponent implements OnInit {
   }
 
   exportSelected(): void {
+    // "Tümünü seç" ile seçildiyse: id listesi göndermek yerine aynı filtreyi
+    // backend'e veriyoruz (413 hatası — bkz. exportBySearch notu).
+    if (this.allMatchingSelected()) {
+      this.download(this.api.exportBySearch(this.search));
+      return;
+    }
     const ids = Array.from(this.selected());
     if (ids.length === 0) return;
     this.download(this.api.exportByIds(ids));

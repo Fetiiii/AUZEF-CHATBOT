@@ -205,6 +205,13 @@ def init_db():
         "CREATE EXTENSION IF NOT EXISTS pg_trgm",
         "CREATE INDEX IF NOT EXISTS ix_conversation_messages_content_trgm "
         "ON conversation_messages USING gin (content gin_trgm_ops) WHERE role = 'user'",
+        # /api/stats/conversations: rating dağılımı + son puan sorguları
+        # rating'e göre filtreliyor (bkz. routers/stats.py). rating'i NULL
+        # olmayan satırlar toplamın küçük bir kısmı olduğundan (yalnızca
+        # gerçekten puanlanan cevaplar) kısmi index çok küçük kalır ama
+        # 6.4M satırlık tam taramayı (~1.5sn, ölçüldü) index-only scan'e indirir.
+        "CREATE INDEX IF NOT EXISTS ix_conversation_messages_rating "
+        "ON conversation_messages (rating) WHERE rating IS NOT NULL",
     ]
 
     with engine.connect() as conn:
