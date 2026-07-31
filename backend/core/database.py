@@ -106,6 +106,29 @@ class ConversationMessage(Base):
 
     conversation = relationship("Conversation", back_populates="messages")
 
+# ── Çözüm Merkezi (talep oluşturma) oturumu ──────────────────────────────────
+# Çok-adımlı talep akışının (TC→SMS→OTP→öğrenci→kategori→talep) durumu burada
+# tutulur. conversation'a 1:1 bağlıdır; sahiplik conversations.client_token ile
+# doğrulanır (ayrı bir token icat edilmez).
+#
+# GÜVENLİK: verification_token CM oturumunu temsil eder ve ASLA frontend'e
+# dönmez — yalnızca bu satırda saklanır, talep oluştururken sunucu içinde
+# yeniden kullanılır. TC/OTP HİÇBİR ZAMAN saklanmaz (frontend TC'yi kendi
+# belleğinde tutup SMS adımında tekrar gönderir).
+class SolutionCenterSession(Base):
+    __tablename__ = "solution_center_sessions"
+    conversation_id = Column(BigInteger, ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True)
+    state = Column(String(40), nullable=False, default="SC_WAIT_TC")
+    verification_token = Column(String(255), nullable=True)   # CM oturum token'ı — frontend'e ASLA dönmez
+    masked_phone = Column(String(30), nullable=True)          # *******208 (kullanıcıya gösterilebilir)
+    students_json = Column(Text, nullable=True)               # JSON: [{ogrenciId,birimAdi,fakulteAdi}]
+    selected_student_id = Column(BigInteger, nullable=True)
+    category_short_code = Column(String(120), nullable=True)
+    expires_at = Column(DateTime, nullable=True, index=True)  # verificationToken son kullanma
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 # ── Admin kullanıcı sistemi ──────────────────────────────────────────────────
 # Sınırlı sayıda personel için oturum tabanlı yönetim erişimi.
 # Parolalar bcrypt ile hash'lenir; oturum token'ları DB'de SHA-256 hash'iyle

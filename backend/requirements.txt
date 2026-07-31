@@ -15,6 +15,9 @@ openpyxl
 meilisearch
 qdrant-client
 
+# Çözüm Merkezi entegrasyonu (async HTTP istemcisi)
+httpx
+
 # Vector Embeddings
 sentence-transformers
 

@@ -26,6 +26,8 @@ from routers.conversations import router as conversations_router
 from routers.qna import router as qna_router
 from routers.stats import router as stats_router
 from routers.calendar import router as calendar_router
+from routers.solution_center import router as solution_center_router
+from integrations.solution_center.exceptions import SolutionCenterException
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("auzef")
@@ -61,7 +63,17 @@ app.include_router(conversations_router)
 app.include_router(qna_router)
 app.include_router(stats_router)
 app.include_router(calendar_router)
+app.include_router(solution_center_router)
 app.add_middleware(AdminAuthMiddleware)
+
+
+# Çözüm Merkezi hataları → kullanıcıya nazik mesaj (API detayları SIZDIRILMAZ).
+# Teknik ayrıntı yalnızca sunucu logunda; yanıtta yalnızca user_message döner.
+@app.exception_handler(SolutionCenterException)
+async def _solution_center_exception_handler(request, exc: SolutionCenterException):
+    from fastapi.responses import JSONResponse
+    logger.warning("Çözüm Merkezi hatası: %s", exc.message)
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.user_message})
 
 
 @app.get("/health")

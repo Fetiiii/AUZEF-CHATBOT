@@ -191,6 +191,26 @@
     '.fb-btn.yes:hover{background:#e0ebd3;}',
     '.fb-btn.no{border-color:#e3b79a;background:#fbf0e9;color:#9a4e24;}',
     '.fb-btn.no:hover{background:#f5e2d5;}',
+    // ── Çözüm Merkezi talep sihirbazı ──
+    '.sc-card .fb-q{margin-bottom:8px;}',
+    '.sc-input,.sc-textarea{width:100%;box-sizing:border-box;border:1.5px solid #cdd6c0;border-radius:10px;',
+    'padding:8px 10px;font-size:13px;font-family:inherit;color:#2b3a24;background:#fff;outline:none;}',
+    '.sc-input:focus,.sc-textarea:focus{border-color:#a9be86;}',
+    '.sc-textarea{min-height:64px;resize:vertical;}',
+    '.sc-row{display:flex;gap:7px;margin-top:8px;}',
+    '.sc-primary{padding:6px 16px;border-radius:20px;border:1.5px solid #a9be86;background:#eef4e8;',
+    'color:#3b5226;font-size:12px;font-weight:600;cursor:pointer;}',
+    '.sc-primary:hover{background:#e0ebd3;}',
+    '.sc-primary:disabled{opacity:.5;cursor:default;}',
+    '.sc-list{display:flex;flex-direction:column;gap:6px;margin-top:6px;}',
+    '.sc-opt{text-align:left;padding:8px 11px;border-radius:10px;border:1.5px solid #dfe6d5;',
+    'background:#f6f9f1;color:#31402a;font-size:12.5px;font-weight:500;cursor:pointer;}',
+    '.sc-opt:hover{background:#e9f1de;}',
+    '.sc-opt:disabled{opacity:.5;cursor:default;}',
+    '.sc-opt.leaf{border-color:#a9be86;}',
+    '.sc-back{align-self:flex-start;background:none;border:none;color:#7a8a6a;font-size:12px;cursor:pointer;padding:2px 0;}',
+    '.sc-error{color:#9a4e24;font-size:12px;margin:6px 0 0;}',
+    '.sc-done{color:#3b5226;font-size:12.5px;font-weight:600;margin:6px 0 0;}',
 
     // ── Suggestion chips ─────────────────────────────────────────────────────
     '.suggestions{display:flex;flex-direction:column;gap:7px;padding:6px 0 2px;}',
@@ -566,9 +586,11 @@
 
       yes2.addEventListener('click', function () {
         sendTalep('redirected');
-        window.open(_solutionUrl, '_blank');
-        fb.innerHTML = '<p class="fb-q">Talep sayfasına yönlendiriliyorsunuz.</p>';
+        fb.innerHTML = '<p class="fb-q">Talebinizi hemen burada oluşturalım.</p>';
         scrollEnd();
+        // Harici sayfa yerine sohbet-içi akış. Config kapalıysa (503) sihirbaz
+        // otomatik olarak harici sayfaya (_solutionUrl) düşer.
+        startSolutionCenterFlow();
       });
       no2.addEventListener('click', function () {
         sendTalep('declined');
@@ -653,6 +675,266 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: status, conversation_token: _conversationToken })
     }).catch(function () {});
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  //  AUZEF Çözüm Merkezi — sohbet-içi talep sihirbazı
+  //  Her adım KENDİ input'una sahip bir karttır; TC/OTP ana input'tan
+  //  (send()/widget-chat) ASLA geçmez → conversation_messages'a yazılmaz.
+  //  Tüm state sunucuda (SolutionCenterSession) tutulur; verificationToken
+  //  hiçbir zaman istemciye gelmez.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // Sahiplik zorunlu SC ucuna POST; {ok,status,data} döndürür.
+  function scApi(path, body) {
+    return fetch(_apiBase + '/api/solution-center/' + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign(
+        { conversation_id: _conversationId, conversation_token: _conversationToken },
+        body || {}
+      ))
+    }).then(function (r) {
+      return r.json().then(
+        function (d) { return { ok: r.ok, status: r.status, data: d }; },
+        function () { return { ok: r.ok, status: r.status, data: {} }; }
+      );
+    });
+  }
+
+  function scNewCard() {
+    var el = document.createElement('div');
+    el.className = 'msg bot';
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble sc-card';
+    el.appendChild(bubble);
+    messages.appendChild(el);
+    scrollEnd();
+    return bubble;
+  }
+
+  function scPrompt(bubble, text) {
+    var p = document.createElement('p');
+    p.className = 'fb-q';
+    p.textContent = text;
+    bubble.appendChild(p);
+    return p;
+  }
+
+  function scShowError(bubble, msg) {
+    var old = bubble.querySelector('.sc-error');
+    if (old) old.remove();
+    var p = document.createElement('p');
+    p.className = 'sc-error';
+    p.textContent = msg || 'Bir sorun oluştu. Lütfen tekrar deneyin.';
+    bubble.appendChild(p);
+    scrollEnd();
+  }
+
+  // Kartın tüm girdilerini kilitler (eski adıma geri dönüş engellenir).
+  function scLock(bubble, doneText) {
+    bubble.querySelectorAll('button, input, textarea').forEach(function (n) { n.disabled = true; });
+    if (doneText) {
+      var p = document.createElement('p');
+      p.className = 'sc-done';
+      p.textContent = doneText;
+      bubble.appendChild(p);
+    }
+    scrollEnd();
+  }
+
+  // Config kapalı (503) ya da konuşma yoksa → harici talep sayfasına düş.
+  function scFallbackToPage(bubble) {
+    if (bubble) scShowError(bubble, 'Talep sistemi şu anda kullanılamıyor. Sizi talep sayfasına yönlendiriyorum.');
+    window.open(_solutionUrl, '_blank');
+  }
+
+  // Giriş noktası: puan<4 sonrası "Evet"ten çağrılır.
+  function startSolutionCenterFlow() {
+    if (!_conversationId || !_conversationToken) { scFallbackToPage(null); return; }
+    var bubble = scNewCard();
+    scPrompt(bubble, 'Talebinizi Çözüm Merkezi üzerinden oluşturalım. Lütfen T.C. Kimlik numaranızı girin:');
+    var inp = document.createElement('input');
+    inp.className = 'sc-input';
+    inp.type = 'text';
+    inp.inputMode = 'numeric';
+    inp.maxLength = 11;
+    inp.placeholder = '11 haneli T.C. Kimlik No';
+    var row = document.createElement('div');
+    row.className = 'sc-row';
+    var btn = document.createElement('button');
+    btn.className = 'sc-primary';
+    btn.textContent = 'Devam';
+    row.appendChild(btn);
+    bubble.appendChild(inp);
+    bubble.appendChild(row);
+    scrollEnd();
+    inp.focus();
+
+    function submit() {
+      var tc = (inp.value || '').replace(/\D/g, '');
+      if (tc.length !== 11) { scShowError(bubble, 'Lütfen 11 haneli geçerli bir T.C. Kimlik numarası girin.'); return; }
+      btn.disabled = true; inp.disabled = true;
+      scApi('send-sms', { kimlik_no: tc }).then(function (res) {
+        if (res.ok) {
+          scLock(bubble, 'Doğrulama kodu ' + (res.data.masked_phone || '') + ' numarasına gönderildi.');
+          scOtpCard();
+        } else if (res.status === 503) {
+          scFallbackToPage(bubble);
+        } else {
+          btn.disabled = false; inp.disabled = false;
+          scShowError(bubble, res.data.detail);
+        }
+      }).catch(function () { btn.disabled = false; inp.disabled = false; scShowError(bubble); });
+    }
+    btn.addEventListener('click', submit);
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  }
+
+  function scOtpCard() {
+    var bubble = scNewCard();
+    scPrompt(bubble, 'Telefonunuza gelen doğrulama kodunu girin:');
+    var inp = document.createElement('input');
+    inp.className = 'sc-input';
+    inp.type = 'text';
+    inp.inputMode = 'numeric';
+    inp.maxLength = 8;
+    inp.placeholder = 'Doğrulama kodu';
+    var row = document.createElement('div');
+    row.className = 'sc-row';
+    var btn = document.createElement('button');
+    btn.className = 'sc-primary';
+    btn.textContent = 'Doğrula';
+    row.appendChild(btn);
+    bubble.appendChild(inp);
+    bubble.appendChild(row);
+    scrollEnd(); inp.focus();
+
+    function submit() {
+      var code = (inp.value || '').replace(/\D/g, '');
+      if (code.length < 4) { scShowError(bubble, 'Lütfen geçerli bir doğrulama kodu girin.'); return; }
+      btn.disabled = true; inp.disabled = true;
+      scApi('verify-otp', { code: code }).then(function (res) {
+        if (!res.ok) { btn.disabled = false; inp.disabled = false; scShowError(bubble, res.data.detail); return; }
+        scLock(bubble, 'Doğrulama başarılı.');
+        if (res.data.state === 'SC_WAIT_STUDENT_SELECTION') {
+          scStudentCard(res.data.students || []);
+        } else {
+          scLoadCategories();
+        }
+      }).catch(function () { btn.disabled = false; inp.disabled = false; scShowError(bubble); });
+    }
+    btn.addEventListener('click', submit);
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  }
+
+  function scStudentCard(students) {
+    var bubble = scNewCard();
+    scPrompt(bubble, 'Birden fazla öğrenci kaydınız var. Lütfen birini seçin:');
+    var list = document.createElement('div');
+    list.className = 'sc-list';
+    bubble.appendChild(list);
+    students.forEach(function (s) {
+      var b = document.createElement('button');
+      b.className = 'sc-opt';
+      var label = [s.birimAdi, s.fakulteAdi].filter(Boolean).join(' — ') || ('Öğrenci #' + s.ogrenciId);
+      b.textContent = label;
+      b.addEventListener('click', function () {
+        scLock(bubble, 'Seçildi: ' + label);
+        scApi('select-student', { ogrenci_id: s.ogrenciId }).then(function (res) {
+          if (!res.ok) { scShowError(bubble, res.data.detail); return; }
+          scLoadCategories();
+        }).catch(function () { scShowError(bubble); });
+      });
+      list.appendChild(b);
+    });
+    scrollEnd();
+  }
+
+  function scLoadCategories() {
+    var bubble = scNewCard();
+    scPrompt(bubble, 'Kategoriler yükleniyor…');
+    scApi('categories', {}).then(function (res) {
+      if (!res.ok) { scShowError(bubble, res.data.detail); return; }
+      bubble.innerHTML = '';
+      scCategoryPicker(bubble, res.data.categories || []);
+    }).catch(function () { scShowError(bubble); });
+  }
+
+  // Kategori ağacı tek çağrıda gelir; gezinme istemci tarafında yapılır.
+  // Yalnızca isLeaf==true olan düğüm seçilebilir.
+  function scCategoryPicker(bubble, tree) {
+    scPrompt(bubble, 'Talebinizin konusunu seçin:');
+    var list = document.createElement('div');
+    list.className = 'sc-list';
+    bubble.appendChild(list);
+    var stack = [];
+    function level() { return stack.length ? stack[stack.length - 1] : tree; }
+    function draw() {
+      list.innerHTML = '';
+      if (stack.length) {
+        var back = document.createElement('button');
+        back.className = 'sc-back';
+        back.textContent = '‹ Geri';
+        back.addEventListener('click', function () { stack.pop(); draw(); });
+        list.appendChild(back);
+      }
+      level().forEach(function (node) {
+        var b = document.createElement('button');
+        b.className = 'sc-opt' + (node.isLeaf ? ' leaf' : '');
+        b.textContent = node.isLeaf ? node.name : (node.name + ' ›');
+        b.addEventListener('click', function () {
+          if (node.isLeaf) {
+            scLock(bubble, 'Kategori: ' + node.name);
+            scApi('select-category', { category_short_code: node.shortCode }).then(function (res) {
+              if (!res.ok) { scShowError(bubble, res.data.detail); return; }
+              scDescriptionCard();
+            }).catch(function () { scShowError(bubble); });
+          } else {
+            stack.push(node.children || []);
+            draw();
+          }
+        });
+        list.appendChild(b);
+      });
+      scrollEnd();
+    }
+    draw();
+  }
+
+  function scDescriptionCard() {
+    var bubble = scNewCard();
+    scPrompt(bubble, 'Son olarak talebinizi kısaca açıklayın:');
+    var ta = document.createElement('textarea');
+    ta.className = 'sc-textarea';
+    ta.placeholder = 'Talebinizi buraya yazın…';
+    ta.maxLength = 1000;
+    var row = document.createElement('div');
+    row.className = 'sc-row';
+    var btn = document.createElement('button');
+    btn.className = 'sc-primary';
+    btn.textContent = 'Talebi Gönder';
+    row.appendChild(btn);
+    bubble.appendChild(ta);
+    bubble.appendChild(row);
+    scrollEnd(); ta.focus();
+
+    btn.addEventListener('click', function () {
+      var desc = (ta.value || '').trim();
+      if (!desc) { scShowError(bubble, 'Lütfen talebinizi açıklayın.'); return; }
+      btn.disabled = true; ta.disabled = true;
+      scApi('create-ticket', { description: desc }).then(function (res) {
+        if (!res.ok) { btn.disabled = false; ta.disabled = false; scShowError(bubble, res.data.detail); return; }
+        scLock(bubble, null);
+        var done = scNewCard();
+        scPrompt(done, 'Talebiniz başarıyla oluşturuldu. ✅');
+        var num = document.createElement('p');
+        num.className = 'sc-done';
+        num.textContent = 'Talep numaranız: ' + ((res.data.ticket && res.data.ticket.uuid) || '-');
+        done.appendChild(num);
+        scrollEnd();
+      }).catch(function () { btn.disabled = false; ta.disabled = false; scShowError(bubble); });
+    });
   }
 
   function setSendState(busy) {
