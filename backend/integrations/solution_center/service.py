@@ -33,6 +33,7 @@ from .exceptions import (
     VerificationExpiredException,
 )
 from .models import Category, CategoryNode, SCState, Student, TicketResult
+from .rate_limit import SmsRateLimiter
 from .schemas import CreateTicketRequest
 
 logger = logging.getLogger("auzef.sc")
@@ -63,11 +64,13 @@ class SolutionCenterService:
         client: SolutionCenterClient,
         cache: CategoryCache,
         config: SolutionCenterConfig,
+        limiter: SmsRateLimiter,
     ) -> None:
         self._db = db
         self._client = client
         self._cache = cache
         self._config = config
+        self._limiter = limiter
 
     # ── Oturum satırı yardımcıları ───────────────────────────────────────────
 
@@ -99,10 +102,20 @@ class SolutionCenterService:
 
     # ── 1) TC → telefon göster + SMS gönder ──────────────────────────────────
 
-    async def start_verification(self, conversation_id: int, kimlik_no: str) -> str:
+    async def start_verification(
+        self, conversation_id: int, kimlik_no: str, ip: Optional[str] = None
+    ) -> str:
         """TC'yi doğrular (telefon getir) + SMS gönderir. Maskeli telefonu döner.
 
-        verificationToken oturum satırına yazılır, ÇAĞIRANA DÖNMEZ."""
+        verificationToken oturum satırına yazılır, ÇAĞIRANA DÖNMEZ.
+
+        İlk iş hız sınırı tüketilir (ANALIZ.md P0-1): CM API'sine çağrı YAPILMADAN
+        önce, çünkü (a) kuruma gereksiz SMS maliyeti çıkmasın, (b) başarısız TC
+        denemeleri de sayılsın — numaralandırma saldırısı zaten başarısız
+        aramalarla yapılıyor."""
+        self._limiter.check_and_consume(
+            self._db, conversation_id=conversation_id, kimlik_no=kimlik_no, ip=ip)
+
         phone_payload = await self._client.get_phone(kimlik_no)
         phone_data = _data(phone_payload)
         masked = phone_data.get("maskedPhoneNumber") if isinstance(phone_data, dict) else None

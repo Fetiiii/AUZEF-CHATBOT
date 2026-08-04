@@ -26,14 +26,27 @@ from .constants import (
     DEFAULT_CATEGORY_CACHE_TTL_SECONDS,
     DEFAULT_CHANNEL_SHORTCODE,
     DEFAULT_MAX_RETRIES,
+    DEFAULT_SMS_CONVERSATION_WINDOW_MIN,
+    DEFAULT_SMS_IP_WINDOW_MIN,
+    DEFAULT_SMS_PER_CONVERSATION,
+    DEFAULT_SMS_PER_IP,
+    DEFAULT_SMS_PER_TC,
+    DEFAULT_SMS_TC_WINDOW_MIN,
     DEFAULT_TIMEOUT_SECONDS,
     DEFAULT_VERIFICATION_TTL_MIN,
     ENV_AUTH_SCHEME,
     ENV_BASE_URL,
     ENV_CATEGORY_CACHE_TTL,
     ENV_CHANNEL_SHORTCODE,
+    ENV_HASH_SECRET,
     ENV_MAX_RETRIES,
     ENV_SERVICE_TOKEN,
+    ENV_SMS_CONVERSATION_WINDOW_MIN,
+    ENV_SMS_IP_WINDOW_MIN,
+    ENV_SMS_PER_CONVERSATION,
+    ENV_SMS_PER_IP,
+    ENV_SMS_PER_TC,
+    ENV_SMS_TC_WINDOW_MIN,
     ENV_TIMEOUT,
     ENV_VERIFICATION_TTL_MIN,
 )
@@ -76,6 +89,17 @@ class SolutionCenterConfig:
     # eklenir → "Authorization: <auth_scheme> <service_token>".
     auth_scheme: str = DEFAULT_AUTH_SCHEME
 
+    # ── SMS hız sınırı (P0-1) ────────────────────────────────────────────────
+    # Üç kapsam ayrı ayrı bütçelenir; ayrıntı için rate_limit.py.
+    sms_per_conversation: int = DEFAULT_SMS_PER_CONVERSATION
+    sms_conversation_window_min: int = DEFAULT_SMS_CONVERSATION_WINDOW_MIN
+    sms_per_tc: int = DEFAULT_SMS_PER_TC
+    sms_tc_window_min: int = DEFAULT_SMS_TC_WINDOW_MIN
+    sms_per_ip: int = DEFAULT_SMS_PER_IP
+    sms_ip_window_min: int = DEFAULT_SMS_IP_WINDOW_MIN
+    # TC hash'lemede kullanılan secret; None ise service_token'dan türetilir.
+    hash_secret: Optional[str] = None
+
     @property
     def enabled(self) -> bool:
         """base_url + service_token yoksa entegrasyon KAPALI (uçlar nazik 503 döner)."""
@@ -92,6 +116,14 @@ class SolutionCenterConfig:
             verification_ttl_min=_env_int(ENV_VERIFICATION_TTL_MIN, DEFAULT_VERIFICATION_TTL_MIN),
             category_cache_ttl_seconds=_env_int(ENV_CATEGORY_CACHE_TTL, DEFAULT_CATEGORY_CACHE_TTL_SECONDS),
             auth_scheme=(os.getenv(ENV_AUTH_SCHEME) or "").strip() or DEFAULT_AUTH_SCHEME,
+            sms_per_conversation=_env_int(ENV_SMS_PER_CONVERSATION, DEFAULT_SMS_PER_CONVERSATION),
+            sms_conversation_window_min=_env_int(
+                ENV_SMS_CONVERSATION_WINDOW_MIN, DEFAULT_SMS_CONVERSATION_WINDOW_MIN),
+            sms_per_tc=_env_int(ENV_SMS_PER_TC, DEFAULT_SMS_PER_TC),
+            sms_tc_window_min=_env_int(ENV_SMS_TC_WINDOW_MIN, DEFAULT_SMS_TC_WINDOW_MIN),
+            sms_per_ip=_env_int(ENV_SMS_PER_IP, DEFAULT_SMS_PER_IP),
+            sms_ip_window_min=_env_int(ENV_SMS_IP_WINDOW_MIN, DEFAULT_SMS_IP_WINDOW_MIN),
+            hash_secret=(os.getenv(ENV_HASH_SECRET) or "").strip() or None,
         )
 
 
