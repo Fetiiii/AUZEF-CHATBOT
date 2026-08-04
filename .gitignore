@@ -63,3 +63,7 @@ ssl/
 *.crt
 
 data/
+# ── Claude Code yerel ayarlari ───────────────────────────────────────────────
+# İzin kurallari lokal komutlari (ve bazen kimlik bilgilerini) icerebilir.
+.claude/settings.json
+.claude/settings.local.json
