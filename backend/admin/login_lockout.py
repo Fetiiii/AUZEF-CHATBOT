@@ -134,15 +134,28 @@ def _cleanup(db: Session) -> None:
             pass
 
 
+def _scope_locked(db: Session, scope: str, identifier: str,
+                  limit: int, window_min: int) -> bool:
+    """Kapsam dolmuş mu?
+
+    limit <= 0 ise kapsam DEVRE DIŞIDIR — rate_limit.py'deki `_consume` ile aynı
+    sözleşme. Bu kontrol olmadan `count >= 0` her zaman doğru olur, `is_locked()`
+    daima True döner ve TÜM admin girişi kilitlenirdi: operatörün "bu kapsamı
+    kapatayım" diye 0 yazması, kurumu kendi paneline kilitlemeye yeterdi."""
+    if limit <= 0:
+        return False
+    return _current_count(db, scope, identifier, window_min) >= limit
+
+
 def is_locked(db: Session, email: str, ip: Optional[str]) -> bool:
     """Salt-okunur kontrol — sayacı ARTIRMAZ.
 
     login() bunu bcrypt'ten ÖNCE çağırır: kilitli durumda pahalı hash
     hesaplaması hiç yapılmasın (bcrypt bilinçli olarak yavaştır)."""
     window_min = _window_minutes()
-    if _current_count(db, SCOPE_EMAIL, email, window_min) >= _max_attempts():
+    if _scope_locked(db, SCOPE_EMAIL, email, _max_attempts(), window_min):
         return True
-    if ip and _current_count(db, SCOPE_IP, ip, window_min) >= _ip_max_attempts():
+    if ip and _scope_locked(db, SCOPE_IP, ip, _ip_max_attempts(), window_min):
         return True
     return False
 
@@ -155,14 +168,20 @@ def register_failure(db: Session, email: str, ip: Optional[str]) -> bool:
     "başarısız TC denemesi de sayılır" ilkesiyle aynı mantık.
     """
     window_min = _window_minutes()
-    email_count = _consume(db, SCOPE_EMAIL, email, window_min)
-    ip_count = _consume(db, SCOPE_IP, ip, window_min) if ip else 0
+    email_max = _max_attempts()
+    ip_max = _ip_max_attempts()
+
+    # limit <= 0 → kapsam devre dışı: sayaç hiç artırılmaz (rate_limit._consume
+    # ile aynı sözleşme; bkz. _scope_locked notu).
+    email_count = _consume(db, SCOPE_EMAIL, email, window_min) if email_max > 0 else 0
+    ip_count = _consume(db, SCOPE_IP, ip, window_min) if (ip and ip_max > 0) else 0
     # Sayaçlar ÖNCE kalıcı olur; temizlik bundan SONRA ve kendi
     # transaction'ında çalışır (hatası artışları geri alamaz — bkz. _cleanup).
     db.commit()
     _cleanup(db)
 
-    exceeded = email_count >= _max_attempts() or ip_count >= _ip_max_attempts()
+    exceeded = ((email_max > 0 and email_count >= email_max)
+                or (ip_max > 0 and ip_count >= ip_max))
     if exceeded:
         # Log'a yalnızca kapsam bilgisi yazılır — parola ASLA, e-posta/IP'nin
         # kendisi de değil (denetim izi yeterli: "bir kilitlenme oldu").

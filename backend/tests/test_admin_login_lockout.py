@@ -207,3 +207,24 @@ def test_cleanup_failure_does_not_break_lockout(app, make_user, monkeypatch):
         assert row is not None and row.count == 1, "deneme sayilmadi (fail-open)"
     finally:
         s.close()
+
+
+# ── 10) Esik 0 = KAPSAM KAPALI, "herkesi kilitle" DEGIL ──────────────────────
+# count >= 0 her zaman dogru oldugu icin is_locked() daima True donuyordu:
+# operatörün "bu kapsami kapatayim" diye 0 yazmasi, kurumu kendi paneline
+# kilitlemeye yetiyordu. rate_limit._consume ile ayni sozlesme uygulanir.
+
+def test_zero_threshold_disables_scope_instead_of_locking_everyone(app, make_user, monkeypatch):
+    monkeypatch.setenv("ADMIN_LOGIN_MAX_ATTEMPTS", "0")
+    monkeypatch.setenv("ADMIN_LOGIN_IP_MAX_ATTEMPTS", "0")
+
+    make_user("sifir@iu.tr")
+    c = _client(app, "10.0.0.99")
+
+    # Yanlis parola: normal 401 vermeli, kilit DEGIL
+    for i in range(EMAIL_MAX + 3):
+        assert _login(c, "sifir@iu.tr").status_code == 401, f"{i + 1}. denemede kilitlendi"
+
+    # Dogru parola: girise izin verilmeli
+    r = c.post("/api/auth/login", json={"email": "sifir@iu.tr", "password": TEST_PASSWORD})
+    assert r.status_code == 200, "esik 0 iken tum admin girisi kilitlendi"
