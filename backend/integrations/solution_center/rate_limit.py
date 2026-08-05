@@ -138,7 +138,9 @@ class SmsRateLimiter:
                 "cutoff": utcnow() - timedelta(hours=SMS_COUNTER_RETENTION_HOURS),
             })
             db.commit()
-        except Exception as exc:  # pragma: no cover - savunma amaçlı
+        except Exception as exc:
+            # Bu dal TEST EDİLİYOR: test_cleanup_failure_does_not_break_rate_limiting
+            # _CLEANUP_SQL'i kasten patlatıp sayaçların korunduğunu doğrular.
             logger.warning("SC sayaç temizliği başarısız: %s", exc)
             try:
                 # Abort olmuş transaction'ı temizle ki isteğin geri kalanı

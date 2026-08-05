@@ -257,11 +257,17 @@ def test_raw_tc_is_never_stored(sc):
 
 
 # ── 8) Temizlik hatası hız sınırını BOZMAMALI ────────────────────────────────
-# _cleanup best-effort'tur, ama hatası aynı transaction'ı abort ettiği için
-# ardından gelen commit PendingRollbackError firlatiyordu: istek 500'e düşüyor
-# VE sayaç artışları geri alınıyordu — yani hız sınırı FAIL-OPEN oluyordu.
-# Tam da saldırı anında (kilit çakışması/deadlock olasılığının yükseldiği anda)
-# korumanın kaybolması demekti.
+# _cleanup "best-effort" diye hatasını yutuyordu, ama yutmak yetmiyordu: DELETE
+# transaction'ı abort ettiği için aynı transaction'da bekleyen sayaç artışları
+# da geri alınıyordu.
+#
+# Düzeltmesiz davranış ÖLÇÜLDÜ (tahmin değil): http=200, exception=None,
+# sayaç satırı=0. Yani hata hiçbir yere yansımıyor — ne kullanıcıya, ne log'a,
+# ne de bir 500'e; istek başarılı görünürken hız sınırı SESSİZCE fail-open
+# oluyor. Sessiz olması tespiti daha da zorlaştırıyor.
+#
+# Üstelik deadlock/kilit çakışması olasılığı tam da yük altında, yani korumanın
+# en çok gerektiği anda yükselir.
 
 def test_cleanup_failure_does_not_break_rate_limiting(sc, monkeypatch):
     from sqlalchemy import text as _text
