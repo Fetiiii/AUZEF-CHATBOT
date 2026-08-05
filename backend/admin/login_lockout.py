@@ -108,11 +108,30 @@ def _consume(db: Session, scope: str, identifier: str, window_min: int) -> int:
 
 
 def _cleanup(db: Session) -> None:
-    """Best-effort: temizlik hatası girişi engellemeli değil."""
+    """Eski sayaç satırlarını fırsattan istifade siler.
+
+    TAM İZOLE: kendi commit'ini yapar, hatada rollback eder. Çağıran, sayaç
+    artışlarını bu çağrıdan ÖNCE commit etmiş olmalıdır.
+
+    NEDEN İZOLASYON ŞART: "best-effort" olmak için except ile yutmak YETMEZ.
+    DELETE bir DBAPI hatası verdiğinde (kilit çakışması, deadlock, statement
+    timeout) transaction ABORT olur ve aynı transaction'da bekleyen sayaç
+    artışları da onunla geri alınır. Sonuç: giriş denemesi sayılmaz, yani kilit
+    SESSİZCE FAIL-OPEN olur — üstelik deadlock olasılığı tam da yük altında,
+    korumanın en çok gerektiği anda yükselir.
+    (Aynı hata rate_limit.py'de ölçülerek doğrulandı; bkz. o dosyadaki not.)
+    """
     try:
         db.execute(_CLEANUP_SQL, {"cutoff": utcnow() - timedelta(hours=_RETENTION_HOURS)})
+        db.commit()
     except Exception as exc:  # pragma: no cover - savunma amaçlı
         logger.warning("Admin login sayaç temizliği başarısız: %s", exc)
+        try:
+            # Abort olmuş transaction'ı temizle ki isteğin geri kalanı
+            # (oturum oluşturma vb.) çalışabilsin.
+            db.rollback()
+        except Exception:
+            pass
 
 
 def is_locked(db: Session, email: str, ip: Optional[str]) -> bool:
@@ -138,8 +157,10 @@ def register_failure(db: Session, email: str, ip: Optional[str]) -> bool:
     window_min = _window_minutes()
     email_count = _consume(db, SCOPE_EMAIL, email, window_min)
     ip_count = _consume(db, SCOPE_IP, ip, window_min) if ip else 0
-    _cleanup(db)
+    # Sayaçlar ÖNCE kalıcı olur; temizlik bundan SONRA ve kendi
+    # transaction'ında çalışır (hatası artışları geri alamaz — bkz. _cleanup).
     db.commit()
+    _cleanup(db)
 
     exceeded = email_count >= _max_attempts() or ip_count >= _ip_max_attempts()
     if exceeded:

@@ -178,3 +178,32 @@ def test_lockout_message_leaks_nothing(app, make_user):
     assert "hedef5@iu.tr" not in body, "e-posta yanıtta görünmemeli"
     assert str(EMAIL_MAX) not in r.json()["detail"], "deneme sayısı sızmamalı"
     assert "email" not in r.json()["detail"].lower(), "hangi kapsamın dolduğu sızmamalı"
+
+
+# ── 9) Temizlik hatası kilidi BOZMAMALI ──────────────────────────────────────
+# _cleanup best-effort'tur, ama hatası aynı transaction'ı abort ettiği için
+# sayaç artışları da geri alınıyordu → kilit sessizce FAIL-OPEN oluyordu.
+# (Aynı hata rate_limit.py'de ölçülerek doğrulandı.)
+
+def test_cleanup_failure_does_not_break_lockout(app, make_user, monkeypatch):
+    from sqlalchemy import text as _text
+
+    from admin import login_lockout
+    from core.database import AdminLoginAttempt, SessionLocal
+
+    monkeypatch.setattr(login_lockout, "_CLEANUP_SQL", _text("DELETE FROM tablo_yok_ki"))
+
+    make_user("temizlik@iu.tr")
+    c = _client(app, "10.0.0.90")
+
+    r = _login(c, "temizlik@iu.tr")
+    assert r.status_code == 401, f"temizlik hatasi istegi dusurdu: {r.text}"
+
+    # ASIL İDDİA: başarısız deneme SAYILMIŞ olmalı, yoksa kilit fail-open olur.
+    s = SessionLocal()
+    try:
+        row = s.query(AdminLoginAttempt).filter_by(
+            scope="email", identifier="temizlik@iu.tr").first()
+        assert row is not None and row.count == 1, "deneme sayilmadi (fail-open)"
+    finally:
+        s.close()
