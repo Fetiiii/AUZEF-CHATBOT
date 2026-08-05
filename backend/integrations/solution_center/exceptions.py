@@ -59,6 +59,19 @@ class CategoryNotFoundException(SolutionCenterException):
     http_status = 400
 
 
+class RateLimitExceededException(SolutionCenterException):
+    """SMS hız sınırı aşıldı (konuşma / TC / IP kapsamlarından biri).
+
+    Mesaj bilinçli olarak HANGİ kapsamın dolduğunu söylemez: "bu TC için limit
+    doldu" demek, saldırgana TC'nin sistemde bilindiğini doğrulayan yeni bir
+    oracle açardı."""
+    default_user_message = (
+        "Çok fazla doğrulama isteği gönderildi. "
+        "Lütfen bir süre bekleyip tekrar deneyin."
+    )
+    http_status = 429
+
+
 class InvalidStateException(SolutionCenterException):
     """Akış adımları sırayla ilerlemedi (ör. OTP'den önce talep oluşturma)."""
     default_user_message = "Talep adımları sırasıyla ilerlemelidir. Lütfen baştan başlayın."

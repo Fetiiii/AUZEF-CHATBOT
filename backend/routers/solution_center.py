@@ -12,7 +12,7 @@ import hmac
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -91,13 +91,19 @@ def _verify_owner(db: Session, conversation_id: int, token: Optional[str]) -> Co
 @router.post("/send-sms")
 async def send_sms(
     body: SendSmsRequest,
+    request: Request,
     db: Session = Depends(get_db),
     service: SolutionCenterService = Depends(get_sc_service),
     _config: SolutionCenterConfig = Depends(require_enabled),
 ):
-    """TC doğrula → maskeli telefonu göster + SMS gönder. Token yanıtta DÖNMEZ."""
+    """TC doğrula → maskeli telefonu göster + SMS gönder. Token yanıtta DÖNMEZ.
+
+    Hız sınırı service katmanında uygulanır (P0-1); burada yalnızca istemci
+    IP'si taşınır. uvicorn --proxy-headers ile çalıştığı için bu GERÇEK istemci
+    IP'sidir, nginx'inki değil (bkz. entrypoint.sh)."""
     _verify_owner(db, body.conversation_id, body.conversation_token)
-    masked = await service.start_verification(body.conversation_id, body.kimlik_no)
+    ip = request.client.host if request.client else None
+    masked = await service.start_verification(body.conversation_id, body.kimlik_no, ip)
     return {"masked_phone": masked, "state": "SC_WAIT_OTP"}
 
 

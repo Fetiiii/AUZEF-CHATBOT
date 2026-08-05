@@ -115,10 +115,14 @@ def clean_tables():
     from core.database import engine
     from sqlalchemy import text
     with engine.connect() as conn:
+        # sc_rate_limits: SMS hız sınırı sayaçları. Listede olmazsa bir test
+        # diğerinin sayacını devralır ve testler SIRAYA BAĞLI olarak patlar.
+        # academic_calendar: takvim kayıtları da testler arasında sızıyordu.
         conn.execute(text("""
             TRUNCATE admin_sessions, admin_users, conversation_messages,
                      conversations, query_logs, system_config,
-                     qna_queries, qna_tags, tags, qna
+                     qna_queries, qna_tags, tags, qna,
+                     sc_rate_limits, academic_calendar
             RESTART IDENTITY CASCADE
         """))
         conn.commit()

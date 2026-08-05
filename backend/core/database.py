@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timezone
-from sqlalchemy import Column, BigInteger, Text, SmallInteger, DateTime, ForeignKey, String, func
+from sqlalchemy import Column, BigInteger, Integer, Text, SmallInteger, DateTime, ForeignKey, String, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy import create_engine
@@ -126,6 +126,32 @@ class SolutionCenterSession(Base):
     category_short_code = Column(String(120), nullable=True)
     expires_at = Column(DateTime, nullable=True, index=True)  # verificationToken son kullanma
     created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+# ── Çözüm Merkezi SMS hız sınırı sayaçları ───────────────────────────────────
+# send-sms ucu, geçerli bir conversation_token dışında hiçbir maliyet taşımıyordu:
+# tek bir /widget-chat çağrısıyla token alınıp sınırsız SMS gönderilebiliyor ve
+# istenen TC'nin sistemde kayıtlı olup olmadığı (maskeli telefon dönmesinden)
+# öğrenilebiliyordu. Bu tablo o iki saldırıyı ayrı ayrı bütçeler.
+#
+# NEDEN DB, NEDEN BELLEK DEĞİL: uvicorn 2 worker ile çalışıyor (entrypoint.sh);
+# süreç-içi bir sayaç her worker'da ayrı yaşar ve gerçek limiti ikiye katlar.
+#
+# NEDEN TEK TABLO/ÜÇ KAPSAM: tek temizlik rutini, tek atomik artırma sorgusu.
+# Sayaç bilinçli olarak SolutionCenterSession'a KONMADI — start_verification o
+# satırı her çağrıda sıfırlıyor, sayaç orada olsa limit resetlenebilirdi.
+#
+# GÜVENLİK: key_hash bir HMAC-SHA256'dır; TC ham hâliyle ASLA yazılmaz
+# (bkz. SolutionCenterSession'daki aynı ilke). Secret olmadan hash'ten TC'ye
+# dönülemez, secret ile de rainbow-table üretilemez.
+class SCRateLimit(Base):
+    __tablename__ = "sc_rate_limits"
+    scope = Column(String(10), primary_key=True)      # 'conv' | 'tc' | 'ip'
+    key_hash = Column(String(64), primary_key=True)   # HMAC-SHA256 hex (ham değer DEĞİL)
+    count = Column(Integer, nullable=False, default=0)
+    # Sabit pencere (fixed window): pencere dolduğunda count 1'e döner.
+    window_started_at = Column(DateTime, nullable=False, index=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
