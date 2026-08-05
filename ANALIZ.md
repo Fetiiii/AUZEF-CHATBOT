@@ -15,7 +15,8 @@
 
 Proje mühendislik olarak olgun: katmanlı mimari SPEC'e sadık, sır yönetimi disiplinli
 (TC ve OTP hiçbir yerde saklanmıyor), performans iyileştirmeleri ölçüme dayalı ve
-gerekçelendirilmiş, 61 backend testi gerçek veritabanına karşı koşuyor. Sorun *eksik
+gerekçelendirilmiş, kapsamlı bir backend test paketi gerçek veritabanına karşı
+koşuyor. Sorun *eksik
 özellik* değil, **canlıya çıkışta kırılacak operasyonel ve güvenlik boşlukları**.
 
 Test aşamasına çıkışı bloklayan **7 madde** tespit edildi; **P0-1 çözüldü**, 6'sı açık:
@@ -125,7 +126,8 @@ Bunlar raporun dengesi için değil, **korunması gereken kararlar** oldukları 
 5. **CSV formül enjeksiyonu düşünülmüş** ([`csv_utils.py:8`](backend/services/csv_utils.py#L8))
    — kullanıcı mesajı Excel'de formül olarak çalışamıyor.
 
-6. **Test paketi ciddi.** 61 test, gerçek Postgres'e karşı, gerçek middleware ile;
+6. **Test paketi ciddi.** Raporun yazıldığı anda 61 test (P0 düzeltmeleriyle
+   birlikte artmaya devam ediyor), gerçek Postgres'e karşı, gerçek middleware ile;
    arama/embedding sağlayıcıları stub'lanmış (ağ/model gerekmiyor).
 
 ---
@@ -411,9 +413,9 @@ bilgilendirme/rıza katmanı ve saklama politikası.
 #### P1-8 · Çözüm Merkezi entegrasyonu — kısmen doğrulandı, kalan risk daraldı
 
 > ✅ **GÜNCELLEME:** Lokal kurulumda canlı API'ye **SMS göndermeyen** doğrulama
-> yapıldı ve aşağıdaki dört riskten **üçü kapandı**. Ayrıntı bu bölümün sonunda.
+> yapıldı ve aşağıdaki beş riskten **üçü kapandı**. Ayrıntı bu bölümün sonunda.
 
-`.env` içindeki `CM_SERVICE_TOKEN` dolu. Kodda canlıda kırılabilecek **dört nokta**
+`.env` içindeki `CM_SERVICE_TOKEN` dolu. Kodda canlıda kırılabilecek **beş nokta**
 tanımlanmıştı:
 
 | # | Risk | Kanıt | Durum |
@@ -513,7 +515,8 @@ geldiği için sunucu değişikliği gerektirmez).
 
 **Etki**
 
-61 backend testi mevcut ama koşulması geliştiricinin hatırlamasına bağlı. Regresyonlar
+Kapsamlı bir backend test paketi mevcut (rapor yazılırken 61 test) ama koşulması
+geliştiricinin hatırlamasına bağlı. Regresyonlar
 deploy sırasında yakalanıyor. `DEPLOY.md` "backend'e dokunan her değişiklikten sonra
 suite'i çalıştırın" diyor — bu bir sürecin yerini tutmaz.
 
@@ -893,11 +896,17 @@ düşülmeli (bkz. P1-8).
 
 ---
 
-#### P2-17 · Test fixture'ında eksik tablo temizliği
+#### P2-17 · Test fixture'ında eksik tablo temizliği — ✅ ÇÖZÜLDÜ
 
-[`tests/conftest.py:118-123`](backend/tests/conftest.py#L118) — `clean_tables`
-fixture'ının `TRUNCATE` listesinde `academic_calendar` **yok**. Takvim kayıtları
-testler arasında sızabilir.
+**Tespit edilen (rapor yazıldığında):** `clean_tables` fixture'ının `TRUNCATE`
+listesinde `academic_calendar` yoktu; takvim kayıtları testler arasında
+sızabiliyordu.
+
+**Durum:** P0-1 çalışmasında kapatıldı — `academic_calendar` ve yeni eklenen
+`sc_rate_limits` birlikte listeye alındı
+([`tests/conftest.py`](backend/tests/conftest.py) `clean_tables`). Sayaç
+tablolarının listede olmaması testleri sıraya bağlı hâle getireceği için bu,
+sonraki P0'larda da tekrarlanan bir kontrol maddesi oldu.
 
 (`solution_center_sessions` listede yok ama `conversations` üzerinden `CASCADE` ile
 temizleniyor — bu tarafta sorun yok.)
