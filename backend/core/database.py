@@ -125,6 +125,13 @@ class SolutionCenterSession(Base):
     selected_student_id = Column(BigInteger, nullable=True)
     category_short_code = Column(String(120), nullable=True)
     expires_at = Column(DateTime, nullable=True, index=True)  # verificationToken son kullanma
+    # Yanlış OTP deneme sayacı (ANALIZ.md P0-2). Eşiğe ulaşınca verification_token
+    # silinir ve state SC_WAIT_TC'ye döner — kullanıcı akışı baştan başlatmak zorunda.
+    # Sayaç BİLİNÇLİ olarak burada, sc_rate_limits'te değil: bu bir zaman penceresi
+    # sayacı değil, verificationToken'ın ÖMRÜNE bağlı bir sayaç. Token değişince
+    # (yeni SMS) sıfırlanır, token ölünce anlamını yitirir — yani tam olarak bu
+    # satırın yaşam döngüsü.
+    otp_attempts = Column(Integer, nullable=False, server_default="0", default=0)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -261,6 +268,11 @@ def init_db():
         # 6.4M satırlık tam taramayı (~1.5sn, ölçüldü) index-only scan'e indirir.
         "CREATE INDEX IF NOT EXISTS ix_conversation_messages_rating "
         "ON conversation_messages (rating) WHERE rating IS NOT NULL",
+        # OTP deneme sayacı (P0-2): MEVCUT tabloya kolon eklendiği için
+        # create_all yetmez — admin_users.role satırıyla aynı kalıp.
+        # Eski satırlar DEFAULT 0 ile gelir (kimse kilitli başlamaz).
+        "ALTER TABLE solution_center_sessions "
+        "ADD COLUMN IF NOT EXISTS otp_attempts INTEGER NOT NULL DEFAULT 0",
     ]
 
     with engine.connect() as conn:

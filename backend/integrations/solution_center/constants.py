@@ -41,6 +41,9 @@ ENV_SMS_IP_WINDOW_MIN = "CM_SMS_IP_WINDOW_MIN"
 # TC sayacı worker başına ayrışıp işlevsiz kalırdı.
 ENV_HASH_SECRET = "SC_HASH_SECRET"
 
+# ── OTP deneme sayacı (P0-2) ─────────────────────────────────────────────────
+ENV_OTP_MAX_ATTEMPTS = "CM_OTP_MAX_ATTEMPTS"
+
 # ── Varsayılanlar ────────────────────────────────────────────────────────────
 # channel.shortCode SPEC'te "örnek" olarak verilmiş; kesin değer netleşene
 # kadar env'den (CM_CHANNEL_SHORTCODE) override edilebilir (kod değişmez).
@@ -68,3 +71,14 @@ DEFAULT_SMS_PER_IP = 30
 DEFAULT_SMS_IP_WINDOW_MIN = 60
 # Sayaç satırlarının saklanma süresi; bundan eskiler fırsattan istifade silinir.
 SMS_COUNTER_RETENTION_HOURS = 24
+
+# ── OTP deneme sayacı varsayılanı (P0-2) ─────────────────────────────────────
+# Kaç YANLIŞ koddan sonra doğrulama oturumu iptal edilir.
+#
+# Bu eşik tek başına değerlendirilmemeli: SMS hız sınırıyla ÇARPILIR. Yeni SMS
+# istemek sayacı sıfırladığı için (bkz. service.start_verification), gerçek
+# bütçe "SMS limiti × bu eşik"tir:
+#     TC başına 5 SMS/saat × 5 deneme = saatte 25 kod denemesi
+#     1.000.000 kombinasyon içinde → beklenen kırılma süresi ~2,3 yıl
+# DEFAULT_SMS_PER_TC düşürülür/kaldırılırsa bu koruma da zayıflar.
+DEFAULT_OTP_MAX_ATTEMPTS = 5
