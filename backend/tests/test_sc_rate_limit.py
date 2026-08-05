@@ -254,3 +254,30 @@ def test_raw_tc_is_never_stored(sc):
         assert len(key_hash) == 64, "anahtar HMAC-SHA256 hex olmalı"
     # Üç kapsam da yazılmış olmalı
     assert {scope for scope, _k, _c in rows} == {"conv", "tc", "ip"}
+
+
+# ── 8) Temizlik hatası hız sınırını BOZMAMALI ────────────────────────────────
+# _cleanup best-effort'tur, ama hatası aynı transaction'ı abort ettiği için
+# ardından gelen commit PendingRollbackError firlatiyordu: istek 500'e düşüyor
+# VE sayaç artışları geri alınıyordu — yani hız sınırı FAIL-OPEN oluyordu.
+# Tam da saldırı anında (kilit çakışması/deadlock olasılığının yükseldiği anda)
+# korumanın kaybolması demekti.
+
+def test_cleanup_failure_does_not_break_rate_limiting(sc, monkeypatch):
+    from sqlalchemy import text as _text
+
+    from integrations.solution_center import rate_limit
+
+    # Temizliği kasten patlat (var olmayan tablo → DBAPI hatası → transaction abort)
+    monkeypatch.setattr(rate_limit, "_CLEANUP_SQL", _text("DELETE FROM tablo_yok_ki"))
+
+    c = sc["configure"]()
+    conv = sc["new_conversation"]()
+
+    r = _send(c, conv)
+    assert r.status_code == 200, f"temizlik hatasi istegi dusurdu: {r.text}"
+
+    # ASIL İDDİA: sayaç artışı KAYBOLMAMALI, yoksa limit fail-open olur.
+    rows = _rate_limit_rows()
+    scopes = {scope for scope, _k, _c in rows}
+    assert "conv" in scopes and "tc" in scopes, f"sayaclar geri alindi: {rows}"

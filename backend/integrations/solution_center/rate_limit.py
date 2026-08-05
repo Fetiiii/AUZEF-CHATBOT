@@ -122,14 +122,30 @@ class SmsRateLimiter:
     def _cleanup(self, db: Session) -> None:
         """Eski satırları fırsattan istifade sil (auth.create_session ile aynı kalıp).
 
-        Best-effort: temizlik hatası hız sınırını uygulamayı engellememeli.
+        TAM İZOLE: kendi commit'ini yapar, hatada rollback eder. Çağıran, sayaç
+        artışlarını bu çağrıdan ÖNCE commit etmiş olmalıdır.
+
+        NEDEN İZOLASYON ŞART: temizlik "best-effort" diye yalnızca except ile
+        yutulursa yetmez. DELETE bir DBAPI hatası verdiğinde (kilit çakışması,
+        deadlock, statement timeout) transaction ABORT olur; aynı transaction'da
+        bekleyen sayaç artışları da onunla birlikte geri alınır. Sonuç ölçüldü:
+        istek 200 dönüyor ama sayaçlar kayboluyor — yani hız sınırı SESSİZCE
+        FAIL-OPEN oluyor. Üstelik deadlock olasılığı tam da yük altında, yani
+        korumanın en çok gerektiği anda yükselir.
         """
         try:
             db.execute(_CLEANUP_SQL, {
                 "cutoff": utcnow() - timedelta(hours=SMS_COUNTER_RETENTION_HOURS),
             })
+            db.commit()
         except Exception as exc:  # pragma: no cover - savunma amaçlı
             logger.warning("SC sayaç temizliği başarısız: %s", exc)
+            try:
+                # Abort olmuş transaction'ı temizle ki isteğin geri kalanı
+                # (SC oturum satırı yazımı) çalışabilsin.
+                db.rollback()
+            except Exception:
+                pass
 
     # ── Public ───────────────────────────────────────────────────────────────
 
@@ -165,8 +181,10 @@ class SmsRateLimiter:
             if not self._consume(db, scope, raw_key, limit, window_min) and exceeded is None:
                 exceeded = scope
 
-        self._cleanup(db)
+        # Sayaçlar ÖNCE kalıcı olur. Temizlik bundan SONRA ve kendi
+        # transaction'ında çalışır; hatası artışları geri alamaz (bkz. _cleanup).
         db.commit()
+        self._cleanup(db)
 
         if exceeded is not None:
             # Log'a yalnızca KAPSAM adı yazılır — TC, IP ya da hash ASLA.
