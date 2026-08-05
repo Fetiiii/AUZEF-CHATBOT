@@ -10,10 +10,9 @@ Kapsanan senaryolar:
   1) Esige ulasinca oturum kilitlenir   2) Kilitliyken CM'ye cagri GITMEZ
   3) Esigin altinda eski davranis       4) Dogru kod sayaci sifirlar
   5) Yeni SMS sayaci sifirlar           6) Sayac konusmaya ozgu
-  7) Kilit mesaji kod/token sizdirmaz
+  7) Kilit mesaji kod/token sizdirmaz   8) Sayac/kilit TOKEN'a kosullu (yaris)
 """
 import secrets
-from dataclasses import replace
 
 import httpx
 import pytest
@@ -145,7 +144,7 @@ def test_lock_after_max_wrong_attempts(sc):
 
     for i in range(MAX_ATTEMPTS - 1):
         r = sc["verify"](conv, BAD_CODE)
-        assert r.status_code == 400, f"{i + 1}. deneme hentuz kilitlememeli"
+        assert r.status_code == 400, f"{i + 1}. deneme henüz kilitlememeli"
 
     r = sc["verify"](conv, BAD_CODE)          # MAX'inci deneme
     assert r.status_code == 429
@@ -250,3 +249,57 @@ def test_lock_message_leaks_nothing(sc):
     assert TC not in body, "TC yanitta gorunmemeli"
     # Deneme sayisi da sizmamali (saldirgana ilerleme geri bildirimi vermez).
     assert str(MAX_ATTEMPTS) not in r.json()["detail"]
+
+
+# ── 8) Sayac ve kilit TOKEN'a kosullu (yaris korumasi) ───────────────────────
+# CM cagrisi beklenirken (await) kullanici yeni SMS isteyip token'i yenileyebilir.
+# Gec gelen istek YENI oturuma dokunmamali: ne sayacini kirletmeli ne de onu
+# kilitlemeli. Bu yarisi TestClient ile gercek zamanli kurmak mumkun olmadigi
+# icin, ic metotlar dogrudan cagrilarak kosul dogrulanir.
+
+def _service(db):
+    """Yalnizca DB kullanan ic metotlari test etmek icin minimal servis."""
+    from integrations.solution_center.service import SolutionCenterService
+    return SolutionCenterService(db=db, client=None, cache=None,
+                                 config=CONFIG, limiter=None)
+
+
+def test_attempt_counter_is_token_scoped(sc):
+    from core.database import SessionLocal
+
+    conv = sc["new_conversation"]()
+    sc["start"](conv)                                  # token = tok-abc, sayac 0
+
+    s = SessionLocal()
+    try:
+        svc = _service(s)
+        # ESKI (artik gecersiz) token ile artirma -> hicbir satir eslesmez
+        assert svc._consume_otp_attempt(conv["id"], "eski-token") is None
+        assert _row(conv["id"])["otp_attempts"] == 0, "yeni oturumun sayaci kirlendi"
+        # GECERLI token ile artirma normal calisir
+        assert svc._consume_otp_attempt(conv["id"], "tok-abc") == 1
+    finally:
+        s.close()
+
+
+def test_lock_is_token_scoped(sc):
+    from core.database import SessionLocal
+
+    conv = sc["new_conversation"]()
+    sc["start"](conv)
+
+    s = SessionLocal()
+    try:
+        svc = _service(s)
+        # ESKI token ile kilitleme YENI oturumu iptal ETMEMELI
+        svc._lock_verification(conv["id"], "eski-token")
+        row = _row(conv["id"])
+        assert row["verification_token"] == "tok-abc", "gecerli token silindi!"
+        assert row["state"] == "SC_WAIT_OTP", "gecerli oturum bastan basa dondu!"
+        # GECERLI token ile kilitleme calisir
+        svc._lock_verification(conv["id"], "tok-abc")
+        row = _row(conv["id"])
+        assert row["verification_token"] is None
+        assert row["state"] == "SC_WAIT_TC"
+    finally:
+        s.close()
