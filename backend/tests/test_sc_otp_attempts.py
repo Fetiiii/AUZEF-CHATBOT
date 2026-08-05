@@ -11,6 +11,7 @@ Kapsanan senaryolar:
   3) Esigin altinda eski davranis       4) Dogru kod sayaci sifirlar
   5) Yeni SMS sayaci sifirlar           6) Sayac konusmaya ozgu
   7) Kilit mesaji kod/token sizdirmaz   8) Sayac/kilit TOKEN'a kosullu (yaris)
+  9) Deneme CM.den ONCE rezerve edilir 10) Ulasilamayan CM rezervasyonu iade eder
 """
 import secrets
 
@@ -55,12 +56,26 @@ CONFIG = SolutionCenterConfig(
 )
 
 
+def _total_attempts() -> int:
+    """Tum SC oturumlarindaki otp_attempts toplami (ayri session ile taze okur)."""
+    from core.database import SessionLocal, SolutionCenterSession
+    s = SessionLocal()
+    try:
+        return sum(r.otp_attempts for r in s.query(SolutionCenterSession).all())
+    finally:
+        s.close()
+
+
 class _Transport:
     """CM cagrilarini sayar; verify_code yanitini test kontrol eder."""
 
     def __init__(self):
         self.calls = 0
         self.verify_calls = 0
+        # CM'nin cagrildigi ANDA sayacin degeri. Rezervasyon modelinin
+        # kanitidir: deneme CM'ye gitmeden ONCE dusulmus olmali.
+        self.attempts_at_call = []
+        self.fail_verify = False   # True -> CM'ye ulasilamiyor (timeout)
 
     def build(self) -> httpx.MockTransport:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -74,6 +89,9 @@ class _Transport:
                     "isSuccess": True, "data": {"verificationToken": "tok-abc"}})
             if path == PATH_VERIFY_CODE:
                 self.verify_calls += 1
+                self.attempts_at_call.append(_total_attempts())
+                if self.fail_verify:
+                    raise httpx.TimeoutException("mock timeout")
                 # Yalnizca GOOD_CODE kabul edilir.
                 if request.content and GOOD_CODE.encode() in request.content:
                     return httpx.Response(200, json={"isSuccess": True, "data": [
@@ -303,3 +321,45 @@ def test_lock_is_token_scoped(sc):
         assert row["state"] == "SC_WAIT_TC"
     finally:
         s.close()
+
+
+# ── 9) Deneme CM'ye gitmeden ONCE rezerve edilir (paralel patlama korumasi) ──
+# Sayac eskiden CM YANITINDAN SONRA artiyordu. O sirada N paralel istek on
+# kontrolu AYNI (henuz artmamis) degerle geciyor ve hepsi CM'ye tahmin
+# gonderiyordu; atomik artirma sayacin BOZULMASINI engeller ama bu ASIMI
+# engellemez. verify-otp nginx'te de hiz sinirli olmadigi icin pratikte tek SMS
+# basina yuzlerce tahmin demekti.
+#
+# Paralelligi TestClient ile kurmak mumkun olmadigi icin ORDERING invaryanti
+# olculur: CM cagrildigi ANDA sayac zaten artmis olmali.
+
+def test_attempt_is_reserved_before_cm_call(sc):
+    conv = sc["new_conversation"]()
+    sc["start"](conv)
+
+    sc["verify"](conv, BAD_CODE)
+
+    assert sc["transport"].attempts_at_call == [1], (
+        "sayac CM cagrisindan SONRA artiyor -> paralel istekler butceyi asabilir "
+        f"(olculen: {sc['transport'].attempts_at_call})"
+    )
+
+
+def test_unreachable_cm_refunds_the_reservation(sc):
+    """Rezervasyon modelinin ikinci yarisi: CM'ye ULASILAMAZSA hak iade edilir.
+    Timeout bir TAHMIN degildir; mesru kullanicinin hakki CM'nin sorunlari
+    yuzunden yanmamali."""
+    conv = sc["new_conversation"]()
+    sc["start"](conv)
+
+    sc["transport"].fail_verify = True
+    r = sc["verify"](conv, BAD_CODE)
+    assert r.status_code == 503, r.text          # ApiConnectionException
+
+    assert _row(conv["id"])["otp_attempts"] == 0, "ag hatasi kullanicinin hakkini yakti"
+
+    # Iade sonrasi tam hak duruyor: MAX kadar deneme hala yapilabilmeli
+    sc["transport"].fail_verify = False
+    for i in range(MAX_ATTEMPTS - 1):
+        assert sc["verify"](conv, BAD_CODE).status_code == 400, f"{i + 1}. deneme"
+    assert sc["verify"](conv, BAD_CODE).status_code == 429

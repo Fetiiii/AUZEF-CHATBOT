@@ -214,13 +214,37 @@ class SolutionCenterService:
         )
         self._db.commit()
 
+    def _refund_otp_attempt(self, conversation_id: int, token: str) -> None:
+        """Rezerve edilmiş denemeyi geri verir.
+
+        Yalnızca CM'ye ULAŞILAMADIĞINDA (timeout / 5xx / ağ) çağrılır: bu bir
+        TAHMİN değildir, meşru kullanıcının hakkı CM'nin sorunları yüzünden
+        yanmamalı. GREATEST ile sayaç 0'ın altına düşemez.
+
+        Best-effort: iadenin kendisi hata verirse asıl hatayı maskelememeli."""
+        try:
+            self._db.execute(
+                text(
+                    "UPDATE solution_center_sessions "
+                    "SET otp_attempts = GREATEST(otp_attempts - 1, 0) "
+                    "WHERE conversation_id = :cid AND verification_token = :token"
+                ),
+                {"cid": conversation_id, "token": token},
+            )
+            self._db.commit()
+        except Exception as exc:  # pragma: no cover - savunma amaçlı
+            logger.warning("SC OTP deneme iadesi başarısız: %s", exc)
+            try:
+                self._db.rollback()
+            except Exception:
+                pass
+
     async def verify_otp(self, conversation_id: int, code: str) -> dict:
         """OTP doğrular, öğrenci(ler)i getirir. Tek öğrenci ise otomatik seçilir.
 
-        Yanlış denemeler sayılır (ANALIZ.md P0-2); eşiğe ulaşınca oturum
-        kilitlenir. Sayaç YALNIZCA kod reddedildiğinde artar — CM timeout'u ya
-        da 5xx bir tahmin değildir, meşru kullanıcının hakkı ağ hatası yüzünden
-        yanmamalı."""
+        Deneme hakkı CM çağrısından ÖNCE rezerve edilir (ANALIZ.md P0-2);
+        eşik aşılınca oturum kilitlenir. CM'ye ulaşılamazsa rezervasyon iade
+        edilir — timeout/5xx bir tahmin değildir."""
         row = self._load_or_400(conversation_id)
         if row.state not in (SCState.SC_WAIT_OTP.value, SCState.SC_WAIT_STUDENT_SELECTION.value):
             raise InvalidStateException(f"OTP beklenmiyor (state={row.state})")
@@ -233,20 +257,33 @@ class SolutionCenterService:
         if not token:
             raise VerificationExpiredException("verificationToken yok")
 
-        # Ön kontrol: kilitli oturumda CM'ye HİÇ gitme (kurumun API'sine
-        # gereksiz yük). Savunma amaçlı — normalde token zaten NULL'dur.
-        if row.otp_attempts >= self._config.otp_max_attempts:
+        # ── Denemeyi CM'YE GİTMEDEN ÖNCE REZERVE ET ─────────────────────────
+        # Sayaç eskiden CM yanıtından SONRA artıyordu. O sırada N paralel istek
+        # ön kontrolü AYNI (henüz artmamış) değerle geçiyor ve hepsi CM'ye tahmin
+        # gönderiyordu: atomik artırma sayacın BOZULMASINI engeller ama bu AŞIMI
+        # engellemez. verify-otp nginx'te de hız sınırlı olmadığı için pratikte
+        # tek SMS başına yüzlerce tahmin anlamına geliyordu — eşiği 5'te tutmanın
+        # anlamı kalmıyordu.
+        #
+        # Rezervasyon modeliyle bütçe önce düşer: eşiği aşan istekler CM'ye HİÇ
+        # ulaşmaz, kaç tanesi aynı anda gelirse gelsin.
+        attempts = self._consume_otp_attempt(conversation_id, token)
+        if attempts is None:
+            # Token bu arada yenilendi (kullanıcı yeni SMS istedi). Bu istek
+            # ARTIK GEÇERSİZ bir oturuma ait.
+            raise VerificationExpiredException("oturum bu arada yenilendi")
+        if attempts > self._config.otp_max_attempts:
             self._lock_verification(conversation_id, token)
             raise OtpAttemptsExceededException("OTP deneme hakkı zaten tükenmiş")
 
-        payload = await self._client.verify_code(code, token)
+        try:
+            payload = await self._client.verify_code(code, token)
+        except Exception:
+            # CM'ye ulaşılamadı: bu bir TAHMİN değil, rezervasyonu iade et.
+            self._refund_otp_attempt(conversation_id, token)
+            raise
+
         if not _ok(payload):
-            attempts = self._consume_otp_attempt(conversation_id, token)
-            if attempts is None:
-                # Token bu arada yenilendi (kullanıcı yeni SMS istedi). Bu deneme
-                # ARTIK GEÇERSİZ bir oturuma ait; yeni oturumun sayacı kirletilmez
-                # ve kilit tetiklenmez.
-                raise InvalidOtpException("OTP reddedildi (oturum bu arada yenilendi)")
             if attempts >= self._config.otp_max_attempts:
                 self._lock_verification(conversation_id, token)
                 # Log'a yalnızca sayı yazılır — kod, token, TC ASLA.
@@ -263,26 +300,48 @@ class SolutionCenterService:
         if not students:
             raise StudentNotFoundException("Öğrenci kaydı yok")
 
-        # Doğru kod geldi → sayaç sıfırlanır. Akış zaten ilerliyor ama state
-        # SC_WAIT_STUDENT_SELECTION'a düşerse bu uca tekrar gelinebiliyor
-        # (bkz. yukarıdaki state kontrolü); bayat bir sayaç taşınmamalı.
-        row.otp_attempts = 0
-        row.students_json = json.dumps(
+        # Başarı yolu da TOKEN'A KOŞULLU yazılır (ORM satırı üzerinden DEĞİL):
+        # row, await'ten önce okundu; araya yeni SMS girdiyse bayattır ve ORM
+        # yazımı yeni oturumun state/students alanlarını ezerdi. Doğru kod
+        # gelmiş olması bu riski ortadan kaldırmaz — yalnızca ihtimalini
+        # düşürür (eski token CM'de de geçersizleşirdi).
+        students_json = json.dumps(
             [s.model_dump(by_alias=True) for s in students], ensure_ascii=False
         )
         if len(students) == 1:
-            row.selected_student_id = students[0].ogrenci_id
-            row.state = SCState.SC_WAIT_CATEGORY_SELECTION.value
+            selected_id = students[0].ogrenci_id
+            new_state = SCState.SC_WAIT_CATEGORY_SELECTION.value
             auto = True
         else:
-            row.selected_student_id = None
-            row.state = SCState.SC_WAIT_STUDENT_SELECTION.value
+            selected_id = None
+            new_state = SCState.SC_WAIT_STUDENT_SELECTION.value
             auto = False
+
+        # otp_attempts sıfırlanır: state SC_WAIT_STUDENT_SELECTION'a düşerse
+        # bu uca tekrar gelinebiliyor, bayat bir sayaç taşınmamalı.
+        updated = self._db.execute(
+            text(
+                "UPDATE solution_center_sessions SET "
+                "otp_attempts = 0, students_json = :students, "
+                "selected_student_id = :sid, state = :state "
+                "WHERE conversation_id = :cid AND verification_token = :token"
+            ),
+            {
+                "cid": conversation_id,
+                "token": token,
+                "students": students_json,
+                "sid": selected_id,
+                "state": new_state,
+            },
+        ).rowcount
         self._db.commit()
+        if not updated:
+            raise VerificationExpiredException("oturum bu arada yenilendi")
+
         logger.info("SC verify_otp tamam conversation_id=%s ogrenci_sayisi=%d auto=%s",
                     conversation_id, len(students), auto)
         return {
-            "state": row.state,
+            "state": new_state,
             "auto_selected": auto,
             "students": [s.model_dump(by_alias=True) for s in students],
         }
