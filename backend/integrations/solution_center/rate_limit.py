@@ -152,8 +152,13 @@ class SmsRateLimiter:
                 # Abort olmuş transaction'ı temizle ki isteğin geri kalanı
                 # (SC oturum satırı yazımı) çalışabilsin.
                 db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_exc:
+                # Buraya düşmek CİDDİDİR: rollback da başarısızsa Session failed
+                # state'te kalır ve isteğin sonraki adımları (SC oturum satırı)
+                # çok daha belirsiz bir hatayla patlar. Sessizce yutmak, o hatanın
+                # kök nedenini gizler — en azından traceback bırak.
+                logger.error("SC sayaç temizliği rollback'i de başarısız: %s",
+                             rb_exc, exc_info=True)
 
     # ── Public ───────────────────────────────────────────────────────────────
 
