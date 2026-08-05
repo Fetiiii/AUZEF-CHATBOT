@@ -186,6 +186,26 @@ class AdminSession(Base):
 
     user = relationship("AdminUser", back_populates="sessions")
 
+
+# ── Admin girişi kaba kuvvet sayaçları (ANALIZ.md P0-3) ──────────────────────
+# /api/auth/login tek IP sınırlamasıyla korunuyordu (chat_limit, sohbet için
+# ayarlanmış 10r/s — parola koruması için fiilen etkisiz). Bu tablo iki kapsamı
+# ayrı ayrı bütçeler: e-posta (belirli bir hesabı hedefleyen deneme) ve IP
+# (tek kaynaktan çok hesap denemesi/spray) — biri diğerinin yerini tutmaz.
+#
+# sc_rate_limits İLE AYNI KALIP (sabit pencere, atomik UPSERT artırma), ama
+# HASH'LEME YOK: e-posta ve IP zaten sistemde açık metin saklanıyor
+# (AdminUser.email, Conversation.ip_address) — TC'nin aksine gizlenmesi
+# gereken bir veri değil.
+class AdminLoginAttempt(Base):
+    __tablename__ = "admin_login_attempts"
+    scope = Column(String(10), primary_key=True)        # 'email' | 'ip'
+    identifier = Column(String(255), primary_key=True)  # e-posta ya da IP, açık metin
+    count = Column(Integer, nullable=False, default=0)
+    window_started_at = Column(DateTime, nullable=False, index=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class AcademicCalendar(Base):
     __tablename__ = "academic_calendar"
     id = Column(BigInteger, primary_key=True, index=True)

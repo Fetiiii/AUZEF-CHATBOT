@@ -1,6 +1,8 @@
 """Ayarlar API'si: kullanıcı CRUD hataları + LLM ayarları."""
 import pytest
 
+from conftest import TEST_PASSWORD, TEST_PASSWORD_ALT
+
 
 @pytest.fixture()
 def sup(make_user, login):
@@ -10,7 +12,7 @@ def sup(make_user, login):
 
 def test_create_user_and_error_paths(sup):
     r = sup.post("/api/settings/users", json={
-        "email": " Yeni@iu.tr ", "password": "cok-gizli-123",
+        "email": " Yeni@iu.tr ", "password": TEST_PASSWORD,
         "full_name": "Yeni Editör", "role": "editor"})
     assert r.status_code == 201
     body = r.json()
@@ -19,28 +21,30 @@ def test_create_user_and_error_paths(sup):
 
     # Aynı e-posta → 409
     assert sup.post("/api/settings/users", json={
-        "email": "yeni@iu.tr", "password": "cok-gizli-123", "role": "editor"}).status_code == 409
+        "email": "yeni@iu.tr", "password": TEST_PASSWORD, "role": "editor"}).status_code == 409
     # Geçersiz rol → 400
     assert sup.post("/api/settings/users", json={
-        "email": "x@iu.tr", "password": "cok-gizli-123", "role": "patron"}).status_code == 400
-    # Kısa parola → 422 (pydantic)
+        "email": "x@iu.tr", "password": TEST_PASSWORD, "role": "patron"}).status_code == 400
+    # Kısa parola → 422 (pydantic). Buradaki "kisa" bir kimlik bilgisi DEĞİL,
+    # min_length=10 doğrulamasını tetikleyen geçersiz girdi örneğidir — bu
+    # yüzden sabite çevrilmedi.
     assert sup.post("/api/settings/users", json={
         "email": "x@iu.tr", "password": "kisa", "role": "editor"}).status_code == 422
     # E-posta biçimsiz → 400
     assert sup.post("/api/settings/users", json={
-        "email": "epostadegil", "password": "cok-gizli-123", "role": "editor"}).status_code == 400
+        "email": "epostadegil", "password": TEST_PASSWORD, "role": "editor"}).status_code == 400
 
 
 def test_password_reset_kills_sessions(sup, login):
     r = sup.post("/api/settings/users", json={
-        "email": "k@iu.tr", "password": "eski-parola-1", "role": "editor"})
+        "email": "k@iu.tr", "password": TEST_PASSWORD, "role": "editor"})
     uid = r.json()["id"]
-    c = login("k@iu.tr", "eski-parola-1")
+    c = login("k@iu.tr", TEST_PASSWORD)
     assert c.get("/api/qna").status_code == 200
 
-    assert sup.put(f"/api/settings/users/{uid}", json={"password": "yeni-parola-1"}).status_code == 200
+    assert sup.put(f"/api/settings/users/{uid}", json={"password": TEST_PASSWORD_ALT}).status_code == 200
     assert c.get("/api/qna").status_code == 401                     # eski oturum öldü
-    assert login("k@iu.tr", "yeni-parola-1").get("/api/qna").status_code == 200
+    assert login("k@iu.tr", TEST_PASSWORD_ALT).get("/api/qna").status_code == 200
 
 
 def test_llm_settings_roundtrip_and_masking(sup):
