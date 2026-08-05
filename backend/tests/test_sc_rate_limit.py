@@ -284,6 +284,9 @@ def test_cleanup_failure_does_not_break_rate_limiting(sc, monkeypatch):
     assert r.status_code == 200, f"temizlik hatasi istegi dusurdu: {r.text}"
 
     # ASIL İDDİA: sayaç artışı KAYBOLMAMALI, yoksa limit fail-open olur.
+    # ÜÇ kapsam da beklenir (TestClient istemci IP'si verdiği için ip de yazılır):
+    # tam küme eşitliği, kısmi geri alma / eksik yazma durumlarını da yakalar —
+    # "conv ve tc var" demek, ip kapsamının sessizce kaybolmasını gözden kaçırırdı.
     rows = _rate_limit_rows()
     scopes = {scope for scope, _k, _c in rows}
-    assert "conv" in scopes and "tc" in scopes, f"sayaclar geri alindi: {rows}"
+    assert scopes == {"conv", "tc", "ip"}, f"sayaclar geri alindi/eksik: {rows}"

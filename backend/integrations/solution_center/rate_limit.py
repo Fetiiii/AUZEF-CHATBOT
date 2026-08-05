@@ -141,7 +141,13 @@ class SmsRateLimiter:
         except Exception as exc:
             # Bu dal TEST EDİLİYOR: test_cleanup_failure_does_not_break_rate_limiting
             # _CLEANUP_SQL'i kasten patlatıp sayaçların korunduğunu doğrular.
-            logger.warning("SC sayaç temizliği başarısız: %s", exc)
+            #
+            # exc_info=True: hata yutulduğu için istek normal devam ediyor —
+            # geriye tek iz bu satır kalıyor. Traceback olmadan "deadlock mı,
+            # statement timeout mu, bağlantı mı koptu" ayırt edilemez. Sızıntı
+            # riski yok: _CLEANUP_SQL'in tek parametresi bir zaman damgası
+            # (TC/hash/PII içermiyor).
+            logger.warning("SC sayaç temizliği başarısız: %s", exc, exc_info=True)
             try:
                 # Abort olmuş transaction'ı temizle ki isteğin geri kalanı
                 # (SC oturum satırı yazımı) çalışabilsin.
