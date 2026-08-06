@@ -38,7 +38,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from core.database import utcnow
+from core.database import SessionLocal, utcnow
 
 logger = logging.getLogger("auzef")
 
@@ -76,16 +76,40 @@ _RESET_SQL = text("DELETE FROM admin_login_attempts WHERE scope = :scope AND ide
 _CLEANUP_SQL = text("DELETE FROM admin_login_attempts WHERE window_started_at < :cutoff")
 
 
+def _env_int(key: str, default: int, minimum: Optional[int] = None) -> int:
+    """Dayanıklı int env okuması (base_client._env_int / _env_int_min karşılığı).
+
+    NEDEN try/except ŞART: bu üç değer `is_locked()` üzerinden HER giriş
+    denemesinde okunuyor (bkz. auth.login). Çıplak `int()` ile
+    `ADMIN_LOGIN_MAX_ATTEMPTS=bes` gibi TEK bir yazım hatası ValueError
+    fırlatır, login() 500 döner ve kurum kendi yönetim paneline TAMAMEN
+    kilitlenir. Geçersiz değerde sessizce varsayılana düşmek doğru davranış:
+    yapılandırma hatası korumayı kapatmamalı ama erişimi de öldürmemeli.
+
+    `minimum` YALNIZCA pencere değerleri için verilir — 0/negatif pencere
+    `window_floor`u ileri kaydırır, `_CONSUME_SQL` her satırı "eski" sayar ve
+    sayaç her istekte 1'e döner; yani kilit sessizce tamamen devre dışı kalır.
+    LİMİT (adet) değerlerinde 0 = "kapsamı kapat" BİLİNÇLİ sözleşmedir
+    (bkz. _scope_locked), o yüzden orada kelepçe YOK.
+    """
+    try:
+        value = int(os.getenv(key, "").strip() or default)
+    except ValueError:
+        logger.warning("Geçersiz %s değeri — varsayılana (%s) düşülüyor.", key, default)
+        value = default
+    return max(value, minimum) if minimum is not None else value
+
+
 def _max_attempts() -> int:
-    return int(os.getenv("ADMIN_LOGIN_MAX_ATTEMPTS", "").strip() or "5")
+    return _env_int("ADMIN_LOGIN_MAX_ATTEMPTS", 5)
 
 
 def _ip_max_attempts() -> int:
-    return int(os.getenv("ADMIN_LOGIN_IP_MAX_ATTEMPTS", "").strip() or "20")
+    return _env_int("ADMIN_LOGIN_IP_MAX_ATTEMPTS", 20)
 
 
 def _window_minutes() -> int:
-    return int(os.getenv("ADMIN_LOGIN_WINDOW_MIN", "").strip() or "15")
+    return _env_int("ADMIN_LOGIN_WINDOW_MIN", 15, minimum=1)
 
 
 def _current_count(db: Session, scope: str, identifier: str, window_min: int) -> int:
@@ -107,31 +131,53 @@ def _consume(db: Session, scope: str, identifier: str, window_min: int) -> int:
     }).scalar_one()
 
 
-def _cleanup(db: Session) -> None:
-    """Eski sayaç satırlarını fırsattan istifade siler.
+def _cleanup_cutoff():
+    """Temizlik eşiği: saklama süresi VE yapılandırılmış pencere.
 
-    TAM İZOLE: kendi commit'ini yapar, hatada rollback eder. Çağıran, sayaç
-    artışlarını bu çağrıdan ÖNCE commit etmiş olmalıdır.
-
-    NEDEN İZOLASYON ŞART: "best-effort" olmak için except ile yutmak YETMEZ.
-    DELETE bir DBAPI hatası verdiğinde (kilit çakışması, deadlock, statement
-    timeout) transaction ABORT olur ve aynı transaction'da bekleyen sayaç
-    artışları da onunla geri alınır. Sonuç: giriş denemesi sayılmaz, yani kilit
-    SESSİZCE FAIL-OPEN olur — üstelik deadlock olasılığı tam da yük altında,
-    korumanın en çok gerektiği anda yükselir.
-    (Aynı hata rate_limit.py'de ölçülerek doğrulandı; bkz. o dosyadaki not.)
+    Eşik sabit _RETENTION_HOURS olsaydı, operatör pencereyi retention'dan uzun
+    ayarladığında (ör. ADMIN_LOGIN_WINDOW_MIN=2880 → 48 saat) temizlik HÂLÂ
+    GEÇERLİ bir sayacı 24. saatte siler, sayaç sıfırlanır ve kilit fail-open
+    olurdu. Eşiği pencereye göre almak bunu yapısal olarak imkânsız kılar.
+    (rate_limit._cleanup_cutoff ile aynı mantık.)
     """
+    return utcnow() - max(
+        timedelta(hours=_RETENTION_HOURS),
+        timedelta(minutes=_window_minutes()),
+    )
+
+
+def _cleanup() -> None:
+    """Eski sayaç satırlarını siler — KENDİ Session'ında.
+
+    NEDEN AYRI SESSION: "best-effort" olmak için except ile yutmak YETMEZ.
+    DELETE bir DBAPI hatası verdiğinde (kilit çakışması, deadlock, statement
+    timeout) transaction ABORT olur; temizlik çağıranın Session'ını paylaşsaydı
+    aynı transaction'daki sayaç artışları da onunla geri alınırdı → giriş
+    denemesi sayılmaz, kilit SESSİZCE FAIL-OPEN olur. Üstelik deadlock
+    olasılığı tam da yük altında, korumanın en çok gerektiği anda yükselir.
+
+    Ayrı Session bunu MİMARİYLE çözer: çağıranın transaction'ı hiç görülmez,
+    dolayısıyla ne DELETE hatası ne de rollback hatası ona ulaşabilir. Önceki
+    tasarımda rollback'in KENDİSİ de patlarsa Session bozuk kalıyor ve isteğin
+    sonraki adımları çok daha belirsiz bir hatayla patlıyordu.
+
+    Açık rollback YOK: Session.close() bekleyen/abort olmuş transaction'ı zaten
+    atar ve bu Session hemen çöpe gider.
+
+    Kalıp: core/deps.log_query ve rate_limit.SmsRateLimiter._cleanup ile aynı.
+    """
+    db = SessionLocal()
     try:
-        db.execute(_CLEANUP_SQL, {"cutoff": utcnow() - timedelta(hours=_RETENTION_HOURS)})
+        db.execute(_CLEANUP_SQL, {"cutoff": _cleanup_cutoff()})
         db.commit()
-    except Exception as exc:  # pragma: no cover - savunma amaçlı
-        logger.warning("Admin login sayaç temizliği başarısız: %s", exc)
-        try:
-            # Abort olmuş transaction'ı temizle ki isteğin geri kalanı
-            # (oturum oluşturma vb.) çalışabilsin.
-            db.rollback()
-        except Exception:
-            pass
+    except Exception as exc:
+        # exc_info=True: hata yutulduğu için istek normal devam ediyor; geriye
+        # tek iz bu satır kalıyor. Traceback olmadan "deadlock mı, statement
+        # timeout mu, bağlantı mı koptu" ayırt edilemez. Sızıntı riski yok:
+        # _CLEANUP_SQL'in tek parametresi bir zaman damgası.
+        logger.warning("Admin login sayaç temizliği başarısız: %s", exc, exc_info=True)
+    finally:
+        db.close()
 
 
 def _scope_locked(db: Session, scope: str, identifier: str,
@@ -175,10 +221,13 @@ def register_failure(db: Session, email: str, ip: Optional[str]) -> bool:
     # ile aynı sözleşme; bkz. _scope_locked notu).
     email_count = _consume(db, SCOPE_EMAIL, email, window_min) if email_max > 0 else 0
     ip_count = _consume(db, SCOPE_IP, ip, window_min) if (ip and ip_max > 0) else 0
-    # Sayaçlar ÖNCE kalıcı olur; temizlik bundan SONRA ve kendi
-    # transaction'ında çalışır (hatası artışları geri alamaz — bkz. _cleanup).
+    # Sayaçları kalıcı yap, sonra temizliği tetikle.
+    #
+    # DİKKAT — garantiyi sağlayan şey bu SIRA DEĞİL, _cleanup'ın kendi
+    # Session'ında çalışması. Sıra yalnızca netlik için burada. Temizlik bu
+    # Session'a hiç dokunmadığı için sırayı bozmak da artışları geri alamaz.
     db.commit()
-    _cleanup(db)
+    _cleanup()
 
     exceeded = ((email_max > 0 and email_count >= email_max)
                 or (ip_max > 0 and ip_count >= ip_max))

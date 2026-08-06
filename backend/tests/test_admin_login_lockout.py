@@ -228,3 +228,129 @@ def test_zero_threshold_disables_scope_instead_of_locking_everyone(app, make_use
     # Dogru parola: girise izin verilmeli
     r = c.post("/api/auth/login", json={"email": "sifir@iu.tr", "password": TEST_PASSWORD})
     assert r.status_code == 200, "esik 0 iken tum admin girisi kilitlendi"
+
+
+# ── 11) Gecersiz env degeri girisi KILITLEMEZ (ValueError guard) ────────────
+# _max_attempts/_ip_max_attempts/_window_minutes ciplak int() kullaniyordu ve
+# is_locked() her giris denemesinde ILK calisan sey. Tek bir yazim hatasi
+# (ADMIN_LOGIN_MAX_ATTEMPTS=bes) ValueError firlatir, login() 500 doner ve kurum
+# kendi yonetim paneline TAMAMEN kilitlenirdi.
+
+def test_invalid_env_value_falls_back_instead_of_500(app, make_user, monkeypatch):
+    monkeypatch.setenv("ADMIN_LOGIN_MAX_ATTEMPTS", "bes")
+    monkeypatch.setenv("ADMIN_LOGIN_IP_MAX_ATTEMPTS", "yirmi")
+    monkeypatch.setenv("ADMIN_LOGIN_WINDOW_MIN", "onbes")
+
+    make_user("gecersiz@iu.tr")
+    c = _client(app, "10.0.1.10")
+
+    # Dogru parola: 500 DEGIL, normal giris
+    r = c.post("/api/auth/login", json={"email": "gecersiz@iu.tr", "password": TEST_PASSWORD})
+    assert r.status_code == 200, f"gecersiz env girisi kilitledi: {r.status_code} {r.text}"
+
+    # Yanlis parola: 500 DEGIL, normal 401
+    assert _login(c, "gecersiz@iu.tr").status_code == 401
+
+
+# ── 12) Sifir/negatif pencere kilidi devre disi birakamaz ──────────────────
+# window_floor simdiden ILERI kayarsa _CONSUME_SQL her satiri "eski" sayar,
+# sayac her istekte 1'e doner ve kilit sessizce tamamen kapanir.
+
+def test_zero_or_negative_window_is_clamped(monkeypatch):
+    from admin import login_lockout
+
+    for deger in ("0", "-5"):
+        monkeypatch.setenv("ADMIN_LOGIN_WINDOW_MIN", deger)
+        assert login_lockout._window_minutes() >= 1, f"{deger} kelepcelenmedi"
+
+    # LIMIT degerinde 0 hala "kapsam kapali" olarak GECERLI kalmali (kelepce YOK)
+    monkeypatch.setenv("ADMIN_LOGIN_MAX_ATTEMPTS", "0")
+    assert login_lockout._max_attempts() == 0
+
+
+# ── 13) Temizlik KENDI Session'inda: hatasi istegi ve sayaci bozmaz ────────
+# Onceki tasarimda temizlik caller'in Session'ini paylasiyordu; DELETE patlayinca
+# transaction abort oluyor ve ayni transaction'daki sayac artislari da geri
+# aliniyordu → kilit fail-open. Ayri Session bunu yapisal olarak imkansiz kilar.
+
+def test_cleanup_failure_never_touches_request_session(app, make_user, monkeypatch):
+    from sqlalchemy import text as _text
+
+    from admin import login_lockout
+    from core.database import AdminLoginAttempt, SessionLocal
+
+    monkeypatch.setattr(login_lockout, "_CLEANUP_SQL", _text("DELETE FROM tablo_yok_ki"))
+
+    make_user("izole@iu.tr")
+    c = _client(app, "10.0.1.20")
+    assert _login(c, "izole@iu.tr").status_code == 401
+
+    s = SessionLocal()
+    try:
+        row = s.query(AdminLoginAttempt).filter_by(
+            scope="email", identifier="izole@iu.tr").first()
+    finally:
+        s.close()
+    assert row is not None and row.count == 1, "temizlik hatasi sayaci geri aldi (fail-open)"
+
+
+# ── 14) _cleanup KENDI commit'ini yapiyor (dogrudan cagri) ────────────────
+# Baska bir Session'dan, hicbir ek commit calistirmadan silmenin kalici oldugu
+# dogrulanir. KABUL KRITERI: _cleanup icindeki db.commit() silinince DUSMELI.
+
+def test_cleanup_commits_on_its_own(db):
+    from datetime import timedelta
+
+    from admin import login_lockout
+    from core.database import AdminLoginAttempt, SessionLocal, utcnow
+
+    s = SessionLocal()
+    try:
+        s.add(AdminLoginAttempt(
+            scope="email", identifier="eski@iu.tr", count=1,
+            window_started_at=utcnow() - timedelta(hours=login_lockout._RETENTION_HOURS + 1)))
+        s.add(AdminLoginAttempt(
+            scope="email", identifier="taze@iu.tr", count=1,
+            window_started_at=utcnow()))
+        s.commit()
+    finally:
+        s.close()
+
+    login_lockout._cleanup()          # DOGRUDAN cagri, baska commit yok
+
+    s = SessionLocal()
+    try:
+        kalanlar = {r.identifier for r in s.query(AdminLoginAttempt).all()}
+    finally:
+        s.close()
+    assert "eski@iu.tr" not in kalanlar, "_cleanup kendi commit'ini yapmiyor"
+    assert "taze@iu.tr" in kalanlar, "temizlik taze satiri da sildi"
+
+
+# ── 15) Pencere retention'dan uzunsa GECERLI sayac silinmez ───────────────
+
+def test_cleanup_respects_window_longer_than_retention(db, monkeypatch):
+    from datetime import timedelta
+
+    from admin import login_lockout
+    from core.database import AdminLoginAttempt, SessionLocal, utcnow
+
+    monkeypatch.setenv("ADMIN_LOGIN_WINDOW_MIN", str(48 * 60))   # 48 saat
+
+    s = SessionLocal()
+    try:
+        s.add(AdminLoginAttempt(
+            scope="email", identifier="uzun@iu.tr", count=1,
+            window_started_at=utcnow() - timedelta(hours=login_lockout._RETENTION_HOURS + 6)))
+        s.commit()
+    finally:
+        s.close()
+
+    login_lockout._cleanup()
+
+    s = SessionLocal()
+    try:
+        kaldi = s.query(AdminLoginAttempt).filter_by(identifier="uzun@iu.tr").first() is not None
+    finally:
+        s.close()
+    assert kaldi, "pencere icindeki gecerli sayac silindi -> kilit fail-open olur"

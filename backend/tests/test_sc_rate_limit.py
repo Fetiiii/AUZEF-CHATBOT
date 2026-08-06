@@ -14,6 +14,10 @@ Kapsanan senaryolar:
   9) SÜREKLİ temizlik hatası altında limit hâlâ tetiklenir (fail-open testi)
  10) Temizlik işini yapıyor (eski satırlar siliniyor, tazeler duruyor)
  11) Temizlik hatasından sonra oturum kullanılabilir kalır
+ 12) _cleanup KENDİ commit’ini yapıyor (doğrudan çağrı)
+ 13) Temizlik istek Session’ına hiç dokunmuyor
+ 14) Pencere > retention iken geçerli sayaç silinmiyor
+ 15) Sıfır/negatif pencere limiti devre dışı bırakamaz
 """
 import secrets
 from dataclasses import replace
@@ -327,12 +331,8 @@ def test_rate_limit_still_enforces_when_cleanup_keeps_failing(sc, monkeypatch):
 # MUTASYONLA OLCULDU: "window_started_at < :cutoff" -> ">" yapildiginda bu test
 # (ve limit testlerinin cogu) DUSUYOR.
 #
-# NE KAPSAMADIGI (yanlis guven vermemek icin): _cleanup icindeki db.commit()'in
-# SILINMESINI yakalamaz. Olculdu — o commit kaldirilinca 11 test de geciyor,
-# cunku silme bekleyen halde kaliyor ve start_verification'in sonundaki commit
-# onu zaten kalici yapiyor. Oradaki commit silmenin kaliciligi icin degil,
-# _cleanup'i kendi kendine yeterli (caller'in commit'ine bagimli olmayan)
-# kilmak icin var.
+# Bu test uçtan uca yoldan gider; _cleanup'in KENDI commit'ini yaptigini ayrica
+# 12. senaryo dogrudan dogrular.
 
 def test_cleanup_actually_deletes_expired_rows(sc):
     from datetime import timedelta
@@ -385,3 +385,126 @@ def test_cleanup_failure_leaves_session_usable_for_rest_of_request(sc, monkeypat
     assert row is not None, "temizlik hatasi sonrasi SC oturum satiri YAZILAMADI"
     assert row.verification_token == "tok-abc"
     assert row.state == "SC_WAIT_OTP"
+
+
+# ── 12) _cleanup KENDI commit'ini yapiyor (dogrudan cagri) ──────────────────
+# 10. senaryo uctan uca gidiyor ve caller'in sonraki commit'i silmeyi zaten
+# kalici yaptigi icin _cleanup'in kendi commit'ini AYIRT EDEMIYORDU. Bu test
+# _cleanup'i DOGRUDAN cagirir ve baska bir Session'dan, hicbir ek commit
+# calistirmadan silmenin kalici oldugunu dogrular.
+# KABUL KRITERI: _cleanup icindeki db.commit() silindiginde bu test DUSMELI.
+
+def _limiter(cfg=None):
+    from integrations.solution_center.rate_limit import SmsRateLimiter
+    return SmsRateLimiter(cfg or BASE_CONFIG)
+
+
+def _row_var_mi(key_hash: str) -> bool:
+    """TAZE bir Session'dan okur (caller transaction'ina bulasmadan)."""
+    from core.database import SCRateLimit, SessionLocal
+    s = SessionLocal()
+    try:
+        return s.query(SCRateLimit).filter_by(key_hash=key_hash).first() is not None
+    finally:
+        s.close()
+
+
+def _satir_ekle(key_hash: str, yas_saat: float):
+    from core.database import SCRateLimit, SessionLocal, utcnow
+    s = SessionLocal()
+    try:
+        s.add(SCRateLimit(scope="conv", key_hash=key_hash, count=1,
+                          window_started_at=utcnow() - timedelta(hours=yas_saat)))
+        s.commit()
+    finally:
+        s.close()
+
+
+def test_cleanup_commits_on_its_own(sc):
+    from integrations.solution_center.constants import SMS_COUNTER_RETENTION_HOURS
+
+    eski = "a" * 64
+    taze = "b" * 64
+    _satir_ekle(eski, SMS_COUNTER_RETENTION_HOURS + 1)
+    _satir_ekle(taze, 0)
+
+    _limiter()._cleanup()          # DOGRUDAN cagri — baska hicbir commit yok
+
+    assert not _row_var_mi(eski), (
+        "_cleanup kendi commit'ini yapmiyor: silme kalici olmadi"
+    )
+    assert _row_var_mi(taze), "temizlik taze satiri da sildi"
+
+
+# ── 13) Temizlik istek Session'ina HIC dokunmuyor ──────────────────────────
+# Onceki tasarimda temizlik caller'in Session'ini paylasiyordu; DELETE patlayinca
+# transaction abort oluyor, rollback DE patlarsa Session bozuk kaliyordu. O
+# durumda akis CM'ye gidip SMS gonderiyor, SONRA SC oturum satirini yazarken
+# patliyordu: kullanici hata goruyor ama SMS gitmis oluyordu.
+# Ayri Session bunu yapisal olarak imkansiz kilar.
+
+def test_cleanup_never_touches_request_session(sc, monkeypatch):
+    from sqlalchemy import text as _text
+
+    from core.database import SessionLocal, SolutionCenterSession
+    from integrations.solution_center import rate_limit
+
+    monkeypatch.setattr(rate_limit, "_CLEANUP_SQL", _text("DELETE FROM tablo_yok_ki"))
+
+    c = sc["configure"]()
+    conv = sc["new_conversation"]()
+    assert _send(c, conv).status_code == 200
+
+    # Sayaclar duruyor VE istegin geri kalani (SC oturum satiri) yazilmis:
+    # ikisi de caller Session'inin saglam kaldiginin kaniti.
+    assert {s_ for s_, _k, _c in _rate_limit_rows()} == {"conv", "tc", "ip"}
+    s = SessionLocal()
+    try:
+        row = s.query(SolutionCenterSession).filter_by(conversation_id=conv["id"]).first()
+    finally:
+        s.close()
+    assert row is not None and row.verification_token == "tok-abc"
+
+
+# ── 14) Pencere retention'dan uzunsa GECERLI sayac silinmez ────────────────
+# Esik sabit 24 saat olsaydi, operatorun 48 saatlik pencere ayarlamasi hala
+# gecerli sayaclari 24. saatte sildirir ve limiti fail-open birakirdi.
+
+def test_cleanup_respects_windows_longer_than_retention(sc):
+    from dataclasses import replace as _replace
+
+    from integrations.solution_center.constants import SMS_COUNTER_RETENTION_HOURS
+
+    # 48 saatlik TC penceresi
+    cfg = _replace(BASE_CONFIG, sms_tc_window_min=48 * 60)
+
+    key = "c" * 64
+    # Retention'dan (24sa) eski AMA 48 saatlik pencerenin ICINDE
+    _satir_ekle(key, SMS_COUNTER_RETENTION_HOURS + 6)
+
+    _limiter(cfg)._cleanup()
+
+    assert _row_var_mi(key), (
+        "pencere icindeki gecerli sayac silindi -> limit fail-open olur"
+    )
+
+
+# ── 15) Sifir/negatif pencere limiti devre disi birakamaz ──────────────────
+# window_floor simdiden ILERI kayarsa _CONSUME_SQL her satiri "eski" sayar ve
+# sayac her istekte 1'e doner: hiz siniri sessizce tamamen kapanir.
+
+def test_zero_or_negative_window_env_is_clamped(monkeypatch):
+    from integrations.solution_center.base_client import SolutionCenterConfig
+
+    for deger in ("0", "-5"):
+        monkeypatch.setenv("CM_SMS_TC_WINDOW_MIN", deger)
+        monkeypatch.setenv("CM_SMS_IP_WINDOW_MIN", deger)
+        monkeypatch.setenv("CM_SMS_CONVERSATION_WINDOW_MIN", deger)
+        cfg = SolutionCenterConfig.from_env()
+        assert cfg.sms_tc_window_min >= 1, f"{deger} kelepcelenmedi"
+        assert cfg.sms_ip_window_min >= 1, f"{deger} kelepcelenmedi"
+        assert cfg.sms_conversation_window_min >= 1, f"{deger} kelepcelenmedi"
+
+    # LIMIT degerinde 0 hala "kapsam kapali" olarak GECERLI kalmali
+    monkeypatch.setenv("CM_SMS_PER_TC", "0")
+    assert SolutionCenterConfig.from_env().sms_per_tc == 0
