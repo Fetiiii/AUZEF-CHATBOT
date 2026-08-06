@@ -37,7 +37,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from core.database import utcnow
+from core.database import SessionLocal, utcnow
 
 from .base_client import SolutionCenterConfig
 from .constants import SMS_COUNTER_RETENTION_HOURS
@@ -119,46 +119,64 @@ class SmsRateLimiter:
         }).scalar_one()
         return count <= limit
 
-    def _cleanup(self, db: Session) -> None:
-        """Eski satırları fırsattan istifade sil (auth.create_session ile aynı kalıp).
+    def _cleanup_cutoff(self):
+        """Temizlik eşiği: saklama süresi VE yapılandırılmış EN UZUN pencere.
 
-        TAM İZOLE: kendi commit'ini yapar, hatada rollback eder. Çağıran, sayaç
-        artışlarını bu çağrıdan ÖNCE commit etmiş olmalıdır.
-
-        NEDEN İZOLASYON ŞART: temizlik "best-effort" diye yalnızca except ile
-        yutulursa yetmez. DELETE bir DBAPI hatası verdiğinde (kilit çakışması,
-        deadlock, statement timeout) transaction ABORT olur; aynı transaction'da
-        bekleyen sayaç artışları da onunla birlikte geri alınır. Sonuç ölçüldü:
-        istek 200 dönüyor ama sayaçlar kayboluyor — yani hız sınırı SESSİZCE
-        FAIL-OPEN oluyor. Üstelik deadlock olasılığı tam da yük altında, yani
-        korumanın en çok gerektiği anda yükselir.
+        Eşik sabit 24 saat olsaydı, operatör bir pencereyi retention'dan uzun
+        ayarladığında (ör. CM_SMS_TC_WINDOW_MIN=2880 → 48 saat) temizlik HÂLÂ
+        GEÇERLİ bir sayacı 24. saatte siler, sayaç sıfırlanır ve limit fail-open
+        olurdu. Eşiği en uzun pencereye göre almak bunu yapısal olarak imkânsız
+        kılar: pencere içindeki hiçbir satır silinemez.
         """
+        cfg = self._config
+        en_uzun_pencere_dk = max(
+            cfg.sms_conversation_window_min,
+            cfg.sms_tc_window_min,
+            cfg.sms_ip_window_min,
+            0,
+        )
+        return utcnow() - max(
+            timedelta(hours=SMS_COUNTER_RETENTION_HOURS),
+            timedelta(minutes=en_uzun_pencere_dk),
+        )
+
+    def _cleanup(self) -> None:
+        """Eski sayaç satırlarını siler — KENDİ Session'ında.
+
+        NEDEN AYRI SESSION: temizlik "best-effort" diye hatayı except ile yutmak
+        YETMEZ. DELETE bir DBAPI hatası verdiğinde (kilit çakışması, deadlock,
+        statement timeout) transaction ABORT olur; temizlik çağıranın Session'ını
+        paylaşsaydı aynı transaction'daki sayaç artışları da onunla geri alınırdı.
+        Ölçüldü: istek 200 dönüyor ama sayaçlar kayboluyor — hız sınırı SESSİZCE
+        FAIL-OPEN oluyor. Deadlock olasılığı tam da yük altında, yani korumanın
+        en çok gerektiği anda yükselir.
+
+        Ayrı Session bunu MİMARİYLE çözer: çağıranın transaction'ı ve Session'ı
+        hiç görülmez, dolayısıyla ne DELETE hatası ne de rollback hatası ona
+        ulaşabilir. Önceki tasarımda rollback'in KENDİSİ de patlarsa Session
+        bozuk kalıyordu ve akış CM'ye gidip SMS gönderdikten SONRA DB yazarken
+        patlıyordu — kullanıcı hata görüyor ama SMS gitmiş oluyordu. O senaryo
+        artık kurulamıyor.
+
+        Açık rollback YOK: Session.close() bekleyen/abort olmuş transaction'ı
+        zaten atar ve bu Session hemen çöpe gider.
+
+        Kalıp: core/deps.log_query ile aynı (kendi Session, kendi commit,
+        finally close).
+        """
+        db = SessionLocal()
         try:
-            db.execute(_CLEANUP_SQL, {
-                "cutoff": utcnow() - timedelta(hours=SMS_COUNTER_RETENTION_HOURS),
-            })
+            db.execute(_CLEANUP_SQL, {"cutoff": self._cleanup_cutoff()})
             db.commit()
         except Exception as exc:
-            # Bu dal TEST EDİLİYOR: test_cleanup_failure_does_not_break_rate_limiting
-            # _CLEANUP_SQL'i kasten patlatıp sayaçların korunduğunu doğrular.
-            #
             # exc_info=True: hata yutulduğu için istek normal devam ediyor —
             # geriye tek iz bu satır kalıyor. Traceback olmadan "deadlock mı,
             # statement timeout mu, bağlantı mı koptu" ayırt edilemez. Sızıntı
             # riski yok: _CLEANUP_SQL'in tek parametresi bir zaman damgası
             # (TC/hash/PII içermiyor).
             logger.warning("SC sayaç temizliği başarısız: %s", exc, exc_info=True)
-            try:
-                # Abort olmuş transaction'ı temizle ki isteğin geri kalanı
-                # (SC oturum satırı yazımı) çalışabilsin.
-                db.rollback()
-            except Exception as rb_exc:
-                # Buraya düşmek CİDDİDİR: rollback da başarısızsa Session failed
-                # state'te kalır ve isteğin sonraki adımları (SC oturum satırı)
-                # çok daha belirsiz bir hatayla patlar. Sessizce yutmak, o hatanın
-                # kök nedenini gizler — en azından traceback bırak.
-                logger.error("SC sayaç temizliği rollback'i de başarısız: %s",
-                             rb_exc, exc_info=True)
+        finally:
+            db.close()
 
     # ── Public ───────────────────────────────────────────────────────────────
 
@@ -194,10 +212,15 @@ class SmsRateLimiter:
             if not self._consume(db, scope, raw_key, limit, window_min) and exceeded is None:
                 exceeded = scope
 
-        # Sayaçlar ÖNCE kalıcı olur. Temizlik bundan SONRA ve kendi
-        # transaction'ında çalışır; hatası artışları geri alamaz (bkz. _cleanup).
+        # Sayaçları kalıcı yap, sonra temizliği tetikle.
+        #
+        # DİKKAT — garantiyi sağlayan şey bu SIRA DEĞİL, _cleanup'ın kendi
+        # Session'ında çalışması. Sıra yalnızca netlik için burada: çağrı
+        # noktasında sayaçlar zaten yazılmış olsun. Temizlik bu Session'a hiç
+        # dokunmadığı için sırayı bozmak da artışları geri alamaz — koruma
+        # sıradan bağımsızdır (bkz. _cleanup docstring).
         db.commit()
-        self._cleanup(db)
+        self._cleanup()
 
         if exceeded is not None:
             # Log'a yalnızca KAPSAM adı yazılır — TC, IP ya da hash ASLA.

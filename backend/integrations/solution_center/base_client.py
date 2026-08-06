@@ -77,6 +77,23 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_int_min(key: str, default: int, minimum: int = 1) -> int:
+    """En az `minimum` olacak şekilde kelepçelenmiş int env okuması.
+
+    Hız sınırı PENCERELERİ için kullanılır. Pencere 0 ya da negatif olursa
+    rate_limit._CONSUME_SQL'deki `window_floor` şimdiden İLERİ kayar; o zaman
+    `window_started_at < :window_floor` her satır için doğru olur ve sayaç HER
+    İSTEKTE 1'e döner — yani hız sınırı sessizce TAMAMEN devre dışı kalır.
+    Tek bir env yazım hatası korumayı kapatabilirdi.
+
+    KARIŞTIRMA: bu kelepçe yalnızca PENCERE değerleri içindir. LİMİT (adet)
+    değerlerinde 0, "bu kapsamı kapat" anlamına gelen BİLİNÇLİ bir sözleşmedir
+    (bkz. rate_limit._consume ve admin/login_lockout._scope_locked) ve
+    kelepçelenmemelidir.
+    """
+    return max(_env_int(key, default), minimum)
+
+
 @dataclass(frozen=True)
 class SolutionCenterConfig:
     """Env'den okunan yapılandırma. Service token yalnızca backend'de kalır."""
@@ -123,13 +140,16 @@ class SolutionCenterConfig:
             verification_ttl_min=_env_int(ENV_VERIFICATION_TTL_MIN, DEFAULT_VERIFICATION_TTL_MIN),
             category_cache_ttl_seconds=_env_int(ENV_CATEGORY_CACHE_TTL, DEFAULT_CATEGORY_CACHE_TTL_SECONDS),
             auth_scheme=(os.getenv(ENV_AUTH_SCHEME) or "").strip() or DEFAULT_AUTH_SCHEME,
+            # LİMİTLER: _env_int — 0 "kapsamı kapat" demek, bilinçli sözleşme.
+            # PENCERELER: _env_int_min — 0/negatif limiti sessizce tamamen devre
+            # dışı bırakırdı (bkz. _env_int_min docstring).
             sms_per_conversation=_env_int(ENV_SMS_PER_CONVERSATION, DEFAULT_SMS_PER_CONVERSATION),
-            sms_conversation_window_min=_env_int(
+            sms_conversation_window_min=_env_int_min(
                 ENV_SMS_CONVERSATION_WINDOW_MIN, DEFAULT_SMS_CONVERSATION_WINDOW_MIN),
             sms_per_tc=_env_int(ENV_SMS_PER_TC, DEFAULT_SMS_PER_TC),
-            sms_tc_window_min=_env_int(ENV_SMS_TC_WINDOW_MIN, DEFAULT_SMS_TC_WINDOW_MIN),
+            sms_tc_window_min=_env_int_min(ENV_SMS_TC_WINDOW_MIN, DEFAULT_SMS_TC_WINDOW_MIN),
             sms_per_ip=_env_int(ENV_SMS_PER_IP, DEFAULT_SMS_PER_IP),
-            sms_ip_window_min=_env_int(ENV_SMS_IP_WINDOW_MIN, DEFAULT_SMS_IP_WINDOW_MIN),
+            sms_ip_window_min=_env_int_min(ENV_SMS_IP_WINDOW_MIN, DEFAULT_SMS_IP_WINDOW_MIN),
             hash_secret=(os.getenv(ENV_HASH_SECRET) or "").strip() or None,
             otp_max_attempts=_env_int(ENV_OTP_MAX_ATTEMPTS, DEFAULT_OTP_MAX_ATTEMPTS),
         )
