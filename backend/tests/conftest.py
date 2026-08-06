@@ -24,6 +24,22 @@ import pytest
 _PG_CONTAINER = "auzef_pytest_pg"
 _PG_PORT = "55440"
 
+# ── Test kimlik bilgileri ────────────────────────────────────────────────────
+# BUNLAR SIR DEĞİLDİR. Her test turunda sıfırdan kurulan throwaway Postgres'te
+# oluşturulan kullanıcıların parolalarıdır; hiçbir sistemde geçerli değillerdir.
+#
+# Tek yerde toplandılar çünkü test dosyalarına serpiştirilmiş literal
+# password="..." atamaları sır tarayıcılarını (GitGuardian) tetikliyor ve
+# gerçek sızıntı uyarılarını gürültüye boğuyordu. Yeni bir test parolaya
+# ihtiyaç duyarsa yeni literal YAZMA — buradaki sabitlerden birini kullan.
+#
+# NOT: değerler en az 10 karakter olmalı; settings_api.UserCreateRequest parola
+# için min_length=10 istiyor ve kullanıcı oluşturma testleri o yoldan geçiyor.
+TEST_PASSWORD = "pytest-fixture-not-a-secret"
+TEST_PASSWORD_WRONG = "pytest-fixture-wrong-value"
+# Parola değiştirme testleri için: TEST_PASSWORD'dan farklı olması yeterli.
+TEST_PASSWORD_ALT = "pytest-fixture-alternate-value"
+
 
 def _start_throwaway_postgres() -> str:
     subprocess.run(["docker", "rm", "-f", _PG_CONTAINER],
@@ -115,14 +131,15 @@ def clean_tables():
     from core.database import engine
     from sqlalchemy import text
     with engine.connect() as conn:
-        # sc_rate_limits: SMS hız sınırı sayaçları. Listede olmazsa bir test
-        # diğerinin sayacını devralır ve testler SIRAYA BAĞLI olarak patlar.
-        # academic_calendar: takvim kayıtları da testler arasında sızıyordu.
+        # sc_rate_limits, admin_login_attempts: hız sınırı sayaçları. Listede
+        # olmazlarsa bir test diğerinin sayacını devralır ve testler SIRAYA
+        # BAĞLI olarak patlar. academic_calendar: takvim kayıtları da
+        # testler arasında sızıyordu.
         conn.execute(text("""
             TRUNCATE admin_sessions, admin_users, conversation_messages,
                      conversations, query_logs, system_config,
                      qna_queries, qna_tags, tags, qna,
-                     sc_rate_limits, academic_calendar
+                     sc_rate_limits, academic_calendar, admin_login_attempts
             RESTART IDENTITY CASCADE
         """))
         conn.commit()
@@ -155,7 +172,7 @@ def make_user(db):
     from admin.auth import hash_password
     from core.database import AdminUser
 
-    def _make(email, role="admin", password="parola-1234", active=True, name=None):
+    def _make(email, role="admin", password=TEST_PASSWORD, active=True, name=None):
         u = AdminUser(email=email, password_hash=hash_password(password),
                       full_name=name, role=role, is_active=1 if active else 0)
         db.add(u)
@@ -171,7 +188,7 @@ def login(app):
     """Oturumlu TestClient üretir: login('x@iu.tr') → client"""
     from fastapi.testclient import TestClient
 
-    def _login(email, password="parola-1234"):
+    def _login(email, password=TEST_PASSWORD):
         c = TestClient(app)
         r = c.post("/api/auth/login", json={"email": email, "password": password})
         assert r.status_code == 200, f"login başarısız: {email} → {r.text}"

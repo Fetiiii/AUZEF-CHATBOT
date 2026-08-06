@@ -1,4 +1,5 @@
 """Oturum sistemi: login/logout/me, cookie bayrakları, oturum ölümü."""
+from conftest import TEST_PASSWORD, TEST_PASSWORD_WRONG
 
 
 def test_login_wrong_password_unknown_user_inactive_all_same_401(client, make_user):
@@ -6,9 +7,9 @@ def test_login_wrong_password_unknown_user_inactive_all_same_401(client, make_us
     make_user("pasif@iu.tr", active=False)
 
     for payload in [
-        {"email": "aktif@iu.tr", "password": "yanlis-parola"},
-        {"email": "bilinmeyen@iu.tr", "password": "parola-1234"},
-        {"email": "pasif@iu.tr", "password": "parola-1234"},
+        {"email": "aktif@iu.tr", "password": TEST_PASSWORD_WRONG},
+        {"email": "bilinmeyen@iu.tr", "password": TEST_PASSWORD},
+        {"email": "pasif@iu.tr", "password": TEST_PASSWORD},
     ]:
         r = client.post("/api/auth/login", json=payload)
         # Hepsi aynı mesaj: hesap varlığı/pasifliği bilgisi sızdırılmaz
@@ -18,7 +19,7 @@ def test_login_wrong_password_unknown_user_inactive_all_same_401(client, make_us
 
 def test_login_success_sets_httponly_lax_cookie(client, make_user):
     make_user("a@iu.tr", name="Ad Soyad")
-    r = client.post("/api/auth/login", json={"email": " A@iu.tr ", "password": "parola-1234"})
+    r = client.post("/api/auth/login", json={"email": " A@iu.tr ", "password": TEST_PASSWORD})
     assert r.status_code == 200
     assert r.json()["user"]["email"] == "a@iu.tr"
     assert r.json()["user"]["full_name"] == "Ad Soyad"

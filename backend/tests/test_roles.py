@@ -1,6 +1,8 @@
 """Rol sistemi: yetki matrisi + kilitlenme korumaları."""
 import pytest
 
+from conftest import TEST_PASSWORD
+
 
 @pytest.fixture()
 def trio(make_user, login):
@@ -57,9 +59,9 @@ def test_cannot_change_own_role_or_deactivate_self(trio):
 def test_last_super_admin_protected(trio, login):
     sup, _, _ = trio
     r = sup.post("/api/settings/users", json={
-        "email": "super2@iu.tr", "password": "cok-gizli-123", "role": "super_admin"})
+        "email": "super2@iu.tr", "password": TEST_PASSWORD, "role": "super_admin"})
     assert r.status_code == 201
-    sup2 = login("super2@iu.tr", "cok-gizli-123")
+    sup2 = login("super2@iu.tr", TEST_PASSWORD)
 
     users = sup.get("/api/settings/users").json()["users"]
     first_id = next(u["id"] for u in users if u["email"] == "super@iu.tr")

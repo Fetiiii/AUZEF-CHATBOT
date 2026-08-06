@@ -24,13 +24,14 @@ from datetime import timedelta
 from typing import Optional
 
 import bcrypt
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from admin import login_lockout
 from core.database import SessionLocal, AdminUser, AdminSession, utcnow
 from core.deps import get_db  # tekil DB oturumu dependency'si (deps kanonik kaynak)
 
@@ -141,19 +142,36 @@ def _user_dict(user: AdminUser) -> dict:
     return {"id": user.id, "email": user.email, "full_name": user.full_name, "role": user.role}
 
 
+_LOCKOUT_MESSAGE = "Çok fazla başarısız deneme. Lütfen birkaç dakika sonra tekrar deneyin."
+
+
 # Sync def: bcrypt/DB bloklayıcıdır — threadpool'da çalışır (bkz. main.py notu).
 @router.post("/login")
-def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     email = body.email.strip().lower()
+    ip = request.client.host if request.client else None
+
+    # Ön kontrol (ANALIZ.md P0-3): kilitliyken bcrypt'e hiç girilmez — bcrypt
+    # bilinçli olarak pahalıdır, kilitli bir denemeye o maliyeti ödetmeye gerek yok.
+    if login_lockout.is_locked(db, email, ip):
+        raise HTTPException(status_code=429, detail=_LOCKOUT_MESSAGE)
+
     user = db.query(AdminUser).filter(AdminUser.email == email).first()
 
     if user is None:
         verify_password(body.password, _DUMMY_HASH)  # timing eşitleme
+        if login_lockout.register_failure(db, email, ip):
+            raise HTTPException(status_code=429, detail=_LOCKOUT_MESSAGE)
         raise HTTPException(status_code=401, detail="E-posta ya da parola hatalı.")
     if not verify_password(body.password, user.password_hash) or user.is_active != 1:
         # Pasif kullanıcıya da aynı mesaj: hesap varlığı bilgisi sızdırılmaz.
+        if login_lockout.register_failure(db, email, ip):
+            raise HTTPException(status_code=429, detail=_LOCKOUT_MESSAGE)
         raise HTTPException(status_code=401, detail="E-posta ya da parola hatalı.")
 
+    # Başarılı giriş → iki kapsamın sayaçları da temizlenir (OTP başarı
+    # sıfırlamasıyla aynı ilke — P0-2).
+    login_lockout.reset(db, email, ip)
     token = create_session(db, user)
     response.set_cookie(
         key=COOKIE_NAME,
