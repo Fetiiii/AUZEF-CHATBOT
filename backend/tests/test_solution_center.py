@@ -275,18 +275,31 @@ def test_api_500_maps_to_503(sc):
 
 # ── Bonus: config kapalıyken (base_url/token yok) nazik 503 ──────────────────
 
-def test_disabled_when_unconfigured(client, db):
-    # override YOK → gerçek _CONFIG (env'de CM_* yok) → enabled=False
+def test_disabled_when_unconfigured(app, db):
+    # HERMETİK: geliştiricinin .env'inde gerçek CM_BASE_URL/CM_SERVICE_TOKEN olsa
+    # bile (load_dotenv onları test ortamına sızdırır) bu test config'i AÇIKÇA
+    # kapalıya override eder. dataclasses.replace tüm alanları kopyaladığı için
+    # config'e yeni alan eklenen branch'lerde de çalışır.
+    import dataclasses
+    from fastapi.testclient import TestClient
     from core.database import Conversation
-    conv = Conversation(client_token=secrets.token_urlsafe(24))
-    db.add(conv)
-    db.commit()
-    db.refresh(conv)
-    r = client.post("/api/solution-center/send-sms", json={
-        "conversation_id": conv.id, "conversation_token": conv.client_token,
-        "kimlik_no": "11111111111",
-    })
-    assert r.status_code == 503
+    from integrations.solution_center import get_config
+
+    disabled = dataclasses.replace(get_config(), base_url=None, service_token=None)
+    app.dependency_overrides[get_config] = lambda: disabled
+    try:
+        conv = Conversation(client_token=secrets.token_urlsafe(24))
+        db.add(conv)
+        db.commit()
+        db.refresh(conv)
+        c = TestClient(app)
+        r = c.post("/api/solution-center/send-sms", json={
+            "conversation_id": conv.id, "conversation_token": conv.client_token,
+            "kimlik_no": "11111111111",
+        })
+        assert r.status_code == 503
+    finally:
+        app.dependency_overrides.pop(get_config, None)
 
 
 # ── Bonus: sahiplik token'ı yanlışsa 403 ─────────────────────────────────────
