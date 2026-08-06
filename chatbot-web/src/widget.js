@@ -13,6 +13,8 @@
   var _pos = (_script && _script.getAttribute('data-position') === 'left') ? 'left' : 'right';
   // ── Talep oluşturma sayfası (AUZEF Çözüm Merkezi) — URL hazır olunca buraya yazın ──
   var _solutionUrl = (_script && _script.getAttribute('data-solution-url')) || 'https://cozummerkeziauzef.istanbul.edu.tr/student/sign-in';
+  // ── KVKK aydınlatma metni linki (P0-7) — data-kvkk-url ile override edilebilir ──
+  var _kvkkUrl = (_script && _script.getAttribute('data-kvkk-url')) || 'https://www.istanbul.edu.tr/tr/content/kisisel-verilerin-korunmasi/kisisel-verilerin-korunmasi';
 
   // ── Hızlı erişim bağlantıları (merkezi config) ──────────────────────────────
   // Yeni buton eklemek = bu listeye bir obje eklemek. url boşsa placeholder (pasif)
@@ -311,6 +313,10 @@
   var isSending = false;
   var _conversationId = null;    // ilk cevapta backend'den gelir, sonraki mesajlarda geri gönderilir
   var _conversationToken = null; // sahiplik token'ı: mesaj yazma/puanlama/talep bunu ister
+  // KVKK onayı (P0-7): aynı tarayıcı bir kez onaylayınca tekrar sorulmaz.
+  var _kvkkKey = 'auzef_kvkk_consent';
+  var _kvkkConsented = false;
+  try { _kvkkConsented = localStorage.getItem(_kvkkKey) === '1'; } catch (e) {}
 
   // ── Toggle ──────────────────────────────────────────────────────────────────
   function setExpanded(v) {
@@ -368,6 +374,50 @@
 
   renderQuickLinks();
 
+  // ── KVKK aydınlatma kapısı (P0-7) ───────────────────────────────────────────
+  // Sohbete başlamadan önce KVKK metni sunulur; kullanıcı onaylayana kadar input
+  // kilitli kalır. Onay localStorage'da saklanır (aynı tarayıcı bir daha görmez).
+  function renderKvkkGate() {
+    input.disabled = true;
+    var oldPh = input.placeholder;
+    input.placeholder = 'Devam etmek için KVKK metnini onaylayın';
+
+    var el = document.createElement('div');
+    el.className = 'msg bot';
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble';
+
+    var p = document.createElement('p');
+    p.style.cssText = 'margin:0 0 8px;white-space:pre-wrap;word-break:break-word;';
+    p.innerHTML = 'İyi günler, ben AUZEF Sanal Asistanıyım. Sohbete başlamadan önce ' +
+      'KVKK aydınlatma metnini size sunmam gerekiyor. KVKK metnine ' +
+      '<a class="chat-link" href="' + esc(_kvkkUrl) + '" target="_blank" rel="noopener noreferrer">buradan</a>' +
+      ' ulaşabilirsiniz.';
+    bubble.appendChild(p);
+
+    var btns = document.createElement('div');
+    btns.className = 'fb-btns';
+    var ok = document.createElement('button');
+    ok.className = 'fb-btn yes';
+    ok.textContent = 'Okudum, anladım.';
+    ok.addEventListener('click', function () {
+      try { localStorage.setItem(_kvkkKey, '1'); } catch (err) {}
+      _kvkkConsented = true;
+      ok.disabled = true;
+      input.disabled = false;
+      input.placeholder = oldPh;
+      appendMsg('bot', 'Teşekkürler. Size nasıl yardımcı olabilirim?');
+      input.focus();
+    });
+    btns.appendChild(ok);
+    bubble.appendChild(btns);
+    el.appendChild(bubble);
+    messages.appendChild(el);
+    scrollEnd();
+  }
+
+  if (!_kvkkConsented) renderKvkkGate();
+
   // ── Auto-resize textarea ────────────────────────────────────────────────────
   input.addEventListener('input', function () {
     this.style.height = 'auto';
@@ -383,7 +433,8 @@
   // ── Send message ────────────────────────────────────────────────────────────
   function send() {
     var text = input.value.trim();
-    if (!text || isSending) return;
+    // KVKK onayı verilmeden mesaj gönderilemez (input zaten disabled; bu ek savunma).
+    if (!text || isSending || !_kvkkConsented) return;
 
     appendMsg('user', text);
     input.value = '';

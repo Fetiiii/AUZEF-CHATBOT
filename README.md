@@ -128,6 +128,7 @@ API adresi, script'in yüklendiği origin'den **otomatik** çözülür. İsteğe
 | `data-api-url` | script origin + `/widget-chat` | Backend API adresini elle belirtir |
 | `data-position` | `right` | Widget konumu: `left` / `right` |
 | `data-solution-url` | Çözüm Merkezi giriş sayfası | Talep akışı kapalıyken/başarısızken açılacak harici sayfa |
+| `data-kvkk-url` | İÜ KVKK aydınlatma sayfası | Sohbet başında sunulan KVKK metninin linki |
 | `data-nav-mode` | `external` | Hızlı-erişim bağlantılarının açılma modu: `external` / `internal` |
 
 ```html
