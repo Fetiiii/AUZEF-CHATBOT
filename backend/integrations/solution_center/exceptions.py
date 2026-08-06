@@ -72,6 +72,21 @@ class RateLimitExceededException(SolutionCenterException):
     http_status = 429
 
 
+class OtpAttemptsExceededException(SolutionCenterException):
+    """Yanlış OTP deneme hakkı bitti; oturum kilitlendi (ANALIZ.md P0-2).
+
+    RateLimitExceededException'ın ALT SINIFI DEĞİL, KARDEŞİ: orada kullanıcıya
+    "bekle" denir ve durum kendiliğinden düzelir; burada doğrulama oturumu
+    geri dönülemez biçimde iptal edilmiştir ve kullanıcı akışı baştan
+    başlatmalıdır. İki olayı ayrı tutmak, çağıranın hangisini yakaladığını
+    bilmesini sağlar."""
+    default_user_message = (
+        "Çok fazla hatalı kod girdiniz. Güvenliğiniz için doğrulama iptal edildi. "
+        "Lütfen talep işlemini baştan başlatın."
+    )
+    http_status = 429
+
+
 class InvalidStateException(SolutionCenterException):
     """Akış adımları sırayla ilerlemedi (ör. OTP'den önce talep oluşturma)."""
     default_user_message = "Talep adımları sırasıyla ilerlemelidir. Lütfen baştan başlayın."

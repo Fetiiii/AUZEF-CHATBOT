@@ -26,6 +26,7 @@ from .constants import (
     DEFAULT_CATEGORY_CACHE_TTL_SECONDS,
     DEFAULT_CHANNEL_SHORTCODE,
     DEFAULT_MAX_RETRIES,
+    DEFAULT_OTP_MAX_ATTEMPTS,
     DEFAULT_SMS_CONVERSATION_WINDOW_MIN,
     DEFAULT_SMS_IP_WINDOW_MIN,
     DEFAULT_SMS_PER_CONVERSATION,
@@ -40,6 +41,7 @@ from .constants import (
     ENV_CHANNEL_SHORTCODE,
     ENV_HASH_SECRET,
     ENV_MAX_RETRIES,
+    ENV_OTP_MAX_ATTEMPTS,
     ENV_SERVICE_TOKEN,
     ENV_SMS_CONVERSATION_WINDOW_MIN,
     ENV_SMS_IP_WINDOW_MIN,
@@ -100,6 +102,11 @@ class SolutionCenterConfig:
     # TC hash'lemede kullanılan secret; None ise service_token'dan türetilir.
     hash_secret: Optional[str] = None
 
+    # ── OTP deneme sayacı (P0-2) ─────────────────────────────────────────────
+    # Kaç yanlış koddan sonra doğrulama oturumu iptal edilir. SMS limitiyle
+    # çarpım etkisi için bkz. constants.DEFAULT_OTP_MAX_ATTEMPTS notu.
+    otp_max_attempts: int = DEFAULT_OTP_MAX_ATTEMPTS
+
     @property
     def enabled(self) -> bool:
         """base_url + service_token yoksa entegrasyon KAPALI (uçlar nazik 503 döner)."""
@@ -124,6 +131,7 @@ class SolutionCenterConfig:
             sms_per_ip=_env_int(ENV_SMS_PER_IP, DEFAULT_SMS_PER_IP),
             sms_ip_window_min=_env_int(ENV_SMS_IP_WINDOW_MIN, DEFAULT_SMS_IP_WINDOW_MIN),
             hash_secret=(os.getenv(ENV_HASH_SECRET) or "").strip() or None,
+            otp_max_attempts=_env_int(ENV_OTP_MAX_ATTEMPTS, DEFAULT_OTP_MAX_ATTEMPTS),
         )
 
 

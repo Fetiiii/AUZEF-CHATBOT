@@ -743,6 +743,27 @@
     scrollEnd();
   }
 
+  // Doğrulama iptal edildiğinde (OTP hakkı bitti) kartı kilitler ve tek tıkla
+  // akışı baştan başlatan bir düğme koyar. Sunucu bu noktada verificationToken'ı
+  // silip state'i SC_WAIT_TC'ye çektiği için, girdiyi açık bırakmak kullanıcıyı
+  // "süreniz doldu" hatasına sürüklerdi — arayüz sunucuyla tutarlı kalmalı.
+  function scLockWithRestart(bubble, msg) {
+    scLock(bubble);
+    scShowError(bubble, msg);
+    var row = document.createElement('div');
+    row.className = 'sc-row';
+    var again = document.createElement('button');
+    again.className = 'sc-primary';
+    again.textContent = 'Baştan başla';
+    again.addEventListener('click', function () {
+      again.disabled = true;
+      startSolutionCenterFlow();
+    });
+    row.appendChild(again);
+    bubble.appendChild(row);
+    scrollEnd();
+  }
+
   // Config kapalı (503) ya da konuşma yoksa → harici talep sayfasına düş.
   function scFallbackToPage(bubble) {
     if (bubble) scShowError(bubble, 'Talep sistemi şu anda kullanılamıyor. Sizi talep sayfasına yönlendiriyorum.');
@@ -815,6 +836,9 @@
       if (code.length < 4) { scShowError(bubble, 'Lütfen geçerli bir doğrulama kodu girin.'); return; }
       btn.disabled = true; inp.disabled = true;
       scApi('verify-otp', { code: code }).then(function (res) {
+        // 429 = deneme hakkı bitti, oturum sunucuda iptal edildi. Girdiyi
+        // yeniden AÇMA; tekrar denemek yalnızca "süreniz doldu" hatası verir.
+        if (res.status === 429) { scLockWithRestart(bubble, res.data.detail); return; }
         if (!res.ok) { btn.disabled = false; inp.disabled = false; scShowError(bubble, res.data.detail); return; }
         scLock(bubble, 'Doğrulama başarılı.');
         if (res.data.state === 'SC_WAIT_STUDENT_SELECTION') {
