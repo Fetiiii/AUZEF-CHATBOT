@@ -10,6 +10,10 @@ Kapsanan senaryolar:
   5) Pencere dolunca sayaç sıfırlanır
   6) Başarısız TC denemesi de sayılır
   7) Tabloda HAM TC yok (güvenlik regresyonu)
+  8) Temizlik hatası sayaçları geri almaz
+  9) SÜREKLİ temizlik hatası altında limit hâlâ tetiklenir (fail-open testi)
+ 10) Temizlik işini yapıyor (eski satırlar siliniyor, tazeler duruyor)
+ 11) Temizlik hatasından sonra oturum kullanılabilir kalır
 """
 import secrets
 from dataclasses import replace
@@ -254,3 +258,130 @@ def test_raw_tc_is_never_stored(sc):
         assert len(key_hash) == 64, "anahtar HMAC-SHA256 hex olmalı"
     # Üç kapsam da yazılmış olmalı
     assert {scope for scope, _k, _c in rows} == {"conv", "tc", "ip"}
+
+
+# ── 8) Temizlik hatası hız sınırını BOZMAMALI ────────────────────────────────
+# _cleanup "best-effort" diye hatasını yutuyordu, ama yutmak yetmiyordu: DELETE
+# transaction'ı abort ettiği için aynı transaction'da bekleyen sayaç artışları
+# da geri alınıyordu.
+#
+# Düzeltmesiz davranış ÖLÇÜLDÜ (tahmin değil): http=200, exception=None,
+# sayaç satırı=0. Yani hata hiçbir yere yansımıyor — ne kullanıcıya, ne log'a,
+# ne de bir 500'e; istek başarılı görünürken hız sınırı SESSİZCE fail-open
+# oluyor. Sessiz olması tespiti daha da zorlaştırıyor.
+#
+# Üstelik deadlock/kilit çakışması olasılığı tam da yük altında, yani korumanın
+# en çok gerektiği anda yükselir.
+
+def test_cleanup_failure_does_not_break_rate_limiting(sc, monkeypatch):
+    from sqlalchemy import text as _text
+
+    from integrations.solution_center import rate_limit
+
+    # Temizliği kasten patlat (var olmayan tablo → DBAPI hatası → transaction abort)
+    monkeypatch.setattr(rate_limit, "_CLEANUP_SQL", _text("DELETE FROM tablo_yok_ki"))
+
+    c = sc["configure"]()
+    conv = sc["new_conversation"]()
+
+    r = _send(c, conv)
+    assert r.status_code == 200, f"temizlik hatasi istegi dusurdu: {r.text}"
+
+    # ASIL İDDİA: sayaç artışı KAYBOLMAMALI, yoksa limit fail-open olur.
+    # ÜÇ kapsam da beklenir (TestClient istemci IP'si verdiği için ip de yazılır):
+    # tam küme eşitliği, kısmi geri alma / eksik yazma durumlarını da yakalar —
+    # "conv ve tc var" demek, ip kapsamının sessizce kaybolmasını gözden kaçırırdı.
+    rows = _rate_limit_rows()
+    scopes = {scope for scope, _k, _c in rows}
+    assert scopes == {"conv", "tc", "ip"}, f"sayaclar geri alindi/eksik: {rows}"
+
+
+# ── 9) SUREKLI temizlik hatasi altinda limit HALA TETIKLENIR ────────────────
+# 8. senaryo tek istekte sayacin korundugunu gosteriyor; ama "fail-open" tam
+# olarak "limit CALISMAYI BIRAKIR" demektir. Asil guvenlik ozelligi bu: temizlik
+# her istekte patlasa bile 4. SMS engellenmeli.
+
+def test_rate_limit_still_enforces_when_cleanup_keeps_failing(sc, monkeypatch):
+    from sqlalchemy import text as _text
+
+    from integrations.solution_center import rate_limit
+
+    monkeypatch.setattr(rate_limit, "_CLEANUP_SQL", _text("DELETE FROM tablo_yok_ki"))
+
+    c = sc["configure"]()          # sms_per_conversation = 3
+    conv = sc["new_conversation"]()
+
+    for i in range(3):
+        assert _send(c, conv).status_code == 200, f"{i + 1}. SMS gecmeliydi"
+
+    assert _send(c, conv).status_code == 429, (
+        "temizlik hatasi limiti FAIL-OPEN birakti: 4. SMS engellenmedi"
+    )
+
+
+# ── 10) Temizlik ISINI YAPIYOR (eski satirlar gercekten siliniyor) ──────────
+# Hicbir test temizligin sildigini dogrulamiyordu: cutoff hesabi ya da WHERE
+# kosulu bozulsa sessizce ya tablo sonsuza dek buyur ya da TAZE sayaclar
+# silinip limit fail-open olurdu.
+#
+# MUTASYONLA OLCULDU: "window_started_at < :cutoff" -> ">" yapildiginda bu test
+# (ve limit testlerinin cogu) DUSUYOR.
+#
+# NE KAPSAMADIGI (yanlis guven vermemek icin): _cleanup icindeki db.commit()'in
+# SILINMESINI yakalamaz. Olculdu — o commit kaldirilinca 11 test de geciyor,
+# cunku silme bekleyen halde kaliyor ve start_verification'in sonundaki commit
+# onu zaten kalici yapiyor. Oradaki commit silmenin kaliciligi icin degil,
+# _cleanup'i kendi kendine yeterli (caller'in commit'ine bagimli olmayan)
+# kilmak icin var.
+
+def test_cleanup_actually_deletes_expired_rows(sc):
+    from datetime import timedelta
+
+    from core.database import SCRateLimit, SessionLocal, utcnow
+    from integrations.solution_center.constants import SMS_COUNTER_RETENTION_HOURS
+
+    eski_key = "e" * 64
+    s = SessionLocal()
+    try:
+        s.add(SCRateLimit(
+            scope="conv", key_hash=eski_key, count=1,
+            window_started_at=utcnow() - timedelta(hours=SMS_COUNTER_RETENTION_HOURS + 1),
+        ))
+        s.commit()
+    finally:
+        s.close()
+
+    c = sc["configure"]()
+    assert _send(c, sc["new_conversation"]()).status_code == 200
+
+    keys = {k for _s, k, _c in _rate_limit_rows()}
+    assert eski_key not in keys, "saklama suresini asan satir silinmedi"
+    # Taze sayaclar DURMALI — temizlik ayrim yapmadan silmemeli.
+    assert {s_ for s_, _k, _c in _rate_limit_rows()} == {"conv", "tc", "ip"}
+
+
+# ── 11) Temizlik hatasindan sonra oturum KULLANILABILIR kalir ───────────────
+# rollback'in amaci buydu; dogrulanmadan yorumda iddia olarak duruyordu.
+# Session failed state'te kalsaydi SC oturum satiri yazilamaz, istek daha
+# belirsiz bir hatayla patlardi.
+
+def test_cleanup_failure_leaves_session_usable_for_rest_of_request(sc, monkeypatch):
+    from sqlalchemy import text as _text
+
+    from core.database import SessionLocal, SolutionCenterSession
+    from integrations.solution_center import rate_limit
+
+    monkeypatch.setattr(rate_limit, "_CLEANUP_SQL", _text("DELETE FROM tablo_yok_ki"))
+
+    c = sc["configure"]()
+    conv = sc["new_conversation"]()
+    assert _send(c, conv).status_code == 200
+
+    s = SessionLocal()
+    try:
+        row = s.query(SolutionCenterSession).filter_by(conversation_id=conv["id"]).first()
+    finally:
+        s.close()
+    assert row is not None, "temizlik hatasi sonrasi SC oturum satiri YAZILAMADI"
+    assert row.verification_token == "tok-abc"
+    assert row.state == "SC_WAIT_OTP"
