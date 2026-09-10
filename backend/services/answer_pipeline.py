@@ -94,7 +94,10 @@ def _build_candidate_pool(query: str, calendar_entries: list) -> list:
 
     raw = []
     try:
-        raw.extend(QDRANT_PROVIDER.search(query, limit=8))
+        # ALIAS'LAR AYRI NOKTA olduğu için tek kayıt üst sıraları
+        # doldurabiliyor; havuz aşağıda cevaba göre tekilleştiriliyor,
+        # yani limit 8 kalsaydı LLM'e giden AYRIK aday sayısı düşerdi.
+        raw.extend(QDRANT_PROVIDER.search(query, limit=24))
     except Exception:
         pass
     raw.extend(meili_search_safe(query, limit=5))
