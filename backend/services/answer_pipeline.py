@@ -19,8 +19,29 @@ from core.deps import get_llm_provider, is_llm_enabled, meili_search_safe, QDRAN
 
 logger = logging.getLogger("auzef")
 
-MEILI_THERESHOLD = float(os.getenv("MEILI_THERESHOLD", "0.90"))
-QDRANT_THERESHOLD = float(os.getenv("QDRANT_THERESHOLD", "0.75"))
+def _threshold(name: str, default: str) -> float:
+    """Eşiği ortamdan okur ve 0-1 aralığında olduğunu DOĞRULAR.
+
+    Doğrulama şart: skorlar [0,1] aralığında geliyor, yani "0.90" yerine
+    "90" yazılması hiçbir hit'in eşiği geçememesi demek. Bu SESSİZCE olur —
+    bot her soruya "Bu konuda bilgim bulunmuyor." der, loga bir şey düşmez.
+    Yanlış yapılandırmayla ayakta kalmaktansa açılışta düşmek doğrudur.
+    """
+    raw = os.getenv(name, default)
+    try:
+        value = float(raw)
+    except ValueError:
+        raise RuntimeError(f"{name} sayı olmalı, alınan: {raw!r}") from None
+    if not 0.0 <= value <= 1.0:
+        raise RuntimeError(
+            f"{name} 0 ile 1 arasında olmalı (skorlar bu aralıkta), alınan: {value}. "
+            f"Yüzde yazmak istiyorsanız {value / 100} kullanın."
+        )
+    return value
+
+
+MEILI_THERESHOLD = _threshold("MEILI_THERESHOLD", "0.90")
+QDRANT_THERESHOLD = _threshold("QDRANT_THERESHOLD", "0.75")
 
 
 
