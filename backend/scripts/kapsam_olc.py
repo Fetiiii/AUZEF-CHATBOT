@@ -65,10 +65,30 @@ def _indeksten_gittigini_bekle(ids: list[int], timeout: float = 60.0) -> None:
     print(f"     UYARI: {len(kalan)} kayit {timeout:.0f} sn icinde indeksten silinmedi.")
 
 
-def sor(soru: str) -> str:
+def sor(db, soru: str) -> tuple[str, bool]:
+    """Soruyu sorar; (cevap, cevaplayabildi_mi) doner.
+
+    CEVAPLAYAMAMA METINDEN DEGIL, `source` ALANINDAN OKUNUR. Metne bakmak
+    bir kez yanildi: bot iki ayri sekilde reddediyor —
+      * "Bu konuda bilgim bulunmuyor."
+      * "Bu konuda net bir bilgim yok. Sunlari sormak istemis olabilirsiniz:"
+    Yalniz birincisini arayan olcum, ikinci kalibi "bot cevap verdi" sayip
+    7 gercek boslugu kapsanmis gosterdi. `routers/chat.py` her iki dalda da
+    source="none" yaziyor; metin degisse bile bu alan dogru kalir.
+    """
     body = json.dumps({"message": soru}).encode()
     request = urllib.request.Request(CHAT_URL, data=body, headers={"Content-Type": "application/json"})
-    return json.loads(urllib.request.urlopen(request, timeout=120).read())["answer"]
+    payload = json.loads(urllib.request.urlopen(request, timeout=120).read())
+    cevap = payload["answer"]
+
+    message_id = payload.get("message_id")
+    if message_id is None:
+        # Mesaj kaydedilememis (best-effort); son care olarak metne bak.
+        return cevap, "bilgim bulunmuyor" not in cevap and "net bir bilgim yok" not in cevap
+    source = db.execute(
+        text("SELECT source FROM conversation_messages WHERE id = :id"), {"id": message_id}
+    ).scalar()
+    return cevap, source not in (None, "none")
 
 
 def main() -> None:
@@ -109,10 +129,10 @@ def main() -> None:
         sonuclar = []
         for index, (_, mark, soru) in enumerate(kayitlar, start=1):
             try:
-                cevap = sor(soru)
+                cevap, cevaplandi = sor(db, soru)
             except Exception as exc:  # noqa: BLE001 — olcum, her hata raporlanir
-                cevap = f"HATA: {type(exc).__name__}"
-            sonuclar.append((mark, soru, cevap))
+                cevap, cevaplandi = f"HATA: {type(exc).__name__}", False
+            sonuclar.append((mark, soru, cevap, cevaplandi))
             if index % 10 == 0:
                 print(f"     {index}/{len(kayitlar)}")
             time.sleep(0.5)
@@ -130,20 +150,25 @@ def main() -> None:
         ).scalar()
         print(f"     geri alindi: {geri}/{len(kayitlar)} kayit aktif ve yeniden indekslendi.\n")
 
-    bilmiyorum = [s for s in sonuclar if "bilgim bulunmuyor" in s[2]]
+    bilmiyorum = [s for s in sonuclar if not s[3]]
+    cevapli = [s for s in sonuclar if s[3]]
     print("=" * 72)
-    print(f"BOT CEVAP VEREMEDI (gercek bosluk): {len(bilmiyorum)}/{len(sonuclar)}")
-    print(f"BOT BIR CEVAP VERDI (incelenmeli):  {len(sonuclar) - len(bilmiyorum)}/{len(sonuclar)}")
+    print(f"BOT CEVAP VEREMEDI (kesin bosluk):  {len(bilmiyorum)}/{len(sonuclar)}")
+    print(f"BOT BIR CEVAP VERDI (INCELENMELI):  {len(cevapli)}/{len(sonuclar)}")
     print("=" * 72)
+    print(
+        "\nDIKKAT: 'bir cevap verdi' KAPSANIYOR DEMEK DEGILDIR. Bot neredeyse\n"
+        "hicbir soruyu bos birakmiyor; donen metin cogu zaman BASKA bir konuyu\n"
+        "anlatiyor (olculdu: 41 cevabin 33'u soruyu karsilamiyordu). Asagidaki\n"
+        "bolumu tek tek okumadan karar vermeyin."
+    )
 
     print("\n--- BOT CEVAP VEREMEDI: bu kayitlara cevap YAZILMALI ---")
-    for mark, soru, _ in bilmiyorum:
+    for mark, soru, _, _ in bilmiyorum:
         print(f"  {mark}  {soru}")
 
     print("\n--- BOT CEVAP VERDI: cevabin soruyu karsilayip karsilamadigini okuyun ---")
-    for mark, soru, cevap in sonuclar:
-        if "bilgim bulunmuyor" in cevap:
-            continue
+    for mark, soru, cevap, _ in cevapli:
         print(f"\n{'=' * 72}\n{mark}  {soru}\n{'-' * 72}\n{cevap[:600]}")
 
 
