@@ -107,6 +107,13 @@ services:
       MEILI_URL: http://meilisearch:7700
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
+      # Gömme (sentence-transformers/torch) varsayılanda TEK ÇEKİRDEKTE
+      # kalıyordu: 2.800 metinlik toplu indeksleme ~0,9 çekirdek kullanıp
+      # yarım saate yaklaşıyordu. Bu değişkenler olmadan torch, container'a
+      # ayrılan CPU'yu kullanmıyor.
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-8}
+      MKL_NUM_THREADS: ${MKL_NUM_THREADS:-8}
+      TOKENIZERS_PARALLELISM: "true"
     expose:
       - "8000"
     volumes:

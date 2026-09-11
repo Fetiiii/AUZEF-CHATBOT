@@ -6,6 +6,7 @@ TEK bir havuzdan birebir (verbatim) seçtirilir; LLM asla cevap üretmez.
 LLM kapalı/hatalı/seçim yoksa eşik tabanlı yola (takvim kelime eşleşmesi →
 Meili ≥0.90 → Qdrant >0.75) düşülür.
 """
+import os
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -17,6 +18,10 @@ from services.calendar_utils import format_calendar_answer, match_calendar_entry
 from core.deps import get_llm_provider, is_llm_enabled, meili_search_safe, QDRANT_PROVIDER
 
 logger = logging.getLogger("auzef")
+
+MEILI_THERESHOLD = float(os.getenv("MEILI_THERESHOLD", "0.90"))
+QDRANT_THERESHOLD = float(os.getenv("QDRANT_THERESHOLD", "0.75"))
+
 
 
 def is_date_query(query: str) -> bool:
@@ -89,7 +94,10 @@ def _build_candidate_pool(query: str, calendar_entries: list) -> list:
 
     raw = []
     try:
-        raw.extend(QDRANT_PROVIDER.search(query, limit=8))
+        # ALIAS'LAR AYRI NOKTA olduğu için tek kayıt üst sıraları
+        # doldurabiliyor; havuz aşağıda cevaba göre tekilleştiriliyor,
+        # yani limit 8 kalsaydı LLM'e giden AYRIK aday sayısı düşerdi.
+        raw.extend(QDRANT_PROVIDER.search(query, limit=24))
     except Exception:
         pass
     raw.extend(meili_search_safe(query, limit=5))
@@ -190,12 +198,12 @@ def _fallback_answer(query: str, db: Session, use_calendar: bool = True) -> tupl
             return cal, "academic_calendar"
 
     hits = meili_search_safe(query, limit=3)
-    if hits and hits[0]["score"] >= 0.90:
+    if hits and hits[0]["score"] >= MEILI_THERESHOLD:
         return hits[0]["answer"], "meilisearch"
 
     try:
         qhits = QDRANT_PROVIDER.search(query, limit=5)
-        if qhits and qhits[0]["score"] > 0.75:
+        if qhits and qhits[0]["score"] > QDRANT_THERESHOLD:
             return qhits[0]["answer"], "qdrant_vector"
     except Exception:
         pass

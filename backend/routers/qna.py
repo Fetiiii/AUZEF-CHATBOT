@@ -59,7 +59,12 @@ def sync_providers(db: Session, qna_id: int):
     except Exception as e:
         logger.error(f"MeiliSearch sync hatası: {e}")
     try:
-        QDRANT_PROVIDER.upsert_point(qna_id, doc['question'], doc['answer'])
+        # `queries` = kaydın alternatif ifadeleri; onlar da vektörleniyor,
+        # yoksa dağınık kullanıcı sorgusu yalnız cilalı kanonik cümleye
+        # benzemek zorunda kalıyor (bkz. QdrantProvider._points_for).
+        QDRANT_PROVIDER.upsert_point(
+            qna_id, doc['question'], doc['answer'], doc.get('queries')
+        )
     except Exception as e:
         logger.error(f"Qdrant sync hatası: {e}")
 
@@ -103,7 +108,10 @@ def sync_providers_batch(db: Session, qna_ids: list):
             logger.error(f"MeiliSearch batch sync hatası: {e}")
         try:
             QDRANT_PROVIDER.upsert_points(
-                [(d["id"], d["question"], d["answer"]) for d in active_docs]
+                [
+                    (d["id"], d["question"], d["answer"], d.get("queries"))
+                    for d in active_docs
+                ]
             )
         except Exception as e:
             logger.error(f"Qdrant batch sync hatası: {e}")
