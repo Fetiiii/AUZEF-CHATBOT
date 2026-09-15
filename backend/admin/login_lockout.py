@@ -23,8 +23,8 @@ Tasarım notları
   ve IP burada zaten sistemde açık metin saklanıyor (``AdminUser.email``,
   ``Conversation.ip_address``) — gizlenecek ek bir şey yok.
 - **Config env'den ÇAĞRI ANINDA okunur** (``os.getenv``), modül yüklenirken
-  donmaz — ``admin/settings_api.py``'deki ``_maintenance_flag()`` kalıbıyla aynı.
-  Testler ``monkeypatch.setenv(...)`` ile eşikleri değiştirebilir; solution_center'ın
+  donmaz. Testler ``monkeypatch.setenv(...)`` ile eşikleri değiştirebilir;
+  solution_center'ın
   FastAPI ``Depends`` tabanlı DI'ına burada gerek yok çünkü mocklanacak bir dış
   HTTP istemcisi yok.
 """

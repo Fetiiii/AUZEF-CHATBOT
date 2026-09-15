@@ -21,6 +21,22 @@ logger = logging.getLogger("auzef")
 # (Eskiden settings_api'deydi; get_llm_provider buna ihtiyaç duyduğu için
 # alt seviyeye taşındı — settings_api ve main buradan import eder.)
 OPENROUTER_KEY_CONFIG = "OPENROUTER_API_KEY"
+MAINTENANCE_CONFIG_KEY = "MAINTENANCE_MODE"
+
+
+def is_maintenance_enabled(db: Session) -> bool:
+    """DB-ADMIN'deki merkezi planlı bakım durumunu döndür.
+
+    Kayıt yoksa veya değer ``true`` değilse bakım kapalıdır. ``SystemConfig``
+    model bind'i sorguyu açıkça DB-ADMIN'e yönlendirir.
+    """
+    row = (
+        db.query(SystemConfig)
+        .filter(SystemConfig.key == MAINTENANCE_CONFIG_KEY)
+        .first()
+    )
+    return bool(row and (row.value or "").strip().lower() == "true")
+
 
 # Girdi sınırları: sınırsız mesaj = embedding CPU'su + LLM token maliyeti (DoS yüzeyi).
 MAX_MESSAGE_LEN = 1000

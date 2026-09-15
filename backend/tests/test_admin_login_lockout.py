@@ -1,7 +1,6 @@
 """Admin girişi kaba kuvvet koruması (ANALIZ.md P0-3).
 
-Eşikler monkeypatch.setenv ile küçültülür (test_maintenance.py'deki
-MAINTENANCE_FLAG_DIR kalıbının aynısı) — login_lockout.py env'i çağrı anında
+Eşikler monkeypatch.setenv ile küçültülür; login_lockout.py env'i çağrı anında
 okur, modül yüklenirken donmuyor.
 
 Kapsanan senaryolar:

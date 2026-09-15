@@ -195,10 +195,11 @@ The rolling procedure keeps one APP node in service while the other is being
 updated. The six-VM topology does not, by itself, provide PostgreSQL,
 MeiliSearch, or Qdrant replication/failover.
 
-Maintenance mode must have one consistent multi-node state. Production must
-not depend on an APP-local flag file whose value can differ between APP-01 and
-APP-02. Both nodes and the LB-facing response path must observe the same
-maintenance decision throughout a deployment or incident.
+Planned maintenance mode uses the `MAINTENANCE_MODE=true|false` `SystemConfig`
+record in DB-ADMIN, defaulting to `false` when absent. APP-01 and APP-02 read
+the same central value. An APP-local Nginx flag may remain as an emergency
+single-node override, but the production-wide maintenance decision must not
+depend on it.
 
 ## Explicit Non-Goals
 

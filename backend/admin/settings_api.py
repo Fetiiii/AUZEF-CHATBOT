@@ -4,16 +4,13 @@
 İçerik:
 - Kullanıcı yönetimi: listele / oluştur / güncelle (rol, ad, aktiflik, parola)
 - LLM ayarları: aç-kapa + OpenRouter API anahtarı (DB'de tutulur, .env'i ezer)
-- Bakım modu: widget'ı kapatan bayrak dosyası (nginx okur — bkz. nginx.conf)
+- Bakım modu: DB-ADMIN'de tutulan merkezi widget erişim durumu
 
 Kilitlenme korumaları:
 - Kullanıcı KENDİ rolünü/aktifliğini değiştiremez.
 - Son aktif super_admin pasifleştirilemez / rolü düşürülemez.
 """
 import logging
-import os
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,7 +18,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.database import AdminSession, AdminUser, SystemConfig
-from core.deps import OPENROUTER_KEY_CONFIG, get_db
+from core.deps import (
+    MAINTENANCE_CONFIG_KEY,
+    OPENROUTER_KEY_CONFIG,
+    get_db,
+    is_maintenance_enabled,
+)
 from admin.auth import (
     VALID_ROLES,
     current_user as _current_user,
@@ -221,14 +223,9 @@ def update_llm_settings(body: LLMSettingsRequest, db: Session = Depends(get_db))
 # ─────────────────────────────────────────────
 #  Bakım Modu (widget'ı kapat/aç)
 # ─────────────────────────────────────────────
-# Bayrak DB kaydı değil DOSYADIR: nginx (frontend container) aynı volume'u
-# mount eder ve dosya varken /widget-chat'e 503 döner. Böylece bakım modu
-# backend'den bağımsız yaşar — backend çökse bile bayrak çalışır ve acil
-# durumda bakim.sh aynı dosyayı SSH'dan yönetebilir. Panel açık kalır
-# (bayrak yalnızca widget ucunu kapatır), bakım panelden geri kapatılabilir.
-
-def _maintenance_flag() -> Path:
-    return Path(os.getenv("MAINTENANCE_FLAG_DIR", "/app/flags")) / "maintenance.flag"
+# Planlı bakım durumu SystemConfig üzerinden DB-ADMIN'de merkezidir; APP-01 ve
+# APP-02 aynı değeri görür. Nginx'teki local dosya bayrağı panelden yönetilmez;
+# yalnız APP-local/acil override olarak kalır.
 
 
 class MaintenanceRequest(BaseModel):
@@ -236,25 +233,33 @@ class MaintenanceRequest(BaseModel):
 
 
 @router.get("/maintenance")
-def get_maintenance():
-    return {"on": _maintenance_flag().exists()}
+def get_maintenance(db: Session = Depends(get_db)):
+    try:
+        return {"on": is_maintenance_enabled(db)}
+    except Exception:
+        logger.exception("Merkezi bakım durumu okunamadı")
+        raise HTTPException(
+            status_code=503,
+            detail="Bakım durumu okunamıyor.",
+        ) from None
 
 
 @router.put("/maintenance")
-def set_maintenance(body: MaintenanceRequest, me: Optional[AdminUser] = Depends(_current_user)):
-    flag = _maintenance_flag()
+def set_maintenance(
+    body: MaintenanceRequest,
+    db: Session = Depends(get_db),
+    me: Optional[AdminUser] = Depends(_current_user),
+):
     who = me.email if me else "bilinmiyor"
     try:
-        if body.on:
-            flag.parent.mkdir(parents=True, exist_ok=True)
-            # Denetim izi: kim/ne zaman açtı (bakim.sh status da gösterir)
-            flag.write_text(
-                f"{who} {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n",
-                encoding="utf-8",
-            )
-        else:
-            flag.unlink(missing_ok=True)
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Bakım bayrağı yazılamadı: {e}")
+        _set_config(db, MAINTENANCE_CONFIG_KEY, "true" if body.on else "false")
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Merkezi bakım durumu güncellenemedi (%s)", who)
+        raise HTTPException(
+            status_code=503,
+            detail="Bakım durumu güncellenemiyor.",
+        ) from None
     logger.info("Bakım modu %s (%s)", "AÇILDI" if body.on else "kapatıldı", who)
-    return {"on": flag.exists()}
+    return {"on": body.on}

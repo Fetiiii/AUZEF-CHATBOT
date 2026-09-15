@@ -1,5 +1,5 @@
 #!/bin/sh
-# AUZEF Chatbot — bakım aracı.
+# AUZEF Chatbot — APP-local/acil bakım override aracı.
 #
 # İki kullanım şekli:
 #   ./bakim.sh                → etkileşimli menü: sistem durumu özeti +
@@ -7,13 +7,15 @@
 #                                     biri için: numarayı yaz, Enter'a bas.
 #   ./bakim.sh on|off|status  → tek komut (otomasyon / deneyimli kullanıcı)
 #
-# Panel/backend ÇALIŞMIYORKEN bile çalışır: bakım bayrağını nginx (frontend)
-# container'ı üzerinden yönetir, backend'e hiç dokunmaz. Normal yol panel:
-# Ayarlar → Bakım Modu (super_admin).
+# Panel/backend ÇALIŞMIYORKEN bile çalışır: yalnız bu makinedeki nginx
+# (frontend) container'ının bakım bayrağını yönetir, backend'e hiç dokunmaz.
+# Merkezi planlı bakımın normal yolu panelde Ayarlar → Bakım Modu'dur ve
+# DB-ADMIN'e yazılır; bu script o merkezi state'i okumaz veya değiştirmez.
 #
-# Bayrak varken nginx /widget-chat'e 503 döner (widget "bakımdayız" der);
-# admin paneli ve /api/ etkilenmez. Bayrak ops_flags volume'unda yaşar —
-# deploy/restart onu silmez, "off" diyene kadar açık kalır.
+# Bayrak varken bu APP'in nginx'i /widget-chat'e 503 döner (widget "bakımdayız"
+# der); admin paneli ve /api/ etkilenmez. Bayrak ops_flags volume'unda yaşar.
+# İki APP'li production'da bu override diğer node'u ETKİLEMEZ; merkezi bakım
+# amacıyla kullanılmamalıdır. Merkezi production CLI daha sonra eklenecektir.
 #
 # NOT: Container yolu docker exec'e hep `sh -c "..."` içinde gömülü verilir,
 # asla doğrudan argüman olarak değil — Windows Git Bash'te MSYS, /etc/... ile
@@ -42,12 +44,12 @@ container_line() {  # $1=container adı  $2=etiket
 
 flag_on() {
   docker exec "$CONTAINER" sh -c "echo \"bakim.sh $(date -u +%Y-%m-%dT%H:%M:%SZ)\" > $FLAG" \
-    && echo "Bakım modu AÇIK — widget öğrencilere kapalı (503)."
+    && echo "APP-local/acil override AÇIK — yalnız bu node widget'ı 503 döndürür."
 }
 
 flag_off() {
   docker exec "$CONTAINER" sh -c "rm -f $FLAG" \
-    && echo "Bakım modu KAPALI — widget tekrar yayında."
+    && echo "APP-local/acil override KAPALI — bu node backend state'ini izler."
 }
 
 flag_status() {
@@ -75,16 +77,17 @@ show_status() {
     printf "    %-12s: ULAŞILAMIYOR\n" "/health"
   fi
   # printf %-12s bayt sayar, "ı" 2 bayttır → Türkçe etikette elle boşluk
-  printf "    Bakım modu  : "
+  printf "    Local override: "
   flag_status
   echo
 }
 
 usage() {
   echo "Kullanım: $0 [on|off|status]"
-  echo "  on      Bakım modunu aç (widget öğrencilere kapanır)"
-  echo "  off     Bakım modunu kapat (widget yayına döner)"
-  echo "  status  Bakım modu durumunu göster"
+  echo "  on      Bu APP'te acil local override'ı aç"
+  echo "  off     Bu APP'te acil local override'ı kapat"
+  echo "  status  Bu APP'in local override durumunu göster"
+  echo "  NOT: Merkezi planlı bakım DB-ADMIN üzerinden panelden yönetilir."
   echo "  Argümansız çalıştırırsanız durum özeti + etkileşimli menü açılır."
 }
 
@@ -92,20 +95,20 @@ usage() {
 
 menu() {
   echo
-  echo "  AUZEF Chatbot — Bakım Aracı"
+  echo "  AUZEF Chatbot — APP-local/Acil Override"
   echo "  ───────────────────────────"
   while :; do
     show_status
     echo "  Ne yapmak istersiniz?"
-    echo "    1) Bakım modunu AÇ    (widget öğrencilere kapanır)"
-    echo "    2) Bakım modunu KAPAT (widget yayına döner)"
+    echo "    1) Local override'ı AÇ    (yalnız bu node)"
+    echo "    2) Local override'ı KAPAT (yalnız bu node)"
     echo "    3) Durumu yenile"
     echo "    0) Çık"
     printf "  Seçim: "
     read -r secim || exit 0
     case "$secim" in
       1)
-        printf "  Widget TÜM öğrencilere kapanacak. Emin misiniz? (e/h): "
+        printf "  Yalnız bu APP node'u widget'a kapanacak. Emin misiniz? (e/h): "
         read -r onay || exit 0
         if [ "$onay" = "e" ] || [ "$onay" = "E" ]; then
           echo; flag_on
@@ -126,7 +129,7 @@ menu() {
 case "$1" in
   on)     flag_on ;;
   off)    flag_off ;;
-  status) printf "Bakım modu: "; flag_status ;;
+  status) printf "APP-local override: "; flag_status ;;
   "")     menu ;;
   *)      usage; exit 1 ;;
 esac

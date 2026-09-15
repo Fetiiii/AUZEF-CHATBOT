@@ -10,7 +10,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.database import Conversation, ConversationMessage, utcnow
-from core.deps import get_db, log_query as _log_query, MEILI_PROVIDER, MAX_MESSAGE_LEN
+from core.deps import (
+    MAX_MESSAGE_LEN,
+    MEILI_PROVIDER,
+    get_db,
+    is_maintenance_enabled,
+    log_query as _log_query,
+)
 from services.answer_pipeline import answer_question as _answer_question
 
 logger = logging.getLogger("auzef")
@@ -152,6 +158,16 @@ def _widget_reply(db: Session, conv: Optional[Conversation], answer: str, source
 @router.post("/widget-chat")
 def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Embed widget için basit adapter: {message} → {answer}"""
+    # İlk kalıcı/pahalı işlemden önce DB-ADMIN'deki ortak state'i oku. DB
+    # erişimi başarısızsa kritik dependency kaybında pipeline'ı başlatma.
+    try:
+        maintenance_enabled = is_maintenance_enabled(db)
+    except Exception:
+        logger.exception("Widget merkezi bakım durumu okunamadı")
+        raise HTTPException(status_code=503, detail="service unavailable") from None
+    if maintenance_enabled:
+        raise HTTPException(status_code=503, detail="maintenance")
+
     q = body.message.strip()
     if not q:
         return {"answer": "Lütfen bir soru yazın."}
