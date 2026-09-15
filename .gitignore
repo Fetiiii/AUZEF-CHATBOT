@@ -19,6 +19,10 @@ ENV/
 .eggs/
 dist/
 build/
+!deploy/production/build/
+!deploy/production/build/*.sh
+!deploy/production/build/tests/
+!deploy/production/build/tests/*.py
 *.egg
 pip-log.txt
 pip-delete-this-directory.txt
