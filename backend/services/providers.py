@@ -52,6 +52,7 @@ class MeiliSearchProvider(BaseSearchProvider):
         return [
             {
                 "id": hit['id'],
+                "qna_id": hit['id'],
                 "question": hit['question'],
                 "answer": hit['answer'],
                 "score": hit.get('_rankingScore', 0),
@@ -101,10 +102,12 @@ class QdrantProvider(BaseSearchProvider):
         return [
             {
                 "id": point.id,
+                "qna_id": point.payload.get('qna_id'),
                 "question": point.payload.get('question'),
                 "answer": point.payload.get('answer'),
                 "score": point.score,
-                "source": "qdrant"
+                "source": "qdrant",
+                "matched_query": point.payload.get('matched_query'),
             } for point in results.points
         ]
 

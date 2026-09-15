@@ -43,6 +43,8 @@ class BaseLLMProvider(ABC):
         system = (
             "Sen bir soru-cevap seçici asistansın. "
             "Sana verilen aday cevaplar arasından kullanıcının sorusuna en uygun olanı seçersin. "
+            "Önceki konuşma verilmişse onu yalnız güncel mesajı anlamlandırmak için kullanırsın; "
+            "güncel mesaj yeni ve açık bir konuysa eski konuyu yok sayarsın. "
             "Kendi cevabını asla üretmezsin, yalnızca bir sayı yazarsın."
         )
         user = (

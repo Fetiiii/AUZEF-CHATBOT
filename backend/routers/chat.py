@@ -1,6 +1,7 @@
 """Widget/arama uclari (public) + konusma kaliciligi yardimcilari."""
 import hmac
 import logging
+import os
 import secrets
 from typing import Optional
 
@@ -14,6 +15,22 @@ from services.answer_pipeline import answer_question as _answer_question
 
 logger = logging.getLogger("auzef")
 router = APIRouter()
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        raise RuntimeError(f"{name} pozitif tam sayı olmalı, alınan: {raw!r}") from None
+    if value < 1:
+        raise RuntimeError(f"{name} pozitif tam sayı olmalı, alınan: {value}")
+    return value
+
+
+CHAT_CONTEXT_ENABLED = os.getenv("CHAT_CONTEXT_ENABLED", "false").strip().lower() == "true"
+CHAT_CONTEXT_MAX_MESSAGES = _positive_int_env("CHAT_CONTEXT_MAX_MESSAGES", 4)
+CHAT_CONTEXT_MAX_CHARS = _positive_int_env("CHAT_CONTEXT_MAX_CHARS", 1200)
 
 
 class WidgetChatRequest(BaseModel):
@@ -70,6 +87,34 @@ def _store_message(db: Session, conversation_id: int, role: str, content: str, s
     return msg
 
 
+def _load_recent_context(db: Session, conversation_id: int) -> tuple[dict, ...]:
+    """Güncel mesajdan ÖNCEKİ sınırlı konuşma geçmişini kronolojik döndürür."""
+    rows = (
+        db.query(ConversationMessage)
+        .filter(
+            ConversationMessage.conversation_id == conversation_id,
+            ConversationMessage.role.in_(("user", "bot")),
+        )
+        .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
+        .limit(CHAT_CONTEXT_MAX_MESSAGES)
+        .all()
+    )
+    remaining = CHAT_CONTEXT_MAX_CHARS
+    per_message_limit = max(1, CHAT_CONTEXT_MAX_CHARS // CHAT_CONTEXT_MAX_MESSAGES)
+    newest_first = []
+    for row in rows:
+        content = (row.content or "").strip()
+        if not content:
+            continue
+        clipped = content[:min(remaining, per_message_limit)]
+        if clipped:
+            newest_first.append({"role": row.role, "content": clipped})
+            remaining -= len(clipped)
+        if remaining <= 0:
+            break
+    return tuple(reversed(newest_first))
+
+
 def _widget_reply(db: Session, conv: Optional[Conversation], answer: str, source: str, suggestions: Optional[list] = None) -> dict:
     """Bot cevabını (mümkünse) kaydedip yanıtı döner.
 
@@ -120,8 +165,11 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     # Best-effort: kayıt başarısız olursa (ör. tablo henüz yoksa) cevap yolu
     # etkilenmez; sadece bu sohbet loglanmaz.
     conv = None
+    conversation_context = ()
     try:
         conv = _get_or_create_conversation(db, body.conversation_id, body.conversation_token, ip)
+        if CHAT_CONTEXT_ENABLED:
+            conversation_context = _load_recent_context(db, conv.id)
         _store_message(db, conv.id, "user", q)
     except Exception as e:
         logger.error(f"Conversation kaydı yapılamadı (yanıt yolu etkilenmez): {e}")
@@ -133,7 +181,9 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
 
     # Cevap üret: LLM seçici ana yol (birleşik QnA + takvim havuzu, çoklu soru)
     # + eşik yedeği. Takvim artık ön kapı değil, havuzdaki bir aday.
-    answer, source = _answer_question(q, db)
+    answer, source = _answer_question(
+        q, db, conversation_context=conversation_context
+    )
     if answer:
         background_tasks.add_task(_log_query, source, "success", ip)
         return _widget_reply(db, conv, answer, source)

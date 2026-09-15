@@ -26,6 +26,60 @@ def test_first_message_issues_token_and_continuation_works(client):
     assert d2["conversation_id"] == d1["conversation_id"]
 
 
+def test_context_enabled_passes_only_owned_previous_messages(client, monkeypatch):
+    import routers.chat as chat
+
+    captured = []
+
+    def answer(question, db, conversation_context=()):
+        captured.append((question, conversation_context))
+        return f"cevap-{len(captured)}", "llm"
+
+    monkeypatch.setattr(chat, "CHAT_CONTEXT_ENABLED", True)
+    monkeypatch.setattr(chat, "_answer_question", answer)
+
+    first = _chat(client, "İlk soru")
+    second = _chat(
+        client,
+        "Fakat şimdi farklı",
+        first["conversation_id"],
+        first["conversation_token"],
+    )
+
+    assert captured[0] == ("İlk soru", ())
+    assert captured[1][0] == "Fakat şimdi farklı"
+    assert captured[1][1] == (
+        {"role": "user", "content": "İlk soru"},
+        {"role": "bot", "content": "cevap-1"},
+    )
+    assert second["conversation_id"] == first["conversation_id"]
+
+    _chat(client, "Başka kullanıcı", first["conversation_id"], "yanlis-token")
+    assert captured[2] == ("Başka kullanıcı", ())
+
+
+def test_context_applies_message_and_total_character_caps(db, monkeypatch):
+    from core.database import Conversation, ConversationMessage
+    from routers import chat
+
+    monkeypatch.setattr(chat, "CHAT_CONTEXT_MAX_MESSAGES", 2)
+    monkeypatch.setattr(chat, "CHAT_CONTEXT_MAX_CHARS", 10)
+    conv = Conversation(client_token="token")
+    db.add(conv)
+    db.flush()
+    db.add_all([
+        ConversationMessage(conversation_id=conv.id, role="user", content="abcdefgh"),
+        ConversationMessage(conversation_id=conv.id, role="bot", content="12345678"),
+        ConversationMessage(conversation_id=conv.id, role="user", content="ABCDEFGH"),
+    ])
+    db.commit()
+
+    assert chat._load_recent_context(db, conv.id) == (
+        {"role": "bot", "content": "12345"},
+        {"role": "user", "content": "ABCDE"},
+    )
+
+
 def test_wrong_or_missing_token_starts_new_conversation(client):
     """Hijack denemesi öğrenciyi ASLA kırmaz: sessizce yeni konuşma açılır."""
     _seed_meili_hit()
