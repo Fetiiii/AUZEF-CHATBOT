@@ -26,7 +26,7 @@ from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from sqlalchemy import text
 
-from core.database import SessionLocal
+from core.database import SessionLocal, execute_admin_sql
 from services.providers import _usable_aliases
 
 COLLECTION = "auzef_qna_vectors"
@@ -36,7 +36,9 @@ SEED = 20260911  # sabit tohum: iki kosu ayni ornegi kullansin
 
 def main() -> None:
     db = SessionLocal()
-    rows = db.execute(text("SELECT * FROM qna_search_view WHERE status = 1")).mappings().all()
+    rows = execute_admin_sql(
+        db, text("SELECT * FROM qna_search_view WHERE status = 1")
+    ).mappings().all()
 
     # (sorgu, beklenen qna_id) ciftleri — yalniz alias'lar; kanonik soruyu
     # sormak indeksin kendisini sormak olurdu, olcmek istedigimiz o degil.

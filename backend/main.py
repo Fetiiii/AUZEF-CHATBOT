@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 load_dotenv()
 
+from core.database import execute_admin_sql
 from core.deps import get_db, QDRANT_PROVIDER
 from admin.auth import router as auth_router, AdminAuthMiddleware
 from admin.settings_api import router as settings_router
@@ -79,5 +80,5 @@ async def _solution_center_exception_handler(request, exc: SolutionCenterExcepti
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
     """Container healthcheck ucu: public ve ucuz, DB baglantisini dogrular."""
-    db.execute(text("SELECT 1"))
+    execute_admin_sql(db, text("SELECT 1"))
     return {"ok": True}

@@ -40,7 +40,7 @@ import pandas as pd
 from psycopg2.extras import execute_values
 from sqlalchemy import text
 
-from core.database import SessionLocal, engine
+from core.database import SessionLocal, chat_engine, execute_chat_sql
 
 # import_tag kolonu yalnızca bu script için var — kalıcı şemaya (database.py/
 # init_db) eklenmiyor çünkü prod boot'unda taşınmasına gerek yok, sadece bu
@@ -100,9 +100,13 @@ def pick_content(row) -> str:
 def delete_tag(tag: str):
     db = SessionLocal()
     try:
-        db.execute(text(_ENSURE_QLOG_TAG_COLUMN))
-        res = db.execute(text("DELETE FROM conversations WHERE import_tag = :tag"), {"tag": tag})
-        qres = db.execute(text("DELETE FROM query_logs WHERE import_tag = :tag"), {"tag": tag})
+        execute_chat_sql(db, text(_ENSURE_QLOG_TAG_COLUMN))
+        res = execute_chat_sql(
+            db, text("DELETE FROM conversations WHERE import_tag = :tag"), {"tag": tag}
+        )
+        qres = execute_chat_sql(
+            db, text("DELETE FROM query_logs WHERE import_tag = :tag"), {"tag": tag}
+        )
         db.commit()
         print(f"🗑️  Silindi: {res.rowcount} konuşma (+CASCADE mesajları), "
               f"{qres.rowcount} query_log satırı, tag={tag}")
@@ -158,7 +162,7 @@ def run_csv_import(args, mask):
             )
             sid_to_convid = {}
             for row in conv_rows:
-                new_id = db.execute(insert_conv_sql, row).scalar()
+                new_id = execute_chat_sql(db, insert_conv_sql, row).scalar()
                 sid_to_convid[row["sid"]] = new_id
 
             # 2) Bu batch'teki tüm mesajları topla, tek executemany ile ekle
@@ -183,7 +187,8 @@ def run_csv_import(args, mask):
                         qlog_rows.append({"created_at": created, "tag": args.tag})
 
             if msg_rows:
-                db.execute(
+                execute_chat_sql(
+                    db,
                     text(
                         "INSERT INTO conversation_messages "
                         "(conversation_id, role, content, source, created_at) "
@@ -192,7 +197,8 @@ def run_csv_import(args, mask):
                     msg_rows,
                 )
             if qlog_rows:
-                db.execute(
+                execute_chat_sql(
+                    db,
                     text(
                         "INSERT INTO query_logs (source, status, ip_address, created_at, import_tag) "
                         "VALUES ('etiya_import', 'success', NULL, :created_at, :tag)"
@@ -274,7 +280,7 @@ def run_xlsx_import(args, mask):
     t0 = time.time()
     print(f"📥 xlsx akış modu (streaming): {args.xlsx}")
 
-    raw_conn = engine.raw_connection()
+    raw_conn = chat_engine.raw_connection()
     cur = raw_conn.cursor()
 
     seen_sessions = set()
@@ -391,7 +397,7 @@ def main():
         delete_tag(args.delete_tag)
         return
 
-    with engine.connect() as conn:
+    with chat_engine.connect() as conn:
         conn.execute(text(_ENSURE_TAG_COLUMN))
         conn.execute(text(_ENSURE_TAG_INDEX))
         conn.execute(text(_ENSURE_QLOG_TAG_COLUMN))

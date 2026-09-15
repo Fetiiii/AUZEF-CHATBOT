@@ -4,7 +4,7 @@ from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 from sqlalchemy import text
-from core.database import SessionLocal
+from core.database import SessionLocal, execute_admin_sql
 from services.providers import (
     ALIAS_ID_OFFSET,
     MAX_ALIASES_PER_QNA,
@@ -54,7 +54,9 @@ def sync_postgres_to_qdrant():
     print("🚀 Vektör senkronizasyonu başlıyor...")
 
     # Yalnızca aktif kayıtlar (status = 1) vektörlenir; pasifler indekse girmez.
-    view_data = db.execute(text("SELECT * FROM qna_search_view WHERE status = 1")).mappings().all()
+    view_data = execute_admin_sql(
+        db, text("SELECT * FROM qna_search_view WHERE status = 1")
+    ).mappings().all()
 
     if not view_data:
         print("ℹ️ Veritabanında işlenecek veri yok.")

@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from sqlalchemy import text
-from core.database import SessionLocal
+from core.database import SessionLocal, execute_admin_sql
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,7 +15,8 @@ def import_real_data(file_path: str):
 
     for _, row in df.iterrows():
         # 1. Ana Soru ve Cevabı Kaydet (QnA)
-        qna_result = db.execute(
+        qna_result = execute_admin_sql(
+            db,
             text("INSERT INTO qna (question_text, answer_text, status) VALUES (:q, :a, 1) RETURNING id"),
             {"q": row['question'], "a": row['answer']}
         ).fetchone()
@@ -25,13 +26,15 @@ def import_real_data(file_path: str):
         if pd.notna(row.get('tags')):
             tag_list = [t.strip() for t in str(row['tags']).split(',')]
             for tag_name in tag_list:
-                tag_id_res = db.execute(
+                tag_id_res = execute_admin_sql(
+                    db,
                     text("INSERT INTO tags (name) VALUES (:n) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id"),
                     {"n": tag_name}
                 ).fetchone()
                 tag_id = tag_id_res[0]
 
-                db.execute(
+                execute_admin_sql(
+                    db,
                     text("INSERT INTO qna_tags (qna_id, tag_id) VALUES (:q_id, :t_id) ON CONFLICT DO NOTHING"),
                     {"q_id": qna_id, "t_id": tag_id}
                 )
@@ -42,7 +45,8 @@ def import_real_data(file_path: str):
             if col_name in df.columns and pd.notna(row[col_name]):
                 query_val = str(row[col_name]).strip()
                 if query_val:
-                    db.execute(
+                    execute_admin_sql(
+                        db,
                         text("INSERT INTO qna_queries (qna_id, query_text) VALUES (:q_id, :qt)"),
                         {"q_id": qna_id, "qt": query_val}
                     )
@@ -64,7 +68,9 @@ def sync_meilisearch(db):
     client = meilisearch.Client(meili_url, meili_key)
 
     # Yalnızca aktif kayıtlar (status = 1) indekslenir; status alanı dokümana taşınmaz.
-    view_data = db.execute(text("SELECT * FROM qna_search_view WHERE status = 1")).mappings().all()
+    view_data = execute_admin_sql(
+        db, text("SELECT * FROM qna_search_view WHERE status = 1")
+    ).mappings().all()
     documents = []
     for row in view_data:
         doc = dict(row)

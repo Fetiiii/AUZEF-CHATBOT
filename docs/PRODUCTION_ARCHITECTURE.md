@@ -271,3 +271,24 @@ baseline was written:
 - Existing deployment guidance in `DEPLOY.md` describes a Docker-based
   production flow. It predates and conflicts with this native-service
   production contract and must be revised during the implementation phase.
+
+
+DB-ADMIN
+────────
+QnA
+QnAQuery
+Tag
+QnATag
+SystemConfig
+AdminUser
+AdminSession
+AdminLoginAttempt
+AcademicCalendar
+
+DB-CHAT
+───────
+Conversation
+ConversationMessage
+QueryLog
+SolutionCenterSession
+SCRateLimit

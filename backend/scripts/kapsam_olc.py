@@ -28,7 +28,7 @@ sys.path.insert(0, "/app")
 
 from sqlalchemy import text
 
-from core.database import QnA, SessionLocal
+from core.database import QnA, SessionLocal, execute_admin_sql, execute_chat_sql
 from routers.qna import remove_from_providers, sync_providers
 
 CHAT_URL = "http://localhost:8000/widget-chat"
@@ -85,7 +85,8 @@ def sor(db, soru: str) -> tuple[str, bool]:
     if message_id is None:
         # Mesaj kaydedilememis (best-effort); son care olarak metne bak.
         return cevap, "bilgim bulunmuyor" not in cevap and "net bir bilgim yok" not in cevap
-    source = db.execute(
+    source = execute_chat_sql(
+        db,
         text("SELECT source FROM conversation_messages WHERE id = :id"), {"id": message_id}
     ).scalar()
     return cevap, source not in (None, "none")
@@ -93,7 +94,8 @@ def sor(db, soru: str) -> tuple[str, bool]:
 
 def main() -> None:
     db = SessionLocal()
-    rows = db.execute(
+    rows = execute_admin_sql(
+        db,
         text(
             "SELECT id, question_text, answer_text FROM qna "
             "WHERE answer_text LIKE :p ORDER BY id"
@@ -144,7 +146,8 @@ def main() -> None:
         db.commit()
         for qna_id, _, _ in kayitlar:
             sync_providers(db, qna_id)
-        geri = db.execute(
+        geri = execute_admin_sql(
+            db,
             text("SELECT count(*) FROM qna WHERE answer_text LIKE :p AND status = 1"),
             {"p": f"%{ISARET}%"},
         ).scalar()

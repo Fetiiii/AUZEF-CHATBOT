@@ -19,7 +19,7 @@ import argparse
 import getpass
 import sys
 
-from core.database import SessionLocal, AdminUser, AdminSession, init_db
+from core.database import SessionLocal, AdminUser, AdminSession, init_admin_db
 from admin.auth import hash_password, VALID_ROLES
 
 
@@ -48,7 +48,7 @@ def main():
     args = parser.parse_args()
 
     email = args.email.strip().lower()
-    init_db()  # tablolar yoksa oluştur (idempotent)
+    init_admin_db()  # yalnız DB-ADMIN tablolarını oluştur (idempotent)
 
     db = SessionLocal()
     try:

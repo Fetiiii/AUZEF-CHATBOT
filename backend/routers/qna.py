@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 
-from core.database import QnA
+from core.database import QnA, execute_admin_sql
 from core.deps import get_db, actor_email as _actor_email, MAX_IMPORT_BYTES, MEILI_PROVIDER, QDRANT_PROVIDER
 from services.csv_utils import stream_csv as _stream_csv
 from admin.auth import current_user
@@ -38,7 +38,8 @@ class QnABulkUpdateItem(BaseModel):
 
 
 def get_qna_view_dict(db: Session, qna_id: int):
-    view_data = db.execute(
+    view_data = execute_admin_sql(
+        db,
         text("SELECT * FROM qna_search_view WHERE id = :id"),
         {"id": qna_id}
     ).mappings().first()
@@ -87,7 +88,8 @@ def sync_providers_batch(db: Session, qna_ids: list):
     Pasif/silinmiş (status != 1) istenen id'ler indekslerden düşülür."""
     if not qna_ids:
         return
-    rows = db.execute(
+    rows = execute_admin_sql(
+        db,
         text("SELECT * FROM qna_search_view WHERE id = ANY(:ids)"),
         {"ids": list(qna_ids)},
     ).mappings().all()
@@ -264,7 +266,8 @@ def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db), me=D
         if not question or not answer:
             continue
 
-        result = db.execute(
+        result = execute_admin_sql(
+            db,
             text("INSERT INTO qna (question_text, answer_text, status, updated_by) VALUES (:q, :a, 1, :by) RETURNING id"),
             {"q": question, "a": answer, "by": actor}
         ).fetchone()
@@ -274,11 +277,13 @@ def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db), me=D
         tags_val = row.get('tags') or ''
         if tags_val and tags_val.strip():
             for tag_name in [t.strip() for t in tags_val.split(',') if t.strip()]:
-                tag_res = db.execute(
+                tag_res = execute_admin_sql(
+                    db,
                     text("INSERT INTO tags (name) VALUES (:n) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id"),
                     {"n": tag_name}
                 ).fetchone()
-                db.execute(
+                execute_admin_sql(
+                    db,
                     text("INSERT INTO qna_tags (qna_id, tag_id) VALUES (:q_id, :t_id) ON CONFLICT DO NOTHING"),
                     {"q_id": qna_id, "t_id": tag_res[0]}
                 )
@@ -286,7 +291,8 @@ def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db), me=D
         for i in range(1, 21):
             query_val = (row.get(f'query_{i}') or '').strip()
             if query_val:
-                db.execute(
+                execute_admin_sql(
+                    db,
                     text("INSERT INTO qna_queries (qna_id, query_text) VALUES (:q_id, :qt)"),
                     {"q_id": qna_id, "qt": query_val}
                 )

@@ -38,7 +38,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from core.database import SessionLocal, utcnow
+from core.database import SessionLocal, execute_admin_sql, utcnow
 
 logger = logging.getLogger("auzef")
 
@@ -113,7 +113,7 @@ def _window_minutes() -> int:
 
 
 def _current_count(db: Session, scope: str, identifier: str, window_min: int) -> int:
-    row = db.execute(_CURRENT_SQL, {
+    row = execute_admin_sql(db, _CURRENT_SQL, {
         "scope": scope,
         "identifier": identifier,
         "window_floor": utcnow() - timedelta(minutes=window_min),
@@ -123,7 +123,7 @@ def _current_count(db: Session, scope: str, identifier: str, window_min: int) ->
 
 def _consume(db: Session, scope: str, identifier: str, window_min: int) -> int:
     now = utcnow()
-    return db.execute(_CONSUME_SQL, {
+    return execute_admin_sql(db, _CONSUME_SQL, {
         "scope": scope,
         "identifier": identifier,
         "now": now,
@@ -168,7 +168,7 @@ def _cleanup() -> None:
     """
     db = SessionLocal()
     try:
-        db.execute(_CLEANUP_SQL, {"cutoff": _cleanup_cutoff()})
+        execute_admin_sql(db, _CLEANUP_SQL, {"cutoff": _cleanup_cutoff()})
         db.commit()
     except Exception as exc:
         # exc_info=True: hata yutulduğu için istek normal devam ediyor; geriye
@@ -240,7 +240,7 @@ def register_failure(db: Session, email: str, ip: Optional[str]) -> bool:
 
 def reset(db: Session, email: str, ip: Optional[str]) -> None:
     """Başarılı girişte iki kapsamın sayaçlarını temizler."""
-    db.execute(_RESET_SQL, {"scope": SCOPE_EMAIL, "identifier": email})
+    execute_admin_sql(db, _RESET_SQL, {"scope": SCOPE_EMAIL, "identifier": email})
     if ip:
-        db.execute(_RESET_SQL, {"scope": SCOPE_IP, "identifier": ip})
+        execute_admin_sql(db, _RESET_SQL, {"scope": SCOPE_IP, "identifier": ip})
     db.commit()

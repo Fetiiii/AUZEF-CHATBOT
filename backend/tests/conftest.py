@@ -1,7 +1,8 @@
 """Test altyapısı.
 
 Gereksinim: Docker (testler kendi throwaway Postgres 15 container'ını açar)
-YA DA hazır bir test veritabanına işaret eden TEST_DATABASE_URL env değişkeni.
+YA DA hazır test veritabanlarına işaret eden TEST_DATABASE_URL ve opsiyonel
+TEST_ADMIN_DATABASE_URL / TEST_CHAT_DATABASE_URL env değişkenleri.
 
 Çalıştırma (Windows / conda):
     PYTHONUTF8=1 python -m pytest tests/ -v
@@ -23,6 +24,9 @@ import pytest
 
 _PG_CONTAINER = "auzef_pytest_pg"
 _PG_PORT = "55440"
+_ADMIN_DB = "auzef_admin_test"
+_CHAT_DB = "auzef_chat_test"
+_COMPAT_DB = "auzef_compat_test"
 
 # ── Test kimlik bilgileri ────────────────────────────────────────────────────
 # BUNLAR SIR DEĞİLDİR. Her test turunda sıfırdan kurulan throwaway Postgres'te
@@ -41,35 +45,63 @@ TEST_PASSWORD_WRONG = "pytest-fixture-wrong-value"
 TEST_PASSWORD_ALT = "pytest-fixture-alternate-value"
 
 
-def _start_throwaway_postgres() -> str:
+def _start_throwaway_postgres() -> tuple[str, str, str]:
     subprocess.run(["docker", "rm", "-f", _PG_CONTAINER],
                    capture_output=True, check=False)
     subprocess.run([
         "docker", "run", "--rm", "-d", "--name", _PG_CONTAINER,
         "-e", "POSTGRES_USER=admin", "-e", "POSTGRES_PASSWORD=test",
-        "-e", "POSTGRES_DB=auzef_test", "-p", f"{_PG_PORT}:5432",
+        "-e", "POSTGRES_DB=postgres", "-p", f"{_PG_PORT}:5432",
         "postgres:15",
     ], check=True, capture_output=True)
     atexit.register(lambda: subprocess.run(
         ["docker", "rm", "-f", _PG_CONTAINER], capture_output=True, check=False))
     for _ in range(60):
         ok = subprocess.run(
-            ["docker", "exec", _PG_CONTAINER, "pg_isready", "-U", "admin", "-d", "auzef_test"],
+            ["docker", "exec", _PG_CONTAINER, "pg_isready", "-U", "admin", "-d", "postgres"],
             capture_output=True, check=False)
         if ok.returncode == 0:
             break
         time.sleep(1)
     else:
         raise RuntimeError("Test Postgres'i ayağa kalkmadı")
-    return f"postgresql://admin:test@localhost:{_PG_PORT}/auzef_test"
+    for database_name in (_ADMIN_DB, _CHAT_DB, _COMPAT_DB):
+        subprocess.run(
+            ["docker", "exec", _PG_CONTAINER, "createdb", "-U", "admin", database_name],
+            check=True,
+            capture_output=True,
+        )
+    prefix = f"postgresql://admin:test@localhost:{_PG_PORT}"
+    return (
+        f"{prefix}/{_ADMIN_DB}",
+        f"{prefix}/{_CHAT_DB}",
+        f"{prefix}/{_COMPAT_DB}",
+    )
 
 
 def pytest_configure(config):
-    # 1) Ortam: test DB'si + auth ayarları (main import edilmeden önce!)
+    # 1) Ortam: test DB'leri + auth ayarları (main import edilmeden önce!)
     db_url = os.getenv("TEST_DATABASE_URL")
-    if not db_url:
-        db_url = _start_throwaway_postgres()
-    os.environ["DATABASE_URL"] = db_url
+    admin_url = os.getenv("TEST_ADMIN_DATABASE_URL")
+    chat_url = os.getenv("TEST_CHAT_DATABASE_URL")
+    if bool(admin_url) != bool(chat_url):
+        raise RuntimeError(
+            "TEST_ADMIN_DATABASE_URL ve TEST_CHAT_DATABASE_URL birlikte tanımlanmalıdır"
+        )
+
+    if not db_url and not admin_url:
+        admin_url, chat_url, db_url = _start_throwaway_postgres()
+        # Ayrı subprocess acceptance testi compatibility DB'sini kullanır.
+        os.environ["TEST_COMPAT_DATABASE_URL"] = db_url
+
+    os.environ["DATABASE_URL"] = db_url or admin_url
+    if admin_url and chat_url:
+        os.environ["ADMIN_DATABASE_URL"] = admin_url
+        os.environ["CHAT_DATABASE_URL"] = chat_url
+    else:
+        # Yalnız TEST_DATABASE_URL verildiğinde gerçek fallback yolu sınanır.
+        os.environ.pop("ADMIN_DATABASE_URL", None)
+        os.environ.pop("CHAT_DATABASE_URL", None)
     os.environ["ADMIN_AUTH_ENFORCED"] = "true"
     os.environ["ADMIN_COOKIE_SECURE"] = "false"
     os.environ.pop("LLM_PROVIDER", None)  # LLM yolu kapalı: eşik yedeği test edilir
@@ -128,21 +160,19 @@ def db():
 @pytest.fixture(autouse=True)
 def clean_tables():
     """Her test temiz tablolarla başlar (id sayaçları dahil)."""
-    from core.database import engine
+    from core.database import ADMIN_TABLES, CHAT_TABLES, admin_engine, chat_engine
     from sqlalchemy import text
-    with engine.connect() as conn:
-        # sc_rate_limits, admin_login_attempts: hız sınırı sayaçları. Listede
-        # olmazlarsa bir test diğerinin sayacını devralır ve testler SIRAYA
-        # BAĞLI olarak patlar. academic_calendar: takvim kayıtları da
-        # testler arasında sızıyordu.
-        conn.execute(text("""
-            TRUNCATE admin_sessions, admin_users, conversation_messages,
-                     conversations, query_logs, system_config,
-                     qna_queries, qna_tags, tags, qna,
-                     sc_rate_limits, academic_calendar, admin_login_attempts
-            RESTART IDENTITY CASCADE
-        """))
-        conn.commit()
+
+    def truncate(engine, tables):
+        names = ", ".join(table.name for table in tables)
+        with engine.begin() as conn:
+            conn.execute(text(f"TRUNCATE {names} RESTART IDENTITY CASCADE"))
+
+    if admin_engine is chat_engine:
+        truncate(admin_engine, (*ADMIN_TABLES, *CHAT_TABLES))
+    else:
+        truncate(admin_engine, ADMIN_TABLES)
+        truncate(chat_engine, CHAT_TABLES)
     # Sahte arama sonuçlarını + çağrı sayaçlarını sıfırla
     import services.providers as providers
     providers.FakeMeili.hits = []

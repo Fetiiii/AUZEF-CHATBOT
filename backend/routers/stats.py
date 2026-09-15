@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from core.database import Conversation, utcnow
+from core.database import Conversation, execute_chat_sql, utcnow
 from core.deps import get_db
 
 router = APIRouter()
@@ -31,7 +31,7 @@ def _build_hourly(db: Session, day: date_cls | None) -> list[dict]:
     """
     if day is None:
         # Kayan son 24 saat — generate_series NOW üzerinden İstanbul saatinde
-        rows = db.execute(text("""
+        rows = execute_chat_sql(db, text("""
             SELECT
                 to_char(gs.hour, 'HH24:00') AS label,
                 COALESCE(COUNT(ql.id), 0)::int AS count
@@ -53,7 +53,7 @@ def _build_hourly(db: Session, day: date_cls | None) -> list[dict]:
         # regex'i, isimden hemen sonra `::` geldiğinde parametreyi tanımıyor ve
         # ":param" harfiyen (substitue edilmeden) SQL'e sızıyor → Postgres "syntax
         # error at or near ':'" veriyor. CAST(:param AS type) kullan.
-        rows = db.execute(text("""
+        rows = execute_chat_sql(db, text("""
             SELECT
                 to_char(gs.hour, 'HH24:00') AS label,
                 COALESCE(COUNT(ql.id), 0)::int AS count
@@ -85,7 +85,7 @@ def _build_hourly(db: Session, day: date_cls | None) -> list[dict]:
 
 def _build_daily(db: Session, start: date_cls, end: date_cls, monthly: bool) -> list[dict]:
     """start–end (dahil) arası GÜNLÜK sorgu dağılımı (haftalık/aylık için)."""
-    rows = db.execute(text("""
+    rows = execute_chat_sql(db, text("""
         SELECT
             gs.day::date AS day,
             COALESCE(COUNT(ql.id), 0)::int AS count
@@ -156,12 +156,14 @@ def get_stats(mode: str = "hourly", date: str = "", db: Session = Depends(get_db
     # IP kullanılamaz: tüm trafik nginx proxy'sinin IP'siyle geldiği için (172.18.0.7)
     # her kullanıcı tek IP'ye çöker. conversation_id her oturuma özel olduğundan
     # proxy arkasında bile kullanıcıları doğru ayrıştırır.
-    active_users = db.execute(
+    active_users = execute_chat_sql(
+        db,
         text("SELECT COUNT(DISTINCT conversation_id)::int FROM conversation_messages WHERE created_at >= :since"),
         {"since": five_min_ago}
     ).scalar() or 0
 
-    total_today = db.execute(
+    total_today = execute_chat_sql(
+        db,
         text("SELECT COUNT(*)::int FROM query_logs WHERE created_at >= :today"),
         {"today": today_start_utc}
     ).scalar() or 0
@@ -187,7 +189,8 @@ def get_stats(mode: str = "hourly", date: str = "", db: Session = Depends(get_db
         traffic = _build_hourly(db, day)
         period_label = date if date else "Son 24 saat"
 
-    source_rows = db.execute(
+    source_rows = execute_chat_sql(
+        db,
         text("""
             SELECT source, COUNT(*)::int AS cnt
             FROM query_logs
@@ -249,7 +252,7 @@ def get_conversation_stats(start: str = "", end: str = "", db: Session = Depends
     # 1) Toplam + talep dağılımı (tek sorgu)
     talep = {"redirected": 0, "declined": 0, "not_offered": 0}
     total = 0
-    for row in db.execute(text(f"""
+    for row in execute_chat_sql(db, text(f"""
         SELECT c.talep_status, COUNT(*)::int AS cnt
         FROM conversations c
         WHERE TRUE{where}
@@ -261,7 +264,7 @@ def get_conversation_stats(start: str = "", end: str = "", db: Session = Depends
 
     # 2) Puan dağılımı (her puanlı cevap sayılır)
     rating_distribution = {str(i): 0 for i in range(1, 6)}
-    for row in db.execute(text(f"""
+    for row in execute_chat_sql(db, text(f"""
         SELECT cm.rating, COUNT(*)::int AS cnt
         FROM conversation_messages cm
         JOIN conversations c ON c.id = cm.conversation_id
@@ -271,7 +274,7 @@ def get_conversation_stats(start: str = "", end: str = "", db: Session = Depends
         rating_distribution[str(row.rating)] = row.cnt
 
     # 3) Sonuç: her konuşmanın SON puanı (DISTINCT ON + DESC = en son yazılan)
-    outcome_row = db.execute(text(f"""
+    outcome_row = execute_chat_sql(db, text(f"""
         SELECT
             COUNT(*) FILTER (WHERE last_rating >= 4)::int AS olumlu,
             COUNT(*) FILTER (WHERE last_rating <= 3)::int AS olumsuz,

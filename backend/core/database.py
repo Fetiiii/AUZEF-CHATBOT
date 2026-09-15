@@ -1,8 +1,8 @@
 import os
 from datetime import datetime, timezone
-from sqlalchemy import Column, BigInteger, Integer, Text, SmallInteger, DateTime, ForeignKey, String, func
+from sqlalchemy import Column, BigInteger, Integer, Text, SmallInteger, DateTime, ForeignKey, String, func, text
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import Session, sessionmaker, relationship
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
@@ -15,12 +15,39 @@ def utcnow() -> datetime:
     Python'da deprecated olduğu için merkezî yardımcı: aware üret, tz'i düşür."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:password123@localhost:5432/auzef_bot")
+DEFAULT_DATABASE_URL = "postgresql://admin:password123@localhost:5432/auzef_bot"
 
-# pool_pre_ping: havuzdaki bağlantı kopmuşsa (ör. Postgres yeniden başladı)
-# sorgudan önce test edilip tazelenir — yoksa ilk istekler OperationalError alır.
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=1800)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def resolve_database_urls(environ=None) -> tuple[str, str, str]:
+    """DATABASE_URL ile admin/chat fallback sözleşmesini tek yerde uygula."""
+    source = os.environ if environ is None else environ
+    database_url = source.get("DATABASE_URL") or DEFAULT_DATABASE_URL
+    admin_database_url = source.get("ADMIN_DATABASE_URL") or database_url
+    chat_database_url = source.get("CHAT_DATABASE_URL") or database_url
+    return database_url, admin_database_url, chat_database_url
+
+
+DATABASE_URL, ADMIN_DATABASE_URL, CHAT_DATABASE_URL = resolve_database_urls()
+# Production iki fiziksel PostgreSQL kullanır. Development yalnız DATABASE_URL
+# verdiğinde iki sahiplik alanı da aynı engine'e düşer; mevcut Compose akışı bu
+# sayede ikinci bir PostgreSQL gerektirmez.
+
+
+def _create_database_engine(url: str):
+    # pool_pre_ping: havuzdaki bağlantı kopmuşsa (ör. Postgres yeniden başladı)
+    # sorgudan önce test edilip tazelenir — yoksa ilk istekler OperationalError alır.
+    return create_engine(url, pool_pre_ping=True, pool_recycle=1800)
+
+
+admin_engine = _create_database_engine(ADMIN_DATABASE_URL)
+# Compatibility modunda tek engine/pool kullan. Ayrı URL'lerde ise transaction
+# sınırları da fiziksel olarak ayrıdır; Session commit'i distributed/atomic bir
+# transaction garantisi vermez ve two-phase commit bilinçli olarak kapalıdır.
+chat_engine = (
+    admin_engine
+    if CHAT_DATABASE_URL == ADMIN_DATABASE_URL
+    else _create_database_engine(CHAT_DATABASE_URL)
+)
 Base = declarative_base()
 
 class QnA(Base):
@@ -224,15 +251,62 @@ class AcademicCalendar(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-# Veritabanı tablolarını oluştur
-def init_db():
-    Base.metadata.create_all(bind=engine)
+ADMIN_MODELS = (
+    QnA,
+    QnAQuery,
+    Tag,
+    QnATag,
+    SystemConfig,
+    AdminUser,
+    AdminSession,
+    AdminLoginAttempt,
+    AcademicCalendar,
+)
 
-    # View oluşturma SQL'i (PostgreSQL specific)
-    # NOT: status sütunu eklendi (pasif kayıtların indekslerden düşülmesi için).
-    # CREATE OR REPLACE VIEW mevcut sütunların yerini değiştiremediğinden
-    # önce DROP edilir (boot sırasında, uvicorn başlamadan çalışır — güvenli).
-    view_sql = """
+CHAT_MODELS = (
+    QueryLog,
+    Conversation,
+    ConversationMessage,
+    SolutionCenterSession,
+    SCRateLimit,
+)
+
+# Açık ve denetlenebilir model -> engine sözleşmesi. Varsayılan Session bind'i
+# özellikle YOKTUR: ORM işlemi modelden yönlenemiyorsa veya raw SQL hedef engine
+# belirtmiyorsa sessizce yanlış veritabanına gitmek yerine hata vermelidir.
+MODEL_BINDS = {
+    **{model: admin_engine for model in ADMIN_MODELS},
+    **{model: chat_engine for model in CHAT_MODELS},
+}
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    binds=MODEL_BINDS,
+)
+
+ADMIN_TABLES = tuple(model.__table__ for model in ADMIN_MODELS)
+CHAT_TABLES = tuple(model.__table__ for model in CHAT_MODELS)
+
+
+def execute_admin_sql(db: Session, statement, params=None):
+    """Ham SQL'i açıkça DB-ADMIN transaction'ına bağla."""
+    return db.execute(
+        statement,
+        params,
+        bind_arguments={"bind": admin_engine},
+    )
+
+
+def execute_chat_sql(db: Session, statement, params=None):
+    """Ham SQL'i açıkça DB-CHAT transaction'ına bağla."""
+    return db.execute(
+        statement,
+        params,
+        bind_arguments={"bind": chat_engine},
+    )
+
+
+QNA_SEARCH_VIEW_SQL = """
     CREATE OR REPLACE VIEW qna_search_view AS
     SELECT
         q.id,
@@ -246,61 +320,64 @@ def init_db():
     LEFT JOIN qna_tags qt ON qt.qna_id = q.id
     LEFT JOIN tags t ON t.id = qt.tag_id
     GROUP BY q.id;
-    """
+"""
 
-    # Var olan (create_all'un dokunmadığı) tablolara da index'leri uygula.
-    # Alembic olmadığı için "IF NOT EXISTS" ile her boot'ta idempotent çalışır.
-    # İsimler SQLAlchemy'nin index=True adlandırmasıyla (ix_<tablo>_<sütun>)
-    # aynı tutuldu ki taze kurulumda çift index oluşmasın.
-    index_sql = [
-        "CREATE INDEX IF NOT EXISTS ix_conversations_started_at ON conversations (started_at)",
-        "CREATE INDEX IF NOT EXISTS ix_conversation_messages_created_at ON conversation_messages (created_at)",
-        # Rol sistemi migration'ı: kolon create_all ile YENİ kurulumlarda gelir,
-        # var olan tabloya boot'ta eklenir. Mevcut kullanıcılar 'admin' olur
-        # (bugüne kadar sahip olmadıkları TEK şey yeni ayarlar sayfasıdır);
-        # ilk super_admin CLI ile atanır: create_admin.py <email> --role super_admin
-        "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'admin'",
-        # Konuşma sahiplik token'ı (S5): eski satırlar NULL kalır → onlara
-        # yazma fail-closed reddedilir (tarihsel veri okunabilir, değiştirilemez).
-        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS client_token VARCHAR(64)",
-        "CREATE INDEX IF NOT EXISTS ix_conversations_client_token ON conversations (client_token)",
-        # qna.status: ham INSERT (CSV import) için DB default'u ata ve eski
-        # NULL kalmış (bu yüzden aranamaz olmuş) kayıtları aktife çek.
-        "ALTER TABLE qna ALTER COLUMN status SET DEFAULT 1",
-        "UPDATE qna SET status = 1 WHERE status IS NULL",
-        # Denetim izi: son düzenleyen kullanıcı (yanlış cevap üretildiğinde
-        # "kim/ne zaman değiştirdi" sorusunun cevabı).
-        "ALTER TABLE qna ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
-        "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
-        # Konuşma arama performansı: /api/conversations?search=... içerik
-        # araması ILIKE '%terim%' ile conversation_messages.content'i tarıyor
-        # (bkz. routers/conversations.py _apply_conversation_search). content
-        # üzerinde index yoktu → 505K satırda seq scan ~115ms. Trigram GIN
-        # index bunu ~1ms'e indiriyor (ölçüldü); WHERE role='user' partial
-        # index yapıyor çünkü arama zaten yalnızca kullanıcı mesajlarında.
-        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
-        "CREATE INDEX IF NOT EXISTS ix_conversation_messages_content_trgm "
-        "ON conversation_messages USING gin (content gin_trgm_ops) WHERE role = 'user'",
-        # /api/stats/conversations: rating dağılımı + son puan sorguları
-        # rating'e göre filtreliyor (bkz. routers/stats.py). rating'i NULL
-        # olmayan satırlar toplamın küçük bir kısmı olduğundan (yalnızca
-        # gerçekten puanlanan cevaplar) kısmi index çok küçük kalır ama
-        # 6.4M satırlık tam taramayı (~1.5sn, ölçüldü) index-only scan'e indirir.
-        "CREATE INDEX IF NOT EXISTS ix_conversation_messages_rating "
-        "ON conversation_messages (rating) WHERE rating IS NOT NULL",
-        # OTP deneme sayacı (P0-2): MEVCUT tabloya kolon eklendiği için
-        # create_all yetmez — admin_users.role satırıyla aynı kalıp.
-        # Eski satırlar DEFAULT 0 ile gelir (kimse kilitli başlamaz).
-        "ALTER TABLE solution_center_sessions "
-        "ADD COLUMN IF NOT EXISTS otp_attempts INTEGER NOT NULL DEFAULT 0",
-    ]
+# Var olan (create_all'un dokunmadığı) tablolara da DDL uygula. Alembic henüz
+# kullanılmadığı için ifadeler mevcut entrypoint davranışıyla uyumlu ve
+# idempotent tutulur. Her liste yalnız kendi DB ownership alanındaki tablolara
+# referans verir.
+ADMIN_DDL = (
+    # Rol sistemi migration'ı: mevcut kullanıcılar varsayılan admin olur.
+    "ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'admin'",
+    # qna.status ham INSERT'lerde de aktif varsayılsın; eski NULL'lar düzeltilir.
+    "ALTER TABLE qna ALTER COLUMN status SET DEFAULT 1",
+    "UPDATE qna SET status = 1 WHERE status IS NULL",
+    # İçerik değişikliklerinin denetim izi.
+    "ALTER TABLE qna ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
+    "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
+)
 
-    with engine.connect() as conn:
-        from sqlalchemy import text
+CHAT_DDL = (
+    "CREATE INDEX IF NOT EXISTS ix_conversations_started_at ON conversations (started_at)",
+    "CREATE INDEX IF NOT EXISTS ix_conversation_messages_created_at ON conversation_messages (created_at)",
+    # Konuşma sahiplik token'ı: eski satırlar NULL kalır ve fail-closed davranır.
+    "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS client_token VARCHAR(64)",
+    "CREATE INDEX IF NOT EXISTS ix_conversations_client_token ON conversations (client_token)",
+    # Konuşma araması için PostgreSQL trigram uzantısı ve kısmi GIN index'i.
+    "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+    "CREATE INDEX IF NOT EXISTS ix_conversation_messages_content_trgm "
+    "ON conversation_messages USING gin (content gin_trgm_ops) WHERE role = 'user'",
+    # Puan istatistiklerinin yalnız puanlanmış mesajları taraması için kısmi index.
+    "CREATE INDEX IF NOT EXISTS ix_conversation_messages_rating "
+    "ON conversation_messages (rating) WHERE rating IS NOT NULL",
+    # Çözüm Merkezi OTP deneme sayacı: mevcut tabloya idempotent eklenir.
+    "ALTER TABLE solution_center_sessions "
+    "ADD COLUMN IF NOT EXISTS otp_attempts INTEGER NOT NULL DEFAULT 0",
+)
+
+
+def init_admin_db():
+    """Yalnız DB-ADMIN tablolarını, view'ını ve DDL'ini hazırla."""
+    Base.metadata.create_all(bind=admin_engine, tables=ADMIN_TABLES)
+    with admin_engine.begin() as conn:
+        for statement in ADMIN_DDL:
+            conn.execute(text(statement))
+        # CREATE OR REPLACE VIEW mevcut kolon sırasını değiştiremediğinden önce
+        # DROP edilir; qna_search_view yalnız DB-ADMIN üzerinde yaşar.
         conn.execute(text("DROP VIEW IF EXISTS qna_search_view"))
-        conn.execute(text(view_sql))
-        for stmt in index_sql:
-            conn.execute(text(stmt))
-        conn.commit()
-        print("✅ Veritabanı tabloları, index'ler ve 'qna_search_view' oluşturuldu.")
-   
+        conn.execute(text(QNA_SEARCH_VIEW_SQL))
+
+
+def init_chat_db():
+    """Yalnız DB-CHAT tablolarını ve DDL/index işlemlerini hazırla."""
+    Base.metadata.create_all(bind=chat_engine, tables=CHAT_TABLES)
+    with chat_engine.begin() as conn:
+        for statement in CHAT_DDL:
+            conn.execute(text(statement))
+
+
+def init_db():
+    """Admin ve chat persistence alanlarını yapılandırılmış engine'lerde kur."""
+    init_admin_db()
+    init_chat_db()
+    print("✅ Veritabanı tabloları, index'ler ve 'qna_search_view' oluşturuldu.")

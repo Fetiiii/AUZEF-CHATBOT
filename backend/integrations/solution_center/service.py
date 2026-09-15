@@ -18,7 +18,11 @@ from typing import Any, List, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from core.database import SolutionCenterSession as SCSessionRow, utcnow
+from core.database import (
+    SolutionCenterSession as SCSessionRow,
+    execute_chat_sql,
+    utcnow,
+)
 
 from . import mapper
 from .base_client import SolutionCenterConfig
@@ -177,7 +181,8 @@ class SolutionCenterService:
         ait bu denemeyi YENİ token'ın sayacına yazardı; meşru kullanıcı yeni kod
         aldıktan sonra hakkını eksik bulurdu. Token değişmişse None döner ve
         deneme sayılmaz."""
-        new_value = self._db.execute(
+        new_value = execute_chat_sql(
+            self._db,
             text(
                 "UPDATE solution_center_sessions SET otp_attempts = otp_attempts + 1 "
                 "WHERE conversation_id = :cid AND verification_token = :token "
@@ -199,7 +204,8 @@ class SolutionCenterService:
         okunduğu için bayat olabilir. Koşulsuz yazmak, araya giren yeni SMS'in
         TAZE token'ını silip meşru kullanıcının oturumunu iptal ederdi — yani
         kilit, korumayı hedeflediği kullanıcıyı cezalandırırdı."""
-        self._db.execute(
+        execute_chat_sql(
+            self._db,
             text(
                 "UPDATE solution_center_sessions SET "
                 "verification_token = NULL, state = :state, students_json = NULL, "
@@ -223,7 +229,8 @@ class SolutionCenterService:
 
         Best-effort: iadenin kendisi hata verirse asıl hatayı maskelememeli."""
         try:
-            self._db.execute(
+            execute_chat_sql(
+                self._db,
                 text(
                     "UPDATE solution_center_sessions "
                     "SET otp_attempts = GREATEST(otp_attempts - 1, 0) "
@@ -319,7 +326,8 @@ class SolutionCenterService:
 
         # otp_attempts sıfırlanır: state SC_WAIT_STUDENT_SELECTION'a düşerse
         # bu uca tekrar gelinebiliyor, bayat bir sayaç taşınmamalı.
-        updated = self._db.execute(
+        updated = execute_chat_sql(
+            self._db,
             text(
                 "UPDATE solution_center_sessions SET "
                 "otp_attempts = 0, students_json = :students, "

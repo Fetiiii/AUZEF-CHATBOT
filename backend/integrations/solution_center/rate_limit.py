@@ -37,7 +37,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from core.database import SessionLocal, utcnow
+from core.database import SessionLocal, execute_chat_sql, utcnow
 
 from .base_client import SolutionCenterConfig
 from .constants import SMS_COUNTER_RETENTION_HOURS
@@ -111,7 +111,7 @@ class SmsRateLimiter:
         if limit <= 0:
             return True
         now = utcnow()
-        count = db.execute(_CONSUME_SQL, {
+        count = execute_chat_sql(db, _CONSUME_SQL, {
             "scope": scope,
             "key_hash": self._key(raw_key),
             "now": now,
@@ -166,7 +166,7 @@ class SmsRateLimiter:
         """
         db = SessionLocal()
         try:
-            db.execute(_CLEANUP_SQL, {"cutoff": self._cleanup_cutoff()})
+            execute_chat_sql(db, _CLEANUP_SQL, {"cutoff": self._cleanup_cutoff()})
             db.commit()
         except Exception as exc:
             # exc_info=True: hata yutulduğu için istek normal devam ediyor —
