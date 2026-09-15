@@ -97,12 +97,18 @@ istemci IP sözleşmesi için [Nginx notlarına](app/nginx/README.md) bakın.
 
 `backend/requirements.txt` insan tarafından yönetilen direct dependency
 listesidir. `backend/requirements.lock` ise production kurulumu için tüm
-transitive graph'ı exact `package==version` satırlarıyla sabitler.
+transitive graph'ı exact `package==version` satırlarıyla sabitler. Production
+dependency target'ı kesin olarak Python 3.11, Linux ve CPU-only APP
+runtime'dır. Development makinelerinde veya container'larda GPU kullanılması
+bu production sözleşmesini değiştirmez.
 
-Mevcut lock baseline'ı, full backend test suite'inin geçtiği mevcut Linux
-backend container'ından alınmıştır: Python `3.11.16`, 108 exact paket. Bu,
-test edilmiş mevcut environment'ın snapshot'ıdır; yeni bir dependency
-resolution değildir.
+Mevcut CPU lock baseline'ı, full backend test suite'inin geçtiği Python
+`3.11.16` Linux backend snapshot'ındaki sürümleri korur. Yalnız
+`torch==2.14.0`, PyTorch'un resmi CPU wheel indeksindeki
+`torch==2.14.0+cpu` distribution'ıyla değiştirilmiş; CUDA/NVIDIA runtime
+paketleri ve GPU derleyici runtime'ı graph'tan çıkarılmıştır. Sonuç 89
+exact pakettir. Lock içindeki resmi CPU index direktifi, production
+kurulumunda yanlış GPU distribution'ının seçilmesini önler.
 
 Lock bilinçli bir dependency update sırasında şu build/development aracıyla
 yenilenir:
@@ -111,12 +117,19 @@ yenilenir:
 ./deploy/production/build/refresh-backend-lock.sh
 ```
 
-Refresh aracı mevcut `backend/Dockerfile` sözleşmesini kullanarak temiz Python
-3.11 Linux image oluşturur, unpinned direct listeden graph'ı yeniden çözer ve
-`pip freeze` sonucunu lock'a yazar. Bu nedenle refresh sonucu otomatik olarak
-"validated" sayılmaz: diff incelenmeli, uyumluluk riskleri değerlendirilmeli ve
-full backend suite geçmeden commit edilmemelidir. Release builder lock'u asla
-yenilemez; yalnız committed lock'u tüketir.
+Refresh aracı build-only `python:3.11-slim` image içinde, GPU device vermeden
+önce mevcut torch sürümünü PyTorch resmi CPU indeksinden kurar; sonra unpinned
+direct listeden graph'ı yeniden çözer. Oluşan aday lock ikinci bir temiz
+image'da production komutu olan `pip install --no-deps` ile yeniden kurulur;
+`pip check`, `sentence_transformers`/`torch` import'u ve
+`torch.cuda.is_available() is False` geçmeden mevcut lock değiştirilmez.
+
+Development environment snapshot'ı GPU paketleri içerebilir ve production
+baseline kaynağı değildir. Refresh bilinçli bir dependency update işlemidir:
+sonucu otomatik olarak "validated" sayılmaz; diff incelenmeli, uyumluluk
+riskleri değerlendirilmeli ve full backend suite geçmeden commit edilmemelidir.
+Release builder lock'u asla yenilemez; yalnız committed lock'u tüketir ve
+`cuda-*`, `nvidia-*` veya `triton` package görürse build'i reddeder.
 
 ## Release artifact build
 
@@ -181,11 +194,14 @@ python3.11 -m venv <release>/.venv
 ```
 
 Lock transitive graph'ın tamamını içerdiğinden production'da version resolution
-yapılmaz. Paketlerin PyPI, internet veya bir kurum kaynağından nasıl
+yapılmaz. Lock'un `--extra-index-url https://download.pytorch.org/whl/cpu`
+direktifi torch'un aynı sürümdeki resmi CPU distribution'ını seçer. Paketlerin
+PyPI, internet veya bir kurum kaynağından nasıl
 taşınacağı bu aşamada varsayılmamıştır. VM internet erişimi yoksa sonraki
 adımda wheelhouse veya internal package mirror sözleşmesi eklenecektir;
 mevcut artifact wheelhouse içermez.
 
+SentenceTransformer embedding inference'ı APP VM'lerde CPU ile çalışır.
 Embedding model cache'i `/var/cache/auzef/huggingface` altında release'lerden
 bağımsız persistent state olarak kalır. Model weights artifact'a gömülmez.
 Preload/offline stratejisi VM internet erişimi kesinleştiğinde ele alınacaktır.

@@ -21,6 +21,7 @@ dist/
 build/
 !deploy/production/build/
 !deploy/production/build/*.sh
+!deploy/production/build/*.Dockerfile
 !deploy/production/build/tests/
 !deploy/production/build/tests/*.py
 *.egg

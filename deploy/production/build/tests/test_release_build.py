@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 BUILD_DIR = REPO_ROOT / "deploy" / "production" / "build"
 LOCK_FILE = REPO_ROOT / "backend" / "requirements.lock"
 DIRECT_REQUIREMENTS = REPO_ROOT / "backend" / "requirements.txt"
+CPU_INDEX_DIRECTIVE = "--extra-index-url https://download.pytorch.org/whl/cpu"
 
 
 def _normalized_package_name(value: str) -> str:
@@ -39,6 +40,9 @@ def _lock_entries(path: Path) -> dict[str, str]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
+        if line.startswith("--"):
+            assert line == CPU_INDEX_DIRECTIVE
+            continue
         assert exact_line.fullmatch(line), f"exact pin olmayan lock satırı: {line}"
         package, version = line.split("==", 1)
         normalized = _normalized_package_name(package)
@@ -54,14 +58,20 @@ def _file_digest(path: Path) -> str:
 def test_lock_is_exact_and_contains_every_direct_requirement():
     direct = _requirement_names(DIRECT_REQUIREMENTS)
     locked = _lock_entries(LOCK_FILE)
+    lock_lines = LOCK_FILE.read_text(encoding="utf-8").splitlines()
 
+    assert lock_lines.count(CPU_INDEX_DIRECTIVE) == 1
     assert direct <= locked.keys()
     assert len(locked) > len(direct)
+    assert locked["torch"] == "2.14.0+cpu"
+    assert not any(name.startswith(("cuda-", "nvidia-")) for name in locked)
+    assert "triton" not in locked
 
 
 def test_build_scripts_have_valid_shell_and_expected_lifecycle():
     release_script = BUILD_DIR / "build-release.sh"
     refresh_script = BUILD_DIR / "refresh-backend-lock.sh"
+    lock_dockerfile = BUILD_DIR / "backend-lock.Dockerfile"
 
     for script in (release_script, refresh_script):
         result = subprocess.run(
@@ -71,6 +81,7 @@ def test_build_scripts_have_valid_shell_and_expected_lifecycle():
 
     release_text = release_script.read_text(encoding="utf-8")
     refresh_text = refresh_script.read_text(encoding="utf-8")
+    dockerfile_text = lock_dockerfile.read_text(encoding="utf-8")
     assert "--allow-dirty" in release_text
     assert "requirements.lock" in release_text
     assert "--target build" in release_text
@@ -78,8 +89,14 @@ def test_build_scripts_have_valid_shell_and_expected_lifecycle():
     assert "sha256sum -c SHA256SUMS" in release_text
     assert "systemctl" not in release_text
     assert "current" not in release_text
-    assert "--no-cache --target base" in refresh_text
+    assert "cuda-*" in release_text and "nvidia-*" in release_text
+    assert "triton" in release_text
+    assert "--no-cache --target resolver" in refresh_text
+    assert "--no-cache --target validation" in refresh_text
+    assert "download.pytorch.org/whl/cpu" in refresh_text
     assert "-m pip freeze" in refresh_text
+    assert "torch.cuda.is_available() is False" in dockerfile_text
+    assert "--no-deps -r requirements.lock" in dockerfile_text
 
 
 def _write(path: Path, content: str) -> None:
@@ -97,7 +114,10 @@ def release_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     _write(repo / ".gitignore", "dist/\nbackend/.env\nbackend/.venv/\nchatbot-web/node_modules/\n")
     _write(repo / "backend/main.py", "APP = 'fixture'\n")
     _write(repo / "backend/requirements.txt", "fastapi\n")
-    _write(repo / "backend/requirements.lock", "fastapi==1.0.0\nstarlette==1.0.0\n")
+    _write(
+        repo / "backend/requirements.lock",
+        f"{CPU_INDEX_DIRECTIVE}\nfastapi==1.0.0\nstarlette==1.0.0\ntorch==2.14.0+cpu\n",
+    )
     for package in ("admin", "core", "integrations", "routers", "scripts", "services"):
         _write(repo / f"backend/{package}/__init__.py", "")
     _write(repo / "backend/tests/test_excluded.py", "raise AssertionError\n")
@@ -176,6 +196,21 @@ def test_builder_rejects_dirty_tree_by_default(release_repo):
     assert result.returncode != 0
     assert "worktree dirty" in result.stderr
     assert not (repo / "dist/releases/auzef-4.1.0.tar.gz").exists()
+
+
+@pytest.mark.parametrize("gpu_package", ["nvidia-cublas", "cuda-runtime", "triton"])
+def test_builder_rejects_gpu_packages_in_production_lock(release_repo, gpu_package):
+    repo, environment = release_repo
+    lock_file = repo / "backend/requirements.lock"
+    lock_file.write_text(
+        lock_file.read_text(encoding="utf-8") + f"{gpu_package}==1.0.0\n",
+        encoding="utf-8",
+    )
+
+    result = _run_builder(repo, environment, "4.1.0", "--allow-dirty")
+
+    assert result.returncode != 0
+    assert "cuda-*, nvidia-* veya triton" in result.stderr
 
 
 def test_clean_builder_records_dirty_false(release_repo, tmp_path):

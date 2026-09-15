@@ -46,6 +46,7 @@ RELEASE_NAME=auzef-$VERSION
 DIST_DIR=$REPO_ROOT/dist/releases
 ARTIFACT=$DIST_DIR/$RELEASE_NAME.tar.gz
 LOCK_FILE=$REPO_ROOT/backend/requirements.lock
+CPU_INDEX_DIRECTIVE='--extra-index-url https://download.pytorch.org/whl/cpu'
 
 for command_name in docker git tar sha256sum mktemp find sort awk grep ln du date chmod; do
     command -v "$command_name" >/dev/null 2>&1 || \
@@ -57,12 +58,19 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Git worktree buluna
 [ -f "$LOCK_FILE" ] || fail "Committed dependency lock bulunamadi: $LOCK_FILE"
 [ ! -e "$ARTIFACT" ] || fail "Artifact zaten var ve overwrite edilmeyecek: $ARTIFACT"
 
-if ! awk '
+if ! awk -v cpu_index="$CPU_INDEX_DIRECTIVE" '
     /^[[:space:]]*($|#)/ { next }
+    $0 == cpu_index { cpu_index_count++; next }
     $0 !~ /^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9.!+_-]*$/ { exit 1 }
+    END { if (cpu_index_count != 1) exit 1 }
 ' "$LOCK_FILE"; then
-    fail "requirements.lock yalniz exact package==version pinleri icermelidir."
+    fail "requirements.lock official CPU index ve exact package==version pinleri icermelidir."
 fi
+if grep -Eiq '^(cuda-|nvidia-|triton==)' "$LOCK_FILE"; then
+    fail "CPU-only production lock cuda-*, nvidia-* veya triton package iceremez."
+fi
+grep -Eq '^torch==[0-9][A-Za-z0-9.!_-]*\+cpu$' "$LOCK_FILE" || \
+    fail "CPU-only production lock torch +cpu distribution icermelidir."
 
 DIRTY=false
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
