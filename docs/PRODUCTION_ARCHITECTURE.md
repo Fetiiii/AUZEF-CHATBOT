@@ -235,19 +235,18 @@ baseline was written:
   development Nginx configuration, and an Angular `ng serve` hot-reload
   service on port 4200. This confirms Compose is the established development
   workflow that must be preserved.
-- `backend/entrypoint.sh` runs `scripts.init_system.setup()` before starting
-  Uvicorn. That setup creates/updates tables, indexes, a PostgreSQL view, and
-  initial configuration. Production conversion must remove this schema work
-  from APP startup and expose it as a separate initialization/migration step.
+- `backend/entrypoint.sh` explicitly runs
+  `python -m scripts.init_system all` before starting Uvicorn. This preserves
+  automatic DB/config/Qdrant preparation for the Docker Compose development
+  wrapper; production does not use this entrypoint.
 - The effective Uvicorn command in `backend/entrypoint.sh` uses two workers,
   listens on `0.0.0.0:8000` inside the current container network, and trusts
   proxy headers. The Dockerfile contains a stale comment mentioning four
   workers; executable behavior is two.
-- The FastAPI lifespan in `backend/main.py` calls
-  `QDRANT_PROVIDER.ensure_collection()`. Lifespan runs per Uvicorn worker, so
-  collection initialization is currently coupled to application startup and
-  can race across workers or APP nodes. Native production preparation must
-  make this operation safely idempotent or move it to an explicit setup step.
+- `backend/main.py` has no infrastructure-provisioning lifespan. Direct
+  `uvicorn main:app` startup does not create or alter database schema, seed
+  configuration, or provision Qdrant. Operators run
+  `python -m scripts.init_system db|qdrant|all` as an explicit, separate step.
 - `backend/main.py` exposes one public `/health` endpoint. It executes
   `SELECT 1` through the single application database and returns `{"ok": true}`;
   liveness and readiness are not currently separated.

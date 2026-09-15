@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 
-echo "⏳ Veritabanı tabloları kontrol ediliyor..."
-python -c "from scripts.init_system import setup; setup()"
+echo "⏳ Development altyapısı hazırlanıyor..."
+python -m scripts.init_system all
 
 echo "🚀 Backend başlatılıyor..."
 # --workers 2: embedding modeli HER worker'a ayrı yüklenir (yüzlerce MB - GB);

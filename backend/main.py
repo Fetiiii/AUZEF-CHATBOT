@@ -1,4 +1,4 @@
-"""FastAPI uygulama montaji: middleware, lifespan, router'lar, healthcheck.
+"""FastAPI uygulama montaji: middleware, router'lar ve healthcheck.
 
 Is mantigi modullere ayrildi:
 - deps: DB/saglayicilar/LLM/circuit breaker/limitler
@@ -8,7 +8,6 @@ Is mantigi modullere ayrildi:
 - auth / settings_api: oturum + ayarlar
 """
 import logging
-from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,18 +34,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("auzef")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Baslangic: Qdrant koleksiyonunu hazirla (on_event yerine lifespan).
-    try:
-        QDRANT_PROVIDER.ensure_collection()
-        logger.info("Qdrant koleksiyonu hazir.")
-    except Exception as e:
-        logger.error(f"Qdrant collection init hatasi: {e}")
-    yield
-
-
-app = FastAPI(title="AUZEF Akilli Asistan API", lifespan=lifespan)
+app = FastAPI(title="AUZEF Akilli Asistan API")
 
 app.add_middleware(
     CORSMiddleware,
