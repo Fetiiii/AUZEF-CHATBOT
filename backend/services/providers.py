@@ -36,6 +36,11 @@ def _usable_aliases(queries) -> list:
 
 class BaseSearchProvider(ABC):
     @abstractmethod
+    def healthcheck(self):
+        """Servis-seviyesi ucuz erişilebilirlik kontrolü."""
+        pass
+
+    @abstractmethod
     def search(self, query: str, limit: int = 3):
         pass
 
@@ -43,6 +48,12 @@ class MeiliSearchProvider(BaseSearchProvider):
     def __init__(self, url: str, master_key: str, index_name: str):
         self.client = meilisearch.Client(url, master_key)
         self.index = self.client.index(index_name)
+
+    def healthcheck(self):
+        """Arama yapmadan MeiliSearch health API'sini doğrula."""
+        health = self.client.health()
+        if health.get("status") != "available":
+            raise RuntimeError("MeiliSearch health status is not available")
 
     def search(self, query: str, limit: int = 3):
         results = self.index.search(query, {
@@ -81,6 +92,10 @@ class QdrantProvider(BaseSearchProvider):
         self.client = QdrantClient(host=host, port=port)
         self.collection_name = collection_name
         self.model = SentenceTransformer(model_name)
+
+    def healthcheck(self):
+        """Embedding üretmeden Qdrant servis metadata'sını oku."""
+        self.client.get_collections()
 
     def ensure_collection(self):
         try:

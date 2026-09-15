@@ -12,14 +12,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from core.database import execute_admin_sql
-from core.deps import get_db, QDRANT_PROVIDER
+from core.database import admin_engine, chat_engine, execute_admin_sql
+from core.deps import get_db, MEILI_PROVIDER, QDRANT_PROVIDER
 from admin.auth import router as auth_router, AdminAuthMiddleware
 from admin.settings_api import router as settings_router
 from routers.chat import router as chat_router
@@ -82,3 +83,54 @@ def health(db: Session = Depends(get_db)):
     """Container healthcheck ucu: public ve ucuz, DB baglantisini dogrular."""
     execute_admin_sql(db, text("SELECT 1"))
     return {"ok": True}
+
+
+def _probe_database(engine) -> None:
+    """Routed Session kullanmadan verilen engine'i doğrudan kontrol et."""
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
+
+
+def _dependency_status(name: str, probe) -> str:
+    """Probe hatasını iç yanıt ayrıntılarına taşımadan ok/error'a indirger."""
+    try:
+        probe()
+        return "ok"
+    except Exception:
+        logger.exception("Readiness dependency probe failed: %s", name)
+        return "error"
+
+
+@app.get("/health/live")
+def health_live():
+    """Yalnız FastAPI request işleme kabiliyetini bildirir."""
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready():
+    """LB admission için kritik DB'leri ve degrade search durumunu bildirir."""
+    dependencies = {
+        "db_admin": _dependency_status(
+            "db_admin", lambda: _probe_database(admin_engine)
+        ),
+        "db_chat": _dependency_status(
+            "db_chat", lambda: _probe_database(chat_engine)
+        ),
+        "meilisearch": _dependency_status(
+            "meilisearch", MEILI_PROVIDER.healthcheck
+        ),
+        "qdrant": _dependency_status("qdrant", QDRANT_PROVIDER.healthcheck),
+    }
+
+    if dependencies["db_admin"] == "error" or dependencies["db_chat"] == "error":
+        content = {"status": "unready", "dependencies": dependencies}
+        return JSONResponse(status_code=503, content=content)
+
+    status = (
+        "degraded"
+        if dependencies["meilisearch"] == "error"
+        or dependencies["qdrant"] == "error"
+        else "ready"
+    )
+    return {"status": status, "dependencies": dependencies}
