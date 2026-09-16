@@ -21,6 +21,7 @@ def test_production_runtime_layout_is_complete():
         "app/nginx/auzef-app.conf",
         "app/nginx/README.md",
         "config/backend.env.example",
+        "search-services.env",
         "scripts/common.sh",
         "scripts/auzef-deploy",
         "scripts/auzef-init",
@@ -28,9 +29,37 @@ def test_production_runtime_layout_is_complete():
         "scripts/auzef-status",
         "scripts/auzef-health",
         "scripts/auzef-logs",
+        "validation/search-services/Dockerfile",
+        "validation/search-services/compose.yml",
+        "validation/search-services/run.sh",
+        "validation/search-services/run_compatibility.py",
+        "validation/search-services/validate_meilisearch.py",
+        "validation/search-services/validate_qdrant.py",
     }
 
     assert all((PRODUCTION_ROOT / path).is_file() for path in expected)
+
+
+def test_search_service_version_contract_and_validation_are_isolated():
+    versions = _read("search-services.env")
+    compose = _read("validation/search-services/compose.yml")
+    dockerfile = _read("validation/search-services/Dockerfile")
+    runner = _read("validation/search-services/run.sh")
+
+    assert "MEILISEARCH_VERSION=1.53.2" in versions
+    assert "QDRANT_VERSION=1.19.1" in versions
+    assert "getmeili/meilisearch:v1.53.2" in compose
+    assert "qdrant/qdrant:v1.19.1" in compose
+    assert "MEILI_ENV: production" in compose
+    assert "MEILI_MASTER_KEY:" in compose
+    assert "QDRANT__SERVICE__API_KEY:" in compose
+    assert "internal: true" in compose
+    assert "ports:" not in compose
+    assert "volumes:" not in compose
+    assert "--constraint /tmp/requirements.lock" in dockerfile
+    assert "qdrant-client==1.19.0" in dockerfile
+    assert "meilisearch==0.43.0" in dockerfile
+    assert "down --volumes --remove-orphans" in runner
 
 
 def test_systemd_unit_uses_direct_loopback_uvicorn_runtime():

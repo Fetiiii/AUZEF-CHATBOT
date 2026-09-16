@@ -66,6 +66,10 @@ Users ----------------------> | Physical Load        |
 - FastAPI runs under native Uvicorn with two workers, preserving the existing
   application runtime behavior and memory assumptions.
 - MeiliSearch and Qdrant each run as a native service on their own VM.
+- The compatibility-validated production server pins are Meilisearch `1.53.2`
+  with application client `meilisearch==0.43.0`, and Qdrant `1.19.1` with
+  application client `qdrant-client==1.19.0`. The machine-readable, non-secret
+  contract is `deploy/production/search-services.env`.
 
 ## VM Responsibilities
 
@@ -178,6 +182,13 @@ new application versions while both may be running.
 - PostgreSQL storage on DB-CHAT and DB-ADMIN, the MeiliSearch database, and
   Qdrant storage live outside application release directories and survive
   application deploys and rollbacks.
+- DB-ADMIN PostgreSQL QnA/alias/tag records are the search content source of
+  truth. Meilisearch documents and Qdrant vectors are derived indexes. A
+  Meilisearch binary upgrade must not assume an existing `data.ms` can be
+  reused in place; use the server's supported backup/migration path or rebuild
+  a clean index from DB-ADMIN. Qdrant rebuilds derive vectors from the same QnA
+  text/aliases and embedding model. Existing helpers do not yet provide a
+  complete stale-free atomic rebuild/swap runbook.
 - Any APP-local runtime cache that must survive a release switch, including a
   model cache if retained, uses a dedicated path outside the release tree.
 - Release directories are treated as immutable after publication. Application
@@ -273,9 +284,14 @@ baseline was written:
   the SPA/static assets and proxies `/api/`, `/widget-chat`, and `/health` to
   FastAPI. Native production must retain this request boundary while consuming
   a prebuilt Angular artifact instead of building an image on the APP nodes.
-- The Compose topology pins the Qdrant server image to `1.13.2`, while the
-  production Python lock pins `qdrant-client==1.19.0`. Native Qdrant rollout
-  still requires an explicit server/client compatibility decision.
+- Development Compose remains pinned to Meilisearch `1.12` and Qdrant `1.13.2`
+  and was deliberately not changed by production validation. Isolated real
+  integration tests selected native production Meilisearch `1.53.2` with
+  client `0.43.0`, and Qdrant `1.19.1` with client `1.19.0`.
+- Meilisearch production authentication is already passed through the current
+  client. Current Qdrant provider/vector-sync construction has no API-key
+  wiring; secure native Qdrant rollout remains blocked on a separate
+  application/config change plus private-network and TLS policy.
 - Native APP operations are implemented by `deploy/production/scripts/` and
   the `auzef-init@.service` oneshot template. Release preparation, shared
   initialization, node activation, readiness-gated automatic rollback, status,

@@ -1,0 +1,43 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    environment:
+      QDRANT__LOG_LEVEL: INFO
+      QDRANT__SERVICE__API_KEY: auzef-compatibility-api-key-not-secret
+    networks:
+      - compatibility
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.53.2
+    environment:
+      MEILI_MASTER_KEY: auzef-compatibility-master-key-not-secret
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_ENV: production
+    networks:
+      - compatibility
+
+  validator:
+    build:
+      context: ../../../..
+      dockerfile: deploy/production/validation/search-services/Dockerfile
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      QDRANT_API_KEY: auzef-compatibility-api-key-not-secret
+      QDRANT_EXPECTED_VERSION: 1.19.1
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: auzef-compatibility-master-key-not-secret
+      MEILI_EXPECTED_VERSION: 1.53.2
+    depends_on:
+      - qdrant
+      - meilisearch
+    networks:
+      - compatibility
+    read_only: true
+    tmpfs:
+      - /tmp
+
+networks:
+  compatibility:
+    internal: true

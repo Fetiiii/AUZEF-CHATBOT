@@ -114,6 +114,82 @@ body limiti, asset cache, `index.html`/`widget.js` no-cache ve backend
 502/503/504 maintenance fallback davranışları korunur. Listener/TLS ve gerçek
 istemci IP sözleşmesi için [Nginx notlarına](app/nginx/README.md) bakın.
 
+## Search service version contract
+
+Native production server pinleri secret içermeyen
+[`search-services.env`](search-services.env) dosyasındadır:
+
+| Service | Application client | Selected native server |
+|---|---|---|
+| Meilisearch | `meilisearch==0.43.0` | `1.53.2` |
+| Qdrant | `qdrant-client==1.19.0` | `1.19.1` |
+
+Bu sürümler 2026-09-16 tarihinde
+[`validation/search-services`](validation/search-services/README.md) altındaki
+izole gerçek integration harness'ıyla doğrulandı. Meilisearch testi production
+modunda master key zorunluluğunu ve keysiz index erişiminin reddedildiğini;
+health/version, index CRUD, asynchronous task completion,
+`showRankingScore`, `matchingStrategy=last` ve application searchable-attribute
+sözleşmesini geçti. Qdrant testi API key açık server'da exact reported version,
+`get_collections`, provider `ensure_collection`, cosine/model-dimension
+collection create, canonical+alias payload upsert, `query_points`, provider
+search, delete ve verified cleanup adımlarını geçti.
+
+Meilisearch için warning oluşmadı. Qdrant client/server compatibility warning'i
+oluşmadı; validation HTTP network'ünde test API key kullanıldığı için SDK
+yalnız `Api key is used with an insecure connection.` uyarısını verdi. Bu
+test-only transport production örneği değildir.
+
+### Search security gate
+
+- Meilisearch native service `MEILI_ENV=production`, güçlü master/API key ve
+  yalnız yetkili APP/operations kaynaklarına açık private network ile
+  çalışmalıdır. Meilisearch'in
+  [configuration reference](https://www.meilisearch.com/docs/resources/self_hosting/configuration/reference)
+  production modunda en az 16-byte master key'i zorunlu tutar.
+- Qdrant'ın
+  [official production checklist](https://qdrant.tech/documentation/production-checklist/)
+  self-hosted instance'ların varsayılanda authentication olmadan tüm
+  interface'lere açık olabildiğini ve API key'in minimum production adımı
+  olduğunu belirtir. Native service API key, private-interface/network
+  restriction ve TLS veya kurumun eşdeğer güvenli transport'u olmadan
+  production trafiğine açılmamalıdır.
+- Mevcut `QdrantProvider` ve `scripts.vector_sync` client oluştururken yalnız
+  host/port geçirir; `QDRANT_API_KEY` wiring'i henüz yoktur. Server sürüm pini
+  geçerlidir, fakat güvenli native rollout bu ayrı application/config
+  değişikliği tamamlanmadan yapılamaz.
+
+### Persistence, upgrade and rebuild assumptions
+
+QnA, alias ve tag source-of-truth'u DB-ADMIN PostgreSQL'dir. Meilisearch ve
+Qdrant yeniden üretilebilir derived search index'leridir:
+
+- Meilisearch doldurma çekirdeği `backend/scripts/importer.py` içindeki
+  `sync_meilisearch(db)` fonksiyonudur; aktif `qna_search_view` satırlarını
+  `auzef_qna_index` içine yazar ve searchable attributes'i ayarlar. Importer'ın
+  ana CLI'si PostgreSQL'e tekrar CSV import ettiği için salt production rebuild
+  komutu değildir. Helper stale doküman temizliği, task-success gate'i veya
+  atomik index swap sağlamaz.
+- Meilisearch server upgrade'i mevcut `data.ms` üzerinde kör binary replacement
+  olarak yapılmaz. Resmî
+  [update guide](https://www.meilisearch.com/docs/resources/migration/updating)
+  ile uyumlu snapshot/dump veya temiz instance/index + DB-ADMIN'den rebuild
+  planı gerekir.
+- Qdrant vector source-of-truth'u DB-ADMIN QnA metinleri, alias'lar ve aynı
+  SentenceTransformer modelidir. `python -m scripts.vector_sync` aktif
+  `qna_search_view` verisini `auzef_qna_vectors` collection'ına cosine
+  vektörlerle yeniden upsert eder. Mevcut script stale point temizlemez ve
+  collection dimension/distance uyuşmazlığını düzeltmez; temiz rebuild/swap
+  runbook'u sonraki operasyon işidir. `init_system qdrant` yalnız collection
+  provisioning yapar, veri rebuild'i yapmaz.
+
+Bu görev snapshot/dump otomasyonu veya native installer eklemez. Qdrant'ın
+[official installation guidance](https://qdrant.tech/documentation/installation/)
+binary executable yolunu development/testing seçeneği olarak konumlandırır;
+kurumun zorunlu native-production kararında binary provenance/checksum,
+POSIX/block storage, authentication/TLS, monitoring, backup/restore, upgrade ve
+HA sorumluluğu tamamen kurumun operasyon katmanında tanımlanmalıdır.
+
 ## Deployment lifecycle
 
 Production deploy birbirinden ayrı üç fazdır:
