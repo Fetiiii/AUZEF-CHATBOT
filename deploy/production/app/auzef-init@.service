@@ -1,0 +1,18 @@
+[Unit]
+Description=AUZEF shared infrastructure initialization for release %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=auzef
+Group=auzef
+WorkingDirectory=/opt/auzef/releases/%i/backend
+EnvironmentFile=/etc/auzef/backend.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/auzef/releases/%i/.venv/bin/python -m scripts.init_system all
+RemainAfterExit=yes
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=auzef-init-%i

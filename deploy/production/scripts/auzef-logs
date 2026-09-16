@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -r "$SCRIPT_DIR/common.sh" ]; then
+    . "$SCRIPT_DIR/common.sh"
+elif [ -r /usr/local/sbin/auzef-common.sh ]; then
+    . /usr/local/sbin/auzef-common.sh
+else
+    printf 'ERROR: auzef-common.sh bulunamadi.\n' >&2
+    exit 1
+fi
+
+usage() {
+    printf 'Usage: auzef-logs [-f] | auzef-logs --init <version>\n' >&2
+}
+
+case "$#:${1:-}" in
+    0:*) exec "$JOURNALCTL_CMD" -u auzef-backend.service ;;
+    1:-f) exec "$JOURNALCTL_CMD" -u auzef-backend.service -f ;;
+    2:--init)
+        validate_version "$2" || die "Gecersiz release version: $2"
+        exec "$JOURNALCTL_CMD" -u "auzef-init@$2.service"
+        ;;
+    *) usage; exit 1 ;;
+esac

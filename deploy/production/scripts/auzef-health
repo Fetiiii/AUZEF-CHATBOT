@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -r "$SCRIPT_DIR/common.sh" ]; then
+    . "$SCRIPT_DIR/common.sh"
+elif [ -r /usr/local/sbin/auzef-common.sh ]; then
+    . /usr/local/sbin/auzef-common.sh
+else
+    printf 'ERROR: auzef-common.sh bulunamadi.\n' >&2
+    exit 1
+fi
+
+[ "$#" -eq 0 ] || die "Usage: auzef-health"
+
+probe() {
+    name=$1
+    url=$2
+    output=$(mktemp "${TMPDIR:-/tmp}/auzef-health.XXXXXX") || die "Temporary file olusturulamadi."
+    code=$(
+        "$CURL_CMD" --silent --show-error --output "$output" \
+            --noproxy '*' --header 'Host: 127.0.0.1' \
+            --connect-timeout "${AUZEF_HEALTH_CONNECT_TIMEOUT:-3}" \
+            --max-time "${AUZEF_HEALTH_REQUEST_TIMEOUT:-10}" \
+            --write-out '%{http_code}' "$url"
+    ) || code=000
+    printf '%s HTTP %s\n' "$name" "$code"
+    if [ -s "$output" ]; then
+        cat "$output"
+        printf '\n'
+    fi
+    rm -f "$output"
+    [ "$code" = "200" ]
+}
+
+result=0
+probe live "$LIVE_URL" || result=1
+# HTTP 200 is accepted only with the documented ready/degraded body contract.
+ready_output=$(mktemp "${TMPDIR:-/tmp}/auzef-health-ready.XXXXXX") || die "Temporary file olusturulamadi."
+if probe ready "$READY_URL" >"$ready_output"; then
+    cat "$ready_output"
+    if ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"(ready|degraded)"' "$ready_output"; then
+        result=1
+    fi
+else
+    cat "$ready_output"
+    result=1
+fi
+rm -f "$ready_output"
+exit "$result"

@@ -9,14 +9,19 @@ BACKEND_ENV=/etc/auzef/backend.env
 CACHE_DIR=/var/cache/auzef/huggingface
 STATE_DIR=/var/lib/auzef
 FLAGS_DIR=/var/lib/auzef/flags
+LOCK_DIR=/var/lib/auzef/locks
 SYSTEMD_TARGET=/etc/systemd/system/auzef-backend.service
+INIT_SYSTEMD_TARGET=/etc/systemd/system/auzef-init@.service
 NGINX_TARGET=/etc/nginx/conf.d/auzef-app.conf
+SBIN_DIR=/usr/local/sbin
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 UNIT_SOURCE=$SCRIPT_DIR/auzef-backend.service
+INIT_UNIT_SOURCE=$SCRIPT_DIR/auzef-init@.service
 NGINX_SOURCE=$SCRIPT_DIR/nginx/auzef-app.conf
 ENV_SOURCE=$SCRIPT_DIR/../config/backend.env.example
 ENV_EXAMPLE_TARGET=$CONFIG_DIR/backend.env.example
+OPERATIONS_DIR=$SCRIPT_DIR/../scripts
 
 fail() {
     printf 'ERROR: %s\n' "$*" >&2
@@ -28,7 +33,9 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 missing=""
-for command_name in systemctl nginx python3.11 getent groupadd useradd install; do
+for command_name in awk basename cat chmod chown curl date dirname find flock \
+    getent grep groupadd id install journalctl ln mkdir mktemp mv nginx \
+    python3.11 readlink rm rmdir sed sha256sum sleep systemctl tar tr useradd wc; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         missing="$missing $command_name"
     fi
@@ -38,8 +45,13 @@ if [ -n "$missing" ]; then
 fi
 
 [ -f "$UNIT_SOURCE" ] || fail "Systemd unit template bulunamadi: $UNIT_SOURCE"
+[ -f "$INIT_UNIT_SOURCE" ] || fail "Shared init systemd unit template bulunamadi: $INIT_UNIT_SOURCE"
 [ -f "$NGINX_SOURCE" ] || fail "Nginx template bulunamadi: $NGINX_SOURCE"
 [ -f "$ENV_SOURCE" ] || fail "Environment template bulunamadi: $ENV_SOURCE"
+[ -f "$OPERATIONS_DIR/common.sh" ] || fail "Operations ortak kutuphanesi bulunamadi: $OPERATIONS_DIR/common.sh"
+for operation_name in auzef-deploy auzef-init auzef-rollback auzef-status auzef-health auzef-logs; do
+    [ -f "$OPERATIONS_DIR/$operation_name" ] || fail "Operations komutu bulunamadi: $OPERATIONS_DIR/$operation_name"
+done
 [ -d /etc/nginx/conf.d ] || fail "/etc/nginx/conf.d bulunamadi; Nginx paket yapisini kontrol edin."
 [ -x /usr/sbin/nologin ] || fail "/usr/sbin/nologin bulunamadi; service account shell gereksinimini kontrol edin."
 
@@ -58,8 +70,11 @@ fi
 # bootstrap intentionally does not create or change the current symlink.
 install -d -o root -g "$APP_GROUP" -m 0755 "$APP_ROOT" "$APP_ROOT/releases"
 install -d -o "$APP_USER" -g "$APP_GROUP" -m 0750 "$CACHE_DIR"
-install -d -o "$APP_USER" -g "$APP_GROUP" -m 0755 "$STATE_DIR" "$FLAGS_DIR"
+install -d -o root -g "$APP_GROUP" -m 0755 "$STATE_DIR"
+install -d -o "$APP_USER" -g "$APP_GROUP" -m 0755 "$FLAGS_DIR"
+install -d -o root -g "$APP_GROUP" -m 0750 "$LOCK_DIR"
 install -d -o root -g "$APP_GROUP" -m 0750 "$CONFIG_DIR"
+install -d -o root -g root -m 0755 "$SBIN_DIR"
 
 # Refreshing the public template is safe; the real secret file is never
 # generated or overwritten by this installer.
@@ -87,6 +102,16 @@ install_if_absent() {
 
 install_if_absent "$UNIT_SOURCE" "$SYSTEMD_TARGET" 0644
 install_if_absent "$NGINX_SOURCE" "$NGINX_TARGET" 0644
+
+# Operations tooling and the shared-init unit are repository-managed, non-secret
+# files. Re-running the installer intentionally refreshes them while preserving
+# backend.env, the active release and service state.
+install -o root -g root -m 0644 "$INIT_UNIT_SOURCE" "$INIT_SYSTEMD_TARGET"
+install -o root -g root -m 0644 "$OPERATIONS_DIR/common.sh" "$SBIN_DIR/auzef-common.sh"
+for operation_name in auzef-deploy auzef-init auzef-rollback auzef-status auzef-health auzef-logs; do
+    install -o root -g root -m 0755 "$OPERATIONS_DIR/$operation_name" "$SBIN_DIR/$operation_name"
+done
+printf '%s\n' 'Operations komutlari ve shared-init systemd unit guncellendi.'
 
 systemctl daemon-reload
 nginx -t

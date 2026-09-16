@@ -1,17 +1,19 @@
 # Native production APP runtime
 
-Bu dizin APP-01 ve APP-02 için aynı native Linux runtime sözleşmesini
-tanımlar. APP VM bootstrap, systemd runtime, harici environment şablonu, Nginx
-application listener ve production release artifact builder bu kapsamdadır.
-Deploy/rollback, rolling deployment ve PostgreSQL/MeiliSearch/Qdrant kurulumu
-henüz bu kapsamda değildir.
+Bu dizin APP-01 ve APP-02 için aynı native Linux runtime ve deployment
+sözleşmesini tanımlar. APP VM bootstrap, systemd runtime, harici environment
+şablonu, Nginx application listener, production release artifact builder,
+prepare/shared-init/activate lifecycle'ı, rollback ve temel operasyon komutları
+bu kapsamdadır. Fiziksel LB, TLS, firewall ve PostgreSQL/MeiliSearch/Qdrant
+sunucu kurulumu bu araçlar tarafından otomatikleştirilmez.
 
 ## Dosya sistemi sözleşmesi
 
 ```text
 /opt/auzef/
 ├── releases/                         # versioned, immutable releases
-└── current -> releases/<release-id>   # active release; installer oluşturmaz
+├── current -> releases/<release-id>   # active release; installer oluşturmaz
+└── previous -> releases/<release-id>  # son başarılı activation öncesi release
 
 /etc/auzef/
 └── backend.env                      # runtime config/secrets, root:auzef 0640
@@ -20,13 +22,16 @@ henüz bu kapsamda değildir.
 └── huggingface/                     # HF_HOME; release'lerden bağımsız
 
 /var/lib/auzef/
-└── flags/
-    └── maintenance.flag              # yalnız APP-local acil override
+├── flags/
+│   └── maintenance.flag              # yalnız APP-local acil override
+└── locks/
+    └── operation.lock                # root-owned operasyon kilidi
 ```
 
 `releases/` deployment tarafından yönetilir ve yayınlandıktan sonra
-değiştirilmez. `current` atomik release seçimini temsil eder. Config, secret,
-model cache ve local state release içine yazılmaz.
+değiştirilmez. `current` aktif release'i, `previous` son başarılı activation
+öncesindeki release'i atomik symlink'lerle gösterir. Config, secret, model cache
+ve local state release içine yazılmaz.
 
 Planlı maintenance state'i local flag değildir: DB-ADMIN `SystemConfig`
 içindeki `MAINTENANCE_MODE` kaydıdır ve APP-01/APP-02 tarafından ortak görülür.
@@ -35,17 +40,33 @@ override'dır.
 
 ## Bootstrap
 
-Desteklenen hostta `systemctl`, `nginx`, `python3.11` ve standart Linux
-user/group araçları önceden kurulu olmalıdır. Installer eksik paket kurmaz:
+Desteklenen hostta `systemctl`, `journalctl`, `nginx`, `python3.11`, `curl`,
+`tar`, `sha256sum` ve standart Linux user/group/file araçları önceden kurulu
+olmalıdır. Installer eksik paket kurmaz:
 
 ```sh
 sudo ./deploy/production/app/install.sh
 ```
 
 Script idempotent olarak `auzef` system user/group'unu ve gerekli dizinleri
-oluşturur, izinleri uygular, systemd unit ile Nginx şablonunu ilk kurulumda
-yerleştirir, `daemon-reload` ve `nginx -t` çalıştırır. Mevcut
-`/etc/auzef/backend.env`, systemd unit veya Nginx production config'i ezilmez.
+oluşturur, izinleri uygular, backend systemd unit ile Nginx şablonunu ilk
+kurulumda yerleştirir, `daemon-reload` ve `nginx -t` çalıştırır. Ayrıca
+`auzef-init@.service` ve aşağıdaki operasyon araçlarını kurar:
+
+```text
+/usr/local/sbin/auzef-deploy
+/usr/local/sbin/auzef-init
+/usr/local/sbin/auzef-rollback
+/usr/local/sbin/auzef-status
+/usr/local/sbin/auzef-health
+/usr/local/sbin/auzef-logs
+/usr/local/sbin/auzef-common.sh
+```
+
+Operasyon scriptleri ve shared-init unit secret içermeyen, repo tarafından
+yönetilen dosyalardır; installer tekrar çalıştırıldığında güncellenir.
+Mevcut `/etc/auzef/backend.env`, backend systemd unit ve Nginx production
+config'i ezilmez.
 
 Installer bilerek şunları yapmaz:
 
@@ -83,7 +104,7 @@ Development Docker wrapper'ı ise kolaylık için
 `python -m scripts.init_system all` komutunu Uvicorn'dan önce çalıştırmaya
 devam eder.
 Production deploy süreci explicit initialization komutlarını ayrı bir gate
-olarak çağırmalıdır; bu installer veya systemd unit bunu üstlenmez.
+olarak çağırmalıdır; installer ve backend runtime unit'i bunu üstlenmez.
 
 ## Nginx
 
@@ -92,6 +113,178 @@ widget ve health trafiğini loopback Uvicorn'a proxy eder. Rate limit, 10 MiB
 body limiti, asset cache, `index.html`/`widget.js` no-cache ve backend
 502/503/504 maintenance fallback davranışları korunur. Listener/TLS ve gerçek
 istemci IP sözleşmesi için [Nginx notlarına](app/nginx/README.md) bakın.
+
+## Deployment lifecycle
+
+Production deploy birbirinden ayrı üç fazdır:
+
+1. **PREPARE:** Artifact doğrulanır, aynı filesystem'deki staging dizinine
+   açılır, checksum kontrol edilir, `.venv` ve exact dependency kurulumu
+   tamamlanır, runtime smoke gate geçilir ve immutable release yayınlanır.
+   Aktif `current` değişmez.
+2. **SHARED INIT:** DB-ADMIN, DB-CHAT ve Qdrant initialization yeni release
+   koduyla operatör tarafından açıkça ve yalnız bir APP node'da çalıştırılır.
+   Bu faz per-node activation'ın parçası değildir.
+3. **ACTIVATE:** Drain edilmiş node'un `current` symlink'i atomik değiştirilir,
+   yalnız backend restart edilir ve localhost Nginx üzerinden readiness gate
+   beklenir. Başarısızlık application release rollback'ini tetikler.
+
+Tüm operasyon komutları release dizini ve systemd state'i yönettiği için root
+olarak (`sudo`) çalıştırılır. Deploy hiçbir yolda shared initialization'ı
+otomatik çalıştırmaz.
+
+### PREPARE
+
+```sh
+sudo auzef-deploy /path/to/auzef-4.1.0.tar.gz --prepare-only
+```
+
+Archive doğrudan `releases/` altına açılmaz. Önce absolute path, `..` path
+traversal, birden fazla top-level dizin ve normal file/directory dışındaki
+symlink, hardlink, device veya FIFO entry'leri reddedilir. Tek top-level dizin
+`auzef-<VERSION>` olmalı; `VERSION`, `BUILD_INFO`, `SHA256SUMS`,
+`backend/main.py`, `backend/requirements.lock`, `frontend/index.html` ve
+`frontend/widget.js` bulunmalıdır. `sha256sum -c SHA256SUMS` geçmeden devam
+edilmez. Aynı version daha önce hazırlanmışsa mevcut release overwrite veya
+mutate edilmez.
+
+Checksum corruption/integrity kontrolüdür; artifact authenticity veya imza
+garantisi değildir. Artifact APP node'lara yalnız kurumun güvenilir transfer
+kanalıyla taşınmalıdır.
+
+Prepare, target release içinde `python3.11 -m venv .venv` çalıştırır ve
+committed CPU lock'u tam olarak şu sözleşmeyle kurar:
+
+```sh
+<release>/.venv/bin/python -m pip install --no-deps \
+  -r <release>/backend/requirements.lock
+<release>/.venv/bin/python -m pip check
+```
+
+Pip upgrade edilmez ve production'da dependency version resolution yapılmaz.
+Ardından `torch` ve `sentence_transformers` import edilir;
+`torch.cuda.is_available() is False` ve `torch.version.cuda is None` zorunludur.
+Native numerical runtime eksikse veya paket kaynağına erişilemiyorsa prepare
+non-zero biter; activation ve `current` değişikliği olmaz. Installer/deploy OS
+paketi kurmaz. Hazırlanan payload ve `.venv` `root:auzef` sahipliğinde runtime
+tarafından okunabilir/çalıştırılabilir fakat yazılamaz durumda yayınlanır.
+
+### Production environment preflight
+
+Activation ve shared init öncesinde `/etc/auzef/backend.env` bulunmalı ve
+secret değerlerini ekrana basmadan doğrulanmalıdır. `ADMIN_DATABASE_URL`,
+`CHAT_DATABASE_URL`, `MEILI_URL`, `QDRANT_HOST` ve `QDRANT_PORT` boş olamaz;
+`ADMIN_AUTH_ENFORCED=true`, `ADMIN_COOKIE_SECURE=true` ve
+`HF_HOME=/var/cache/auzef/huggingface` zorunludur. `CHANGE_ME` placeholder'ı
+kalamaz. Production, development `DATABASE_URL` fallback'ine güvenmez.
+LLM/Solution Center alanları uygulamanın mevcut optional/conditional davranışına
+göre boş olabilir; preflight bunları keyfi olarak zorunlu yapmaz.
+
+### SHARED INIT
+
+```sh
+sudo auzef-init 4.1.0 --confirm-shared-change
+```
+
+Komut prepared release'i ve production environment'ı doğrular, ardından
+`auzef-init@4.1.0.service` oneshot unit'iyle release'in `.venv` ortamında
+`python -m scripts.init_system all` çalıştırır. Hata systemd ve komut exit
+code'una yansır; başarı gibi maskelenmez. Loglar:
+
+```sh
+sudo auzef-logs --init 4.1.0
+```
+
+DB ve Qdrant APP-01/APP-02 arasında ortak olduğu için bu komut release başına
+yalnız **bir node'da, bir kez** çalıştırılır. Shared schema/index change
+diğer aktif APP'i etkileyebilir; gerektiğinde merkezi maintenance/change window
+kullanılır.
+
+### ACTIVATE ve automatic rollback
+
+Node fiziksel LB'den drain edildikten sonra:
+
+```sh
+sudo auzef-deploy --activate 4.1.0 --confirm-drained
+```
+
+`--confirm-drained` LB'yi kontrol etmez; operatörün drain işlemini tamamladığına
+dair zorunlu ve bilinçli onaydır. Komut target release'i, production environment'ı
+ve `.venv/bin/uvicorn` dosyasını doğrular; geçici symlink + atomic rename ile
+`current`'i değiştirir ve `auzef-backend.service` servisini restart eder. Nginx
+config değişmediği için normal application deploy'unda reload edilmez.
+
+Gate, varsayılan 180 saniyelik pencere boyunca kısa timeout'larla
+`http://127.0.0.1/health/ready` adresini Nginx üzerinden poll eder. HTTP 200
+`ready` veya `degraded` başarılıdır; HTTP 503, connection failure ve timeout
+başarısızdır. Başarılı activation sonrası eski `current` varsa `previous`
+atomik olarak onu gösterir.
+
+Yeni release pencere içinde hazır olmazsa eski `current` atomik geri yüklenir,
+backend tekrar restart edilir ve eski release readiness'i yeniden beklenir. Eski
+release toparlansa bile deploy non-zero döner ve yeni deployment'ın başarısız,
+previous release'in restore edildiğini bildirir. Eski release de toparlanmazsa
+`CRITICAL` hata verilir ve iki failure da gizlenmez. İlk deployment'ta geri
+dönülecek release yoksa servis durdurulur, broken `current` bırakılmaz ve komut
+non-zero biter. Failed yeni release diagnosis için silinmez.
+
+### Manuel rollback
+
+```sh
+sudo auzef-rollback --confirm-drained
+sudo auzef-rollback 4.0.0 --confirm-drained
+```
+
+İlk komut `previous`, ikinci komut belirtilen prepared release'e döner. Target
+validation, atomik `current` switch, backend restart ve aynı readiness gate
+uygulanır. Rollback target hazır olmazsa başlangıçtaki `current` release geri
+yüklenerek recovery denenir. Başarılı rollback'te `previous` eski `current`'i
+gösterir.
+
+Application rollback DB/Qdrant initialization'ı, schema/DDL'yi veya dependency
+kurulumunu geri almaz. Bu nedenle shared initialization ile gelen schema
+değişiklikleri eski application release'iyle backward-compatible olmalıdır.
+Reverse migration/Alembic bu lifecycle'ın parçası değildir.
+
+### Operasyon yardımcıları
+
+```sh
+sudo auzef-status
+sudo auzef-health
+sudo auzef-logs
+sudo auzef-logs -f
+sudo auzef-logs --init 4.1.0
+```
+
+`auzef-status` secret okumadan current/previous release'leri, backend ve Nginx
+service state'ini, local emergency flag'i ve prepared release'leri gösterir.
+`auzef-health`, localhost Nginx üzerinden `/health/live` ve `/health/ready` HTTP
+code/body bilgisini gösterir; readiness HTTP 200 `degraded` automation için de
+başarılıdır. `auzef-logs` yalnız journald wrapper'ıdır; ayrı application log
+dosyası oluşturulmaz.
+
+## İki APP node rolling deployment runbook
+
+LB drain/add API'si otomatikleştirilmemiştir. Kurum prosedürüyle her adımı
+operatör tamamlar:
+
+1. Artifact'ı trusted kurum kanalıyla APP-01 ve APP-02'ye kopyalayın.
+2. APP-01'de `auzef-deploy <artifact> --prepare-only` çalıştırın.
+3. APP-02'de aynı artifact için `auzef-deploy <artifact> --prepare-only`
+   çalıştırın.
+4. Yalnız APP-01'de `auzef-init <version> --confirm-shared-change` çalıştırın;
+   gerekliyse shared change için merkezi maintenance/change window kullanın.
+5. APP-01'i fiziksel LB'den drain edin.
+6. APP-01'de `auzef-deploy --activate <version> --confirm-drained` çalıştırın;
+   readiness başarılıysa node'u LB'ye geri ekleyin.
+7. APP-02'yi fiziksel LB'den drain edin.
+8. APP-02'de `auzef-deploy --activate <version> --confirm-drained` çalıştırın;
+   shared init'i tekrar çalıştırmayın.
+9. APP-02 readiness başarılıysa node'u LB'ye geri ekleyin.
+10. `auzef-status` ile her iki node'un aynı `VERSION` gösterdiğini doğrulayın.
+
+Rollback gerektiğinde önce ilgili node LB'den drain edilir. Application
+rollback'in shared DB/Qdrant change'ini geri almadığı unutulmamalıdır.
 
 ## Backend dependency lock lifecycle
 
@@ -185,12 +378,13 @@ weight, `node_modules` ve `.venv` archive'a girmez.
 ## Production dependency installation contract
 
 Python virtualenv build hostundan production VM'e portable kabul edilmediği
-için `.venv` artifact'a konmaz. Sonraki deployment katmanı, release activation
-öncesinde target APP node'da şu exact kurulumu yapacaktır:
+için `.venv` artifact'a konmaz. `auzef-deploy --prepare-only`, release
+activation öncesinde target APP node'da şu exact kurulumu yapar:
 
 ```sh
 python3.11 -m venv <release>/.venv
-<release>/.venv/bin/pip install --no-deps -r <release>/backend/requirements.lock
+<release>/.venv/bin/python -m pip install --no-deps \
+  -r <release>/backend/requirements.lock
 ```
 
 Lock transitive graph'ın tamamını içerdiğinden production'da version resolution
@@ -204,7 +398,19 @@ mevcut artifact wheelhouse içermez.
 SentenceTransformer embedding inference'ı APP VM'lerde CPU ile çalışır.
 Embedding model cache'i `/var/cache/auzef/huggingface` altında release'lerden
 bağımsız persistent state olarak kalır. Model weights artifact'a gömülmez.
-Preload/offline stratejisi VM internet erişimi kesinleştiğinde ele alınacaktır.
+Qdrant provider application import sırasında SentenceTransformer modelini
+yüklediği için cache activation'ın kritik girdisidir:
+
+- APP VM outbound internet erişimine sahipse ilk backend startup model cache'ini
+  doldurabilir ve readiness penceresi normalden uzun sürebilir.
+- Outbound internet yoksa model cache activation'dan önce ayrıca preload veya
+  kurum kanalıyla copy edilmelidir.
+- Cache hazır değilse backend startup/readiness başarısız olabilir. Health gate
+  yeni release'i başarılı kabul etmez ve eski çalışan release varsa automatic
+  rollback dener.
+
+Model revision pinleme, model bundle ve offline cache paketleme ayrı altyapı
+kararıdır; bu deployment artifact'ının parçası değildir.
 
 ## Açık altyapı soruları
 

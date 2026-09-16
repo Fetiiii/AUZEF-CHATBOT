@@ -126,34 +126,44 @@ Releases use immutable, versioned release directories and a `current` symlink:
       frontend/
       manifest/checksums
   current -> releases/<release-id>
+  previous -> releases/<previous-release-id>
 ```
 
 - The release artifact is built and verified before it reaches a production
   VM. Production servers should not compile Angular, resolve application
   dependencies, or perform other builds when a ready artifact can be supplied.
 - APP-01 and APP-02 receive the same versioned artifact.
-- Activation changes the `current` symlink to the selected release and restarts
-  or reloads the relevant `systemd`/Nginx services.
-- Rollback points `current` to the previously retained release and restarts or
-  reloads the same services. Runtime configuration, secrets, and persistent
-  state are not rolled back by changing this symlink.
+- Deployment has explicit PREPARE, SHARED INIT, and ACTIVATE phases. PREPARE
+  validates and stages the artifact, creates the release virtualenv from the
+  committed lock, and does not change `current`. SHARED INIT is a separate,
+  operator-confirmed DB/Qdrant operation run once on one APP node. ACTIVATE is
+  performed only after the operator drains that APP node from the physical LB.
+- Activation atomically changes `current`, restarts the backend service, and
+  gates success on Nginx `/health/ready`. Nginx is not reloaded for an ordinary
+  application release because its configuration is outside the release.
+- A successful activation points `previous` at the former active release.
+  Automatic or manual application rollback atomically restores `current` and
+  restarts the backend. Runtime configuration, secrets, shared DB/Qdrant state,
+  and persistent state are not rolled back by changing this symlink.
 - Database initialization and migration are explicit deployment operations,
   separate from APP service startup. Starting or restarting Uvicorn must not
   implicitly modify database schema.
-- Deploy, rollback, status, health, and log operations will be simplified with
-  standard shell and `systemd`/`journalctl` tooling. This document does not add
-  those production scripts.
+- Deploy, explicit shared initialization, rollback, status, health, and log
+  operations use the standard shell tools under `deploy/production/scripts/`
+  together with `systemd` and `journalctl`. Physical LB drain/add remains an
+  operator-controlled institutional procedure.
 
 Rolling deployment order is fixed:
 
-1. Drain APP-01 from the LB.
-2. Deploy and activate the release on APP-01.
-3. Verify APP-01 health.
-4. Add APP-01 back to the LB.
-5. Drain APP-02 from the LB.
-6. Deploy and activate the same release on APP-02.
-7. Verify APP-02 health.
-8. Add APP-02 back to the LB.
+1. Prepare the same artifact on APP-01 and APP-02 without changing `current`.
+2. Run shared DB/Qdrant initialization once from one APP node when required.
+3. Drain APP-01 from the LB.
+4. Activate the release on APP-01 and verify readiness.
+5. Add APP-01 back to the LB.
+6. Drain APP-02 from the LB.
+7. Activate the already-prepared release on APP-02 without repeating shared init.
+8. Verify APP-02 readiness and add it back to the LB.
+9. Verify that both nodes report the same release version.
 
 Schema changes used by a rolling release must be compatible with the old and
 new application versions while both may be running.
@@ -178,17 +188,15 @@ new application versions while both may be running.
 
 ## Health and Availability
 
-Two health contracts are planned:
+Production exposes two health contracts:
 
 - `/health/live`: process liveness only. It answers whether the FastAPI process
   can serve requests and must not require downstream dependencies.
-- `/health/ready`: readiness for production traffic. It verifies the dependency
-  state required to serve safely and is the endpoint intended for LB admission
-  and rolling-deployment gates.
+- `/health/ready`: readiness for production traffic. DB-ADMIN and DB-CHAT gate
+  admission; MeiliSearch/Qdrant failures are reported as degraded without
+  withdrawing both APP nodes. It is the rolling-deployment health gate.
 
-Until that split is implemented, the existing `/health` behavior is only a
-current-state compatibility endpoint and is not the final production health
-contract.
+The existing `/health` behavior remains a development/compatibility endpoint.
 
 APP-01 and APP-02 provide application-tier redundancy through the physical LB.
 The rolling procedure keeps one APP node in service while the other is being
@@ -247,27 +255,31 @@ baseline was written:
   `uvicorn main:app` startup does not create or alter database schema, seed
   configuration, or provision Qdrant. Operators run
   `python -m scripts.init_system db|qdrant|all` as an explicit, separate step.
-- `backend/main.py` exposes one public `/health` endpoint. It executes
-  `SELECT 1` through the single application database and returns `{"ok": true}`;
-  liveness and readiness are not currently separated.
-- Maintenance state is currently the presence of
-  `/app/flags/maintenance.flag` for the backend and
-  `/etc/nginx/flags/maintenance.flag` for Nginx, connected through the Compose
-  `ops_flags` volume. Nginx returns HTTP 503 for `/widget-chat` while the flag
-  exists. `bakim.sh` also operates through the current Docker containers.
-- `backend/core/database.py` creates one SQLAlchemy engine and one
-  `SessionLocal` from `DATABASE_URL`. All chat, admin, QnA, calendar, settings,
-  session, rate-limit, and logging models currently share that database; there
-  is no `ADMIN_DATABASE_URL` or `CHAT_DATABASE_URL` routing yet.
+- `backend/main.py` exposes dependency-free `/health/live`, production
+  `/health/ready`, and the backward-compatible `/health` endpoint. Readiness
+  probes DB-ADMIN and DB-CHAT explicitly as admission gates; MeiliSearch and
+  Qdrant failures produce a degraded HTTP 200 response instead of withdrawing
+  both APP nodes.
+- Maintenance state is centralized as `MAINTENANCE_MODE` in DB-ADMIN
+  `SystemConfig`. The admin settings API reads/writes that record and
+  `/widget-chat` checks it before persistent or expensive work. An Nginx file
+  flag remains only as a node-local emergency override.
+- `backend/core/database.py` exposes explicit admin and chat engines and routes
+  owned models through a bound session. Production supplies
+  `ADMIN_DATABASE_URL` and `CHAT_DATABASE_URL`; development remains compatible
+  when both fall back to one `DATABASE_URL`.
 - `chatbot-web/Dockerfile` currently performs an Angular production build and
   copies `dist/chatbot-web` into an Nginx image. `chatbot-web/nginx.conf` serves
   the SPA/static assets and proxies `/api/`, `/widget-chat`, and `/health` to
   FastAPI. Native production must retain this request boundary while consuming
   a prebuilt Angular artifact instead of building an image on the APP nodes.
 - The Compose topology pins the Qdrant server image to `1.13.2`, while the
-  Python `qdrant-client` dependency is currently unpinned. Native service and
-  release dependency versions need an explicit compatibility baseline before
-  rollout.
+  production Python lock pins `qdrant-client==1.19.0`. Native Qdrant rollout
+  still requires an explicit server/client compatibility decision.
+- Native APP operations are implemented by `deploy/production/scripts/` and
+  the `auzef-init@.service` oneshot template. Release preparation, shared
+  initialization, node activation, readiness-gated automatic rollback, status,
+  health, and journald access remain standard shell/systemd operations.
 - Existing deployment guidance in `DEPLOY.md` describes a Docker-based
   production flow. It predates and conflicts with this native-service
   production contract and must be revised during the implementation phase.

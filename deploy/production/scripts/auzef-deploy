@@ -1,0 +1,357 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -r "$SCRIPT_DIR/common.sh" ]; then
+    # Repository execution.
+    . "$SCRIPT_DIR/common.sh"
+elif [ -r /usr/local/sbin/auzef-common.sh ]; then
+    # Installed production execution.
+    . /usr/local/sbin/auzef-common.sh
+else
+    printf '%s\n' 'ERROR: auzef-common.sh bulunamadi.' >&2
+    exit 1
+fi
+
+usage() {
+    cat >&2 <<'EOF'
+Usage:
+  auzef-deploy /path/to/auzef-<version>.tar.gz --prepare-only
+  auzef-deploy --activate <version> --confirm-drained [--readiness-timeout <seconds>]
+  auzef-deploy /path/to/auzef-<version>.tar.gz --confirm-drained [--readiness-timeout <seconds>]
+EOF
+}
+
+STAGING_DIR=""
+PREPARING_RELEASE=""
+PREPARED_VERSION=""
+
+cleanup_staging() {
+    if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
+        rm -rf -- "$STAGING_DIR"
+    fi
+    if [ -n "$PREPARING_RELEASE" ] && [ -d "$PREPARING_RELEASE" ]; then
+        rm -rf -- "$PREPARING_RELEASE"
+    fi
+}
+trap cleanup_staging EXIT HUP INT TERM
+
+validate_checksum_manifest() {
+    release_dir=$1
+    "$PYTHON_CMD" - "$release_dir" <<'PY'
+from pathlib import Path, PurePosixPath
+import re
+import sys
+
+root = Path(sys.argv[1]).resolve()
+manifest = root / "SHA256SUMS"
+listed = set()
+for number, raw in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
+    match = re.fullmatch(r"[0-9a-fA-F]{64} [ *](.+)", raw)
+    if not match:
+        raise SystemExit(f"invalid SHA256SUMS line {number}")
+    name = match.group(1)
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise SystemExit(f"unsafe SHA256SUMS path at line {number}")
+    candidate = root.joinpath(*path.parts)
+    try:
+        candidate.resolve(strict=True).relative_to(root)
+    except (FileNotFoundError, ValueError):
+        raise SystemExit(f"invalid SHA256SUMS target at line {number}")
+    if not candidate.is_file() or candidate.is_symlink():
+        raise SystemExit(f"non-regular SHA256SUMS target at line {number}")
+    normalized = path.as_posix().removeprefix("./")
+    if normalized in listed:
+        raise SystemExit(f"duplicate SHA256SUMS target at line {number}")
+    listed.add(normalized)
+
+actual = {
+    path.relative_to(root).as_posix()
+    for path in root.rglob("*")
+    if path.is_file() and not path.is_symlink() and path != manifest
+}
+if listed != actual:
+    raise SystemExit("SHA256SUMS payload coverage mismatch")
+PY
+}
+
+extract_artifact_safely() {
+    archive=$1
+    destination=$2
+    "$PYTHON_CMD" - "$archive" "$destination" <<'PY'
+from pathlib import Path, PurePosixPath
+import re
+import sys
+import tarfile
+
+archive = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+version_pattern = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?")
+
+try:
+    handle = tarfile.open(archive, mode="r:gz")
+except (OSError, tarfile.TarError) as exc:
+    raise SystemExit(f"archive okunamadi: {exc}")
+
+with handle:
+    members = handle.getmembers()
+    if not members:
+        raise SystemExit("archive bos")
+    top_levels = set()
+    archive_paths = set()
+    for member in members:
+        name = member.name
+        if not name or name.startswith("/") or "\\" in name:
+            raise SystemExit("absolute veya gecersiz archive path")
+        raw_parts = name.rstrip("/").split("/")
+        if not raw_parts or any(part in ("", ".", "..") for part in raw_parts):
+            raise SystemExit("archive path traversal reddedildi")
+        path = PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts:
+            raise SystemExit("archive path traversal reddedildi")
+        if not (member.isdir() or member.isfile()):
+            raise SystemExit("archive ozel entry tipi iceriyor")
+        normalized = "/".join(raw_parts)
+        if normalized in archive_paths:
+            raise SystemExit("archive duplicate path entry iceriyor")
+        archive_paths.add(normalized)
+        top_levels.add(raw_parts[0])
+    if len(top_levels) != 1:
+        raise SystemExit("archive tek top-level directory icermelidir")
+    top_level = next(iter(top_levels))
+    if not top_level.startswith("auzef-") or not version_pattern.fullmatch(top_level[6:]):
+        raise SystemExit("archive top-level auzef-<version> contract'ina uymuyor")
+    allowed_children = {"backend", "frontend", "VERSION", "BUILD_INFO", "SHA256SUMS"}
+    for normalized in archive_paths:
+        parts = normalized.split("/")
+        if len(parts) > 1 and parts[1] not in allowed_children:
+            raise SystemExit("archive beklenmeyen top-level payload iceriyor")
+    handle.extractall(destination, members=members)
+    print(top_level)
+PY
+}
+
+seal_release_permissions() {
+    release_dir=$1
+
+    "$CHOWN_CMD" -R root:auzef "$release_dir"
+    chmod 0755 "$release_dir"
+
+    for private_path in "$release_dir/backend" "$release_dir/.venv"; do
+        find "$private_path" -type d -exec chmod 0750 {} +
+        find "$private_path" -type f -perm /111 -exec chmod 0750 {} +
+        find "$private_path" -type f ! -perm /111 -exec chmod 0640 {} +
+    done
+
+    find "$release_dir/frontend" -type d -exec chmod 0755 {} +
+    find "$release_dir/frontend" -type f -exec chmod 0644 {} +
+    chmod 0640 "$release_dir/VERSION" "$release_dir/BUILD_INFO" "$release_dir/SHA256SUMS"
+}
+
+prepare_release() {
+    archive=$1
+    [ -f "$archive" ] || die "Artifact bulunamadi: $archive"
+
+    require_command "$PYTHON_CMD"
+    require_command sha256sum
+    require_command find
+    require_command chown
+    require_command chmod
+    require_command mv
+
+    STAGING_DIR=$(mktemp -d "$RELEASES_DIR/.staging.XXXXXX") || \
+        die "Release staging dizini olusturulamadi."
+
+    log "PREPARE: artifact guvenlik kontrolu ve staging extraction"
+    top_level=$(extract_artifact_safely "$archive" "$STAGING_DIR") || \
+        die "Artifact guvenlik dogrulamasi basarisiz."
+    staged_release=$STAGING_DIR/$top_level
+
+    for required_file in \
+        VERSION BUILD_INFO SHA256SUMS backend/main.py backend/requirements.lock \
+        frontend/index.html frontend/widget.js; do
+        [ -f "$staged_release/$required_file" ] && \
+            [ ! -L "$staged_release/$required_file" ] || \
+            die "Artifact zorunlu dosyasi eksik veya gecersiz: $required_file"
+    done
+
+    version=$(sed -n '1p' "$staged_release/VERSION")
+    [ "$(wc -l < "$staged_release/VERSION" | tr -d ' ')" = 1 ] || \
+        die "VERSION yalniz tek satir icermelidir."
+    validate_version "$version" || die "Artifact VERSION guvenli degil."
+    [ "$top_level" = "auzef-$version" ] || \
+        die "Top-level directory ile VERSION eslesmiyor."
+
+    target_release=$RELEASES_DIR/$version
+    [ ! -e "$target_release" ] && [ ! -L "$target_release" ] || \
+        die "Release zaten hazirlanmis; overwrite edilmeyecek: $version"
+
+    log "PREPARE: SHA256SUMS dogrulamasi"
+    validate_checksum_manifest "$staged_release" || die "SHA256SUMS manifest guvenli degil."
+    (cd "$staged_release" && sha256sum -c SHA256SUMS) || \
+        die "Artifact checksum dogrulamasi basarisiz."
+
+    # Publish the checksum-verified payload first so console-script shebangs are
+    # generated with the permanent release path. PREPARING_RELEASE keeps this
+    # incomplete directory transactional: any later failure removes it, while
+    # current remains untouched.
+    mv -T "$staged_release" "$target_release" || \
+        die "Validated release final dizine atomik tasinamadi."
+    PREPARING_RELEASE=$target_release
+    rmdir "$STAGING_DIR" 2>/dev/null || true
+    STAGING_DIR=""
+
+    log "PREPARE: Python 3.11 virtualenv final release path'inde olusturuluyor"
+    "$PYTHON_CMD" -m venv "$target_release/.venv" || \
+        die "Virtualenv olusturulamadi; Python 3.11/venv sistem destegini kontrol edin."
+
+    release_python=$target_release/.venv/bin/python
+    [ -x "$release_python" ] || die "Virtualenv Python executable olusmadi."
+
+    log "PREPARE: committed CPU lock exact --no-deps kuruluyor"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 "$release_python" -m pip install \
+        --no-deps -r "$target_release/backend/requirements.lock" || \
+        die "Dependency kurulumu basarisiz; package erisimi veya native runtime'i kontrol edin."
+
+    "$release_python" -m pip check || die "Dependency graph pip check'i gecemedi."
+    "$release_python" -c \
+        'import sentence_transformers, torch; assert torch.cuda.is_available() is False; assert torch.version.cuda is None' || \
+        die "CPU runtime smoke basarisiz; native numerical runtime/model dependency'lerini kontrol edin."
+    [ -x "$target_release/.venv/bin/uvicorn" ] || die "Virtualenv uvicorn executable icermiyor."
+    "$target_release/.venv/bin/uvicorn" --version >/dev/null || \
+        die "Uvicorn console executable final release path'inde calismiyor."
+
+    seal_release_permissions "$target_release" || die "Release permission'lari uygulanamadi."
+    PREPARING_RELEASE=""
+    PREPARED_VERSION=$version
+    log "PREPARE tamamlandi: $target_release"
+}
+
+restore_after_failed_activation() {
+    failed_release=$1
+    old_release=$2
+
+    if [ -n "$old_release" ]; then
+        log "Yeni release readiness basarisiz; onceki release geri yukleniyor."
+        atomic_symlink "$old_release" "$CURRENT_LINK" || \
+            die "CRITICAL: onceki current symlink geri yuklenemedi."
+        if restart_backend && wait_for_readiness "$READINESS_TIMEOUT"; then
+            printf '%s\n' 'ERROR: new deployment failed, previous release restored' >&2
+            return 1
+        fi
+        die "CRITICAL: yeni release basarisiz ve onceki release readiness toparlanamadi."
+    fi
+
+    stop_failed=false
+    if ! stop_backend; then
+        stop_failed=true
+    fi
+    if [ -L "$CURRENT_LINK" ]; then
+        current_target=$(resolve_release_link "$CURRENT_LINK" 2>/dev/null || true)
+        if [ "$current_target" = "$failed_release" ]; then
+            rm -f -- "$CURRENT_LINK"
+        fi
+    fi
+    [ "$stop_failed" = false ] || \
+        die "CRITICAL: ilk deployment basarisiz, current kaldirildi fakat backend durdurulamadi."
+    die "Yeni release basarisiz; ilk deployment oldugu icin rollback yapilamadi ve current kaldirildi."
+}
+
+activate_release() {
+    version=$1
+    validate_version "$version" || die "Guvenli bir release version verin."
+    preflight_environment
+    target_release=$RELEASES_DIR/$version
+    validate_prepared_release "$target_release"
+
+    old_release=""
+    if [ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ]; then
+        old_release=$(resolve_release_link "$CURRENT_LINK") || \
+            die "Mevcut current symlink broken veya release alani disinda."
+        [ "$old_release" != "$target_release" ] || die "Release zaten current: $version"
+    fi
+
+    log "ACTIVATE: current atomik olarak $version release'ine geciriliyor"
+    atomic_symlink "$target_release" "$CURRENT_LINK" || die "current symlink guncellenemedi."
+
+    if restart_backend && wait_for_readiness "$READINESS_TIMEOUT"; then
+        if [ -n "$old_release" ]; then
+            if ! atomic_symlink "$old_release" "$PREVIOUS_LINK"; then
+                restore_after_failed_activation "$target_release" "$old_release"
+            fi
+        elif [ -L "$PREVIOUS_LINK" ]; then
+            rm -f -- "$PREVIOUS_LINK" || \
+                die "Activation saglikli fakat stale previous symlink kaldirilamadi."
+        fi
+        log "ACTIVATE tamamlandi: $version ready/degraded admission aldi."
+        return 0
+    fi
+
+    restore_after_failed_activation "$target_release" "$old_release"
+}
+
+ARTIFACT=""
+ACTIVATE_VERSION=""
+PREPARE_ONLY=false
+CONFIRM_DRAINED=false
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --prepare-only)
+            PREPARE_ONLY=true
+            shift
+            ;;
+        --activate)
+            [ "$#" -ge 2 ] || { usage; die "--activate version gerektirir."; }
+            ACTIVATE_VERSION=$2
+            shift 2
+            ;;
+        --confirm-drained)
+            CONFIRM_DRAINED=true
+            shift
+            ;;
+        --readiness-timeout)
+            [ "$#" -ge 2 ] || { usage; die "--readiness-timeout deger gerektirir."; }
+            READINESS_TIMEOUT=$2
+            case "$READINESS_TIMEOUT" in *[!0-9]*|'') die "Readiness timeout pozitif integer olmalidir.";; esac
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --*)
+            usage
+            die "Bilinmeyen option: $1"
+            ;;
+        *)
+            [ -z "$ARTIFACT" ] || { usage; die "Yalniz bir artifact verilebilir."; }
+            ARTIFACT=$1
+            shift
+            ;;
+    esac
+done
+
+[ -n "$ARTIFACT" ] || [ -n "$ACTIVATE_VERSION" ] || { usage; exit 2; }
+[ -z "$ARTIFACT" ] || [ -z "$ACTIVATE_VERSION" ] || die "Artifact ve --activate birlikte kullanilamaz."
+[ "$PREPARE_ONLY" = false ] || [ -z "$ACTIVATE_VERSION" ] || die "--prepare-only, --activate ile kullanilamaz."
+
+require_root
+acquire_operation_lock
+mkdir -p "$RELEASES_DIR"
+
+if [ -n "$ARTIFACT" ]; then
+    prepare_release "$ARTIFACT"
+    if [ "$PREPARE_ONLY" = true ]; then
+        exit 0
+    fi
+    [ "$CONFIRM_DRAINED" = true ] || \
+        die "Activation icin node'un LB'den cikarildigini --confirm-drained ile onaylayin."
+    activate_release "$PREPARED_VERSION"
+    exit $?
+fi
+
+[ "$CONFIRM_DRAINED" = true ] || \
+    die "Activation icin node'un LB'den cikarildigini --confirm-drained ile onaylayin."
+activate_release "$ACTIVATE_VERSION"

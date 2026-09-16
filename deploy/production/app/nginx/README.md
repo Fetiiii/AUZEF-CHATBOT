@@ -5,6 +5,11 @@ application listener'ıdır. Varsayılan port `80`'dir. Port, BİDB'nin Load
 Balancer pool tanımıyla birlikte kararlaştırılmalı ve gerekirse iki tarafta da
 değiştirilmelidir.
 
+Listener bu dedicated APP VM'de `default_server` olarak tanımlıdır ve
+`127.0.0.1`, `localhost` ile bilinmeyen Host değerlerini kabul eder. Böylece
+operasyon araçları `/health/live` ve `/health/ready` probe'larını localhost
+Nginx üzerinden deterministik olarak yapar; Uvicorn yine doğrudan probelanmaz.
+
 Nginx statik Angular dosyalarını `/opt/auzef/current/frontend` altından sunar
 ve backend isteklerini yalnız `127.0.0.1:8000` adresine iletir. Uvicorn internete
 veya fiziksel Load Balancer'a doğrudan açılmaz.

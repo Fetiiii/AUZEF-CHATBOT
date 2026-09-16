@@ -1,0 +1,89 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -r "$SCRIPT_DIR/common.sh" ]; then
+    . "$SCRIPT_DIR/common.sh"
+elif [ -r /usr/local/sbin/auzef-common.sh ]; then
+    . /usr/local/sbin/auzef-common.sh
+else
+    printf '%s\n' 'ERROR: auzef-common.sh bulunamadi.' >&2
+    exit 1
+fi
+
+usage() {
+    printf '%s\n' \
+        'Usage: auzef-rollback [<version>] --confirm-drained [--readiness-timeout <seconds>]' >&2
+}
+
+TARGET_VERSION=""
+CONFIRM_DRAINED=false
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --confirm-drained)
+            CONFIRM_DRAINED=true
+            shift
+            ;;
+        --readiness-timeout)
+            [ "$#" -ge 2 ] || { usage; die "--readiness-timeout deger gerektirir."; }
+            READINESS_TIMEOUT=$2
+            case "$READINESS_TIMEOUT" in *[!0-9]*|'') die "Readiness timeout pozitif integer olmalidir.";; esac
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --*)
+            usage
+            die "Bilinmeyen option: $1"
+            ;;
+        *)
+            [ -z "$TARGET_VERSION" ] || { usage; die "Yalniz bir target version verilebilir."; }
+            TARGET_VERSION=$1
+            shift
+            ;;
+    esac
+done
+
+[ "$CONFIRM_DRAINED" = true ] || \
+    die "Rollback icin node'un LB'den cikarildigini --confirm-drained ile onaylayin."
+
+require_root
+acquire_operation_lock
+preflight_environment
+
+[ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ] || die "Rollback icin current release yok."
+original_release=$(resolve_release_link "$CURRENT_LINK") || \
+    die "current symlink broken veya release alani disinda."
+
+if [ -n "$TARGET_VERSION" ]; then
+    validate_version "$TARGET_VERSION" || die "Guvenli bir release version verin."
+    target_release=$RELEASES_DIR/$TARGET_VERSION
+else
+    [ -e "$PREVIOUS_LINK" ] || [ -L "$PREVIOUS_LINK" ] || die "previous release bulunamadi."
+    target_release=$(resolve_release_link "$PREVIOUS_LINK") || \
+        die "previous symlink broken veya release alani disinda."
+fi
+
+validate_prepared_release "$target_release"
+[ "$target_release" != "$original_release" ] || die "Rollback target zaten current release."
+
+log "ROLLBACK: current atomik olarak $(basename "$target_release") release'ine geciriliyor"
+atomic_symlink "$target_release" "$CURRENT_LINK" || die "Rollback current symlink guncellenemedi."
+
+if restart_backend && wait_for_readiness "$READINESS_TIMEOUT"; then
+    atomic_symlink "$original_release" "$PREVIOUS_LINK" || \
+        die "Rollback saglikli fakat previous symlink guncellenemedi."
+    log "ROLLBACK tamamlandi. DB/Qdrant shared initialization geri alinmadi."
+    exit 0
+fi
+
+log "Rollback target readiness basarisiz; baslangictaki current geri yukleniyor."
+atomic_symlink "$original_release" "$CURRENT_LINK" || \
+    die "CRITICAL: baslangictaki current symlink geri yuklenemedi."
+if restart_backend && wait_for_readiness "$READINESS_TIMEOUT"; then
+    die "Rollback target basarisiz; baslangictaki current release geri yuklendi."
+fi
+die "CRITICAL: rollback target ve baslangictaki current release readiness basarisiz."

@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -r "$SCRIPT_DIR/common.sh" ]; then
+    . "$SCRIPT_DIR/common.sh"
+elif [ -r /usr/local/sbin/auzef-common.sh ]; then
+    . /usr/local/sbin/auzef-common.sh
+else
+    printf 'ERROR: auzef-common.sh bulunamadi.\n' >&2
+    exit 1
+fi
+
+usage() {
+    printf 'Usage: auzef-init <version> --confirm-shared-change\n' >&2
+}
+
+VERSION=
+CONFIRMED=false
+for argument in "$@"; do
+    case "$argument" in
+        --confirm-shared-change) CONFIRMED=true ;;
+        --*) usage; die "Bilinmeyen option: $argument" ;;
+        *)
+            [ -z "$VERSION" ] || { usage; die "Yalniz bir version verilebilir."; }
+            VERSION=$argument
+            ;;
+    esac
+done
+
+[ -n "$VERSION" ] || { usage; die "Version zorunludur."; }
+validate_version "$VERSION" || die "Gecersiz release version: $VERSION"
+[ "$CONFIRMED" = true ] || \
+    die "Shared DB/Qdrant degisikligi icin --confirm-shared-change zorunludur."
+
+require_root
+acquire_operation_lock
+preflight_environment
+validate_prepared_release "$VERSION"
+
+unit=auzef-init@${VERSION}.service
+log "Shared DB/Qdrant initialization baslatiliyor: $unit"
+if ! "$SYSTEMCTL_CMD" start "$unit"; then
+    die "Shared initialization basarisiz. Ayrinti: auzef-logs --init $VERSION"
+fi
+log "Shared initialization tamamlandi. Bu release icin diger APP node'da tekrarlamayin."

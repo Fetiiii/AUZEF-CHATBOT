@@ -17,9 +17,17 @@ def test_production_runtime_layout_is_complete():
         "README.md",
         "app/install.sh",
         "app/auzef-backend.service",
+        "app/auzef-init@.service",
         "app/nginx/auzef-app.conf",
         "app/nginx/README.md",
         "config/backend.env.example",
+        "scripts/common.sh",
+        "scripts/auzef-deploy",
+        "scripts/auzef-init",
+        "scripts/auzef-rollback",
+        "scripts/auzef-status",
+        "scripts/auzef-health",
+        "scripts/auzef-logs",
     }
 
     assert all((PRODUCTION_ROOT / path).is_file() for path in expected)
@@ -45,9 +53,27 @@ def test_systemd_unit_uses_direct_loopback_uvicorn_runtime():
     assert "0.0.0.0" not in unit
 
 
+def test_shared_init_systemd_template_is_explicit_and_release_scoped():
+    unit = _read("app/auzef-init@.service")
+
+    assert "Type=oneshot" in unit
+    assert "User=auzef" in unit
+    assert "Group=auzef" in unit
+    assert "EnvironmentFile=/etc/auzef/backend.env" in unit
+    assert "WorkingDirectory=/opt/auzef/releases/%i/backend" in unit
+    assert (
+        "ExecStart=/opt/auzef/releases/%i/.venv/bin/python "
+        "-m scripts.init_system all"
+    ) in unit
+    assert "StandardOutput=journal" in unit
+    assert "StandardError=journal" in unit
+
+
 def test_nginx_uses_native_upstream_and_preserves_public_routes():
     nginx = _read("app/nginx/auzef-app.conf")
 
+    assert "listen 80 default_server;" in nginx
+    assert "server_name 127.0.0.1 localhost _;" in nginx
     assert "backend:8000" not in nginx
     assert "proxy_pass http://127.0.0.1:8000" in nginx
     assert "root /opt/auzef/current/frontend;" in nginx
@@ -104,7 +130,8 @@ def test_installer_is_valid_shell_and_does_not_deploy_or_start_services():
     )
 
     assert syntax.returncode == 0, syntax.stderr
-    assert "command_name in systemctl nginx python3.11" in installer
+    for prerequisite in ("systemctl", "nginx", "python3.11", "curl", "flock", "sha256sum"):
+        assert prerequisite in installer
     assert 'if ! getent group "$APP_GROUP"' in installer
     assert 'if ! id -u "$APP_USER"' in installer
     assert 'groupadd --system "$APP_GROUP"' in installer
@@ -112,11 +139,23 @@ def test_installer_is_valid_shell_and_does_not_deploy_or_start_services():
     assert '"$APP_ROOT/releases"' in installer
     assert '"$CACHE_DIR"' in installer
     assert '"$FLAGS_DIR"' in installer
+    assert '"$LOCK_DIR"' in installer
     assert '-m 0750 "$CONFIG_DIR"' in installer
     assert 'if [ -e "$BACKEND_ENV" ]; then' in installer
     assert 'chmod 0640 "$BACKEND_ENV"' in installer
     assert '"$ENV_EXAMPLE_TARGET"' in installer
     assert "install_if_absent" in installer
+    assert '"$INIT_UNIT_SOURCE" "$INIT_SYSTEMD_TARGET"' in installer
+    assert '"$OPERATIONS_DIR/common.sh" "$SBIN_DIR/auzef-common.sh"' in installer
+    for command in (
+        "auzef-deploy",
+        "auzef-init",
+        "auzef-rollback",
+        "auzef-status",
+        "auzef-health",
+        "auzef-logs",
+    ):
+        assert command in installer
     assert "systemctl daemon-reload" in installer
     assert "systemctl start" not in installer
     assert "systemctl restart" not in installer

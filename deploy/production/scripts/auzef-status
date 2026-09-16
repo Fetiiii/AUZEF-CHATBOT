@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -r "$SCRIPT_DIR/common.sh" ]; then
+    . "$SCRIPT_DIR/common.sh"
+elif [ -r /usr/local/sbin/auzef-common.sh ]; then
+    . /usr/local/sbin/auzef-common.sh
+else
+    printf 'ERROR: auzef-common.sh bulunamadi.\n' >&2
+    exit 1
+fi
+
+[ "$#" -eq 0 ] || die "Usage: auzef-status"
+
+show_link() {
+    label=$1
+    link=$2
+    if [ -L "$link" ]; then
+        if resolved=$(resolve_release_link "$link"); then
+            version=$(sed -n '1p' "$resolved/VERSION" 2>/dev/null || true)
+            [ -n "$version" ] || version=unknown
+            printf '%s: %s (%s)\n' "$label" "$version" "$resolved"
+        else
+            printf '%s: BROKEN symlink -> %s\n' "$label" "$(readlink "$link" 2>/dev/null || printf '?')"
+        fi
+    elif [ -e "$link" ]; then
+        printf '%s: INVALID (symlink degil)\n' "$label"
+    else
+        printf '%s: yok\n' "$label"
+    fi
+}
+
+service_state() {
+    unit=$1
+    active=$("$SYSTEMCTL_CMD" is-active "$unit" 2>/dev/null || true)
+    enabled=$("$SYSTEMCTL_CMD" is-enabled "$unit" 2>/dev/null || true)
+    [ -n "$active" ] || active=unknown
+    [ -n "$enabled" ] || enabled=unknown
+    printf '%s: %s, %s\n' "$unit" "$active" "$enabled"
+}
+
+show_link current "$CURRENT_LINK"
+show_link previous "$PREVIOUS_LINK"
+service_state auzef-backend.service
+service_state nginx.service
+
+if [ -e "$STATE_ROOT/flags/maintenance.flag" ]; then
+    printf 'local emergency maintenance.flag: VAR\n'
+else
+    printf 'local emergency maintenance.flag: yok\n'
+fi
+
+printf 'prepared releases:\n'
+found=false
+if [ -d "$RELEASES_DIR" ]; then
+    for release_dir in "$RELEASES_DIR"/*; do
+        [ -d "$release_dir" ] || continue
+        found=true
+        printf '  - %s\n' "$(basename "$release_dir")"
+    done
+fi
+[ "$found" = true ] || printf '  (yok)\n'
