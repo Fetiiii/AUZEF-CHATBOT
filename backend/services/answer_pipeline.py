@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from core.database import AcademicCalendar
 from services.calendar_utils import format_calendar_answer, match_calendar_entry
 from core.deps import get_llm_provider, is_llm_enabled, meili_search_safe, QDRANT_PROVIDER
+from services.routing_guards import RoutingGuardPolicy
 
 logger = logging.getLogger("auzef")
 
@@ -195,7 +196,10 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
 
 
 def _build_candidate_pool(
-    query: str, calendar_entries: list, conversation_context: tuple[dict, ...] = ()
+    query: str,
+    calendar_entries: list,
+    conversation_context: tuple[dict, ...] = (),
+    routing_policy: RoutingGuardPolicy | None = None,
 ) -> list:
     """Bir (alt) soru için LLM seçiciye verilecek aday havuzunu kurar:
     Qdrant (semantik) + Meili (anahtar kelime) QnA adayları + TÜM takvim
@@ -277,6 +281,8 @@ def _build_candidate_pool(
 
     seen = set()
     for candidate in sorted(raw, key=_candidate_sort_key):
+        if routing_policy is not None and not routing_policy.selector_allows(candidate):
+            continue
         identity = _candidate_identity(candidate)
         if identity in seen or not candidate.get("answer"):
             continue
@@ -296,19 +302,28 @@ def _select_from_pool(
     calendar_entries: list,
     prov,
     conversation_context: tuple[dict, ...] = (),
+    routing_policy: RoutingGuardPolicy | None = None,
 ) -> tuple:
     """Bir (alt) soru için aday havuzunu kurup LLM'e birebir seçtirir.
     (answer_or_None, reached_llm) döner. reached_llm=False YALNIZCA havuz
     boşsa olur (retrieval çöktü ve takvim de yoksa) — bu durumda LLM hiç
     çağrılmamıştır. ``prov.ask`` hata yükseltebilir (çağıran yakalar)."""
-    candidates = _build_candidate_pool(query, calendar_entries, conversation_context)
+    candidates = _build_candidate_pool(
+        query,
+        calendar_entries,
+        conversation_context,
+        routing_policy,
+    )
     if not candidates:
         return None, False
     return prov.ask(_selector_question(query, conversation_context), candidates), True
 
 
 def _llm_answer(
-    query: str, db: Session, conversation_context: tuple[dict, ...] = ()
+    query: str,
+    db: Session,
+    conversation_context: tuple[dict, ...] = (),
+    routing_policy: RoutingGuardPolicy | None = None,
 ) -> Optional[str]:
     """Ana yol: soruyu alt sorulara böler, her alt soru için birleşik aday
     havuzundan (QnA + takvim) birebir cevap seçtirir, cevapları birleştirir.
@@ -332,7 +347,12 @@ def _llm_answer(
     try:
         split_future = ex.submit(prov.split_questions, query)
         single_future = ex.submit(
-            _select_from_pool, query, calendar_entries, prov, conversation_context
+            _select_from_pool,
+            query,
+            calendar_entries,
+            prov,
+            conversation_context,
+            routing_policy,
         )
 
         sub_questions = split_future.result() or [query]
@@ -357,7 +377,11 @@ def _llm_answer(
     for sub_q in sub_questions:
         try:
             ans, reached = _select_from_pool(
-                sub_q, calendar_entries, prov, conversation_context
+                sub_q,
+                calendar_entries,
+                prov,
+                conversation_context,
+                routing_policy,
             )
             if reached:
                 any_success = True
@@ -373,7 +397,12 @@ def _llm_answer(
     return None
 
 
-def _fallback_answer(query: str, db: Session, use_calendar: bool = True) -> tuple:
+def _fallback_answer(
+    query: str,
+    db: Session,
+    use_calendar: bool = True,
+    routing_policy: RoutingGuardPolicy | None = None,
+) -> tuple:
     """Eşik tabanlı yedek zincir. (answer, source) döner; bulunamazsa (None, "none").
 
     ``use_calendar``: kelime tabanlı takvim kapısını çalıştır. Yalnızca LLM
@@ -386,12 +415,19 @@ def _fallback_answer(query: str, db: Session, use_calendar: bool = True) -> tupl
         if cal:
             return cal, "academic_calendar"
 
-    hits = meili_search_safe(query, limit=3)
+    policy = routing_policy or RoutingGuardPolicy.empty()
+    hits = [
+        hit for hit in meili_search_safe(query, limit=3)
+        if policy.fallback_allows(hit)
+    ]
     if hits and hits[0]["score"] >= MEILI_THERESHOLD:
         return hits[0]["answer"], "meilisearch"
 
     try:
-        qhits = QDRANT_PROVIDER.search(query, limit=5)
+        qhits = [
+            hit for hit in QDRANT_PROVIDER.search(query, limit=5)
+            if policy.fallback_allows(hit)
+        ]
         if qhits and qhits[0]["score"] > QDRANT_THERESHOLD:
             return qhits[0]["answer"], "qdrant_vector"
     except Exception:
@@ -409,15 +445,33 @@ def answer_question(
     - LLM açık ama "uygun yok" dedi   → yüksek-güven eşik hit'ine bak, ama takvim
       kelime kapısını AÇMA (takvim zaten havuzdaydı, LLM reddetti).
     - LLM kapalı ya da hata verdi     → tam eski eşik davranışı (takvim kapısı dahil)."""
+    try:
+        routing_policy = RoutingGuardPolicy.load(db)
+    except Exception:
+        # Guard deposu okunamazken kontrollü bir QnA'yı yanlışlıkla guardsız
+        # döndürmektense tüm QnA yollarını fail-closed kapat.
+        logger.exception("Routing guard deposu okunamadı; QnA cevabı bloke edildi")
+        return None, "none"
+
     if is_llm_enabled(db):
         try:
-            ans = _llm_answer(query, db, conversation_context)
+            ans = _llm_answer(query, db, conversation_context, routing_policy)
             if ans:
                 return ans, "llm"
             # LLM çalıştı ama uygun aday yok → takvim kapısı olmadan eşik yedeği.
-            return _fallback_answer(query, db, use_calendar=False)
+            return _fallback_answer(
+                query,
+                db,
+                use_calendar=False,
+                routing_policy=routing_policy,
+            )
         except Exception as e:
             logger.error(f"LLM ana yol hatası (yedeğe düşülüyor): {e}")
 
     # LLM kapalı ya da hata → tam eski davranış.
-    return _fallback_answer(query, db, use_calendar=True)
+    return _fallback_answer(
+        query,
+        db,
+        use_calendar=True,
+        routing_policy=routing_policy,
+    )

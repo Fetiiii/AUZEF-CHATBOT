@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timezone
-from sqlalchemy import Column, BigInteger, Integer, Text, SmallInteger, DateTime, ForeignKey, String, func, text
+from sqlalchemy import Column, BigInteger, Integer, Text, SmallInteger, Date, DateTime, ForeignKey, String, func, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker, relationship
 from sqlalchemy import create_engine
@@ -76,6 +76,28 @@ class QnAQuery(Base):
     created_at = Column(DateTime, server_default=func.now())      
 
     qna = relationship("QnA", back_populates="queries")         
+
+
+class QnARoutingGuard(Base):
+    """Dönemsel/değişken QnA'ların cevap yolunu fail-closed sınırlar."""
+
+    __tablename__ = "qna_routing_guards"
+
+    qna_id = Column(
+        BigInteger,
+        ForeignKey("qna.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    guard_ref = Column(String(80), nullable=False, unique=True)
+    exact_bypass_enabled = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    selector_mode = Column(String(40), nullable=False, default="semantic_selector_only", server_default="semantic_selector_only")
+    content_mode = Column(String(80), nullable=False)
+    valid_from = Column(Date, nullable=True)
+    valid_until = Column(Date, nullable=True)
+    on_expiry = Column(String(80), nullable=False)
+    source_of_truth = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 class Tag(Base):
     __tablename__ = "tags"
@@ -254,6 +276,7 @@ class AcademicCalendar(Base):
 ADMIN_MODELS = (
     QnA,
     QnAQuery,
+    QnARoutingGuard,
     Tag,
     QnATag,
     SystemConfig,

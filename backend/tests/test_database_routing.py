@@ -12,6 +12,7 @@ from sqlalchemy.exc import UnboundExecutionError
 ADMIN_TABLE_NAMES = {
     "qna",
     "qna_queries",
+    "qna_routing_guards",
     "tags",
     "qna_tags",
     "system_config",
@@ -155,6 +156,7 @@ def test_all_owned_models_persist_to_their_physical_database():
         ConversationMessage,
         QnA,
         QnAQuery,
+        QnARoutingGuard,
         QnATag,
         QueryLog,
         SCRateLimit,
@@ -203,6 +205,18 @@ def test_all_owned_models_persist_to_their_physical_database():
             user,
         ])
         db.commit()
+
+        db.add(QnARoutingGuard(
+            qna_id=qna.id,
+            guard_ref="GUARD-ROUTING-TEST",
+            exact_bypass_enabled=0,
+            selector_mode="semantic_selector_only",
+            content_mode="test",
+            on_expiry="block",
+            source_of_truth="pytest",
+        ))
+        db.commit()
+        assert db.query(QnARoutingGuard).count() == 1
 
         # Aynı request/session bağlamında admin okuması ve chat yazması.
         assert db.query(SystemConfig).filter_by(key="ROUTING_TEST").one().value == "admin"
