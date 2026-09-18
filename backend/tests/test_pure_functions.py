@@ -23,20 +23,6 @@ def test_parse_selection_accepts_noisy_numbers():
     assert p._parse_selection("cevap yok", ctx) is None
 
 
-def test_regex_split_fallback():
-    assert llm_provider._regex_split("") == []
-    assert llm_provider._regex_split("tek soru") == ["tek soru"]
-    parts = llm_provider._regex_split("vize ne zaman? final ne zaman?")
-    assert parts == ["vize ne zaman", "final ne zaman"]
-
-
-def test_parse_split_strips_bullets_and_dedupes():
-    p = _P()
-    raw = "1. Vize ne zaman?\n- Vize ne zaman?\n* Final ne zaman?"
-    assert p._parse_split(raw, "orijinal") == ["Vize ne zaman?", "Final ne zaman?"]
-    assert p._parse_split("", "orijinal") == ["orijinal"]
-
-
 def test_calendar_matching():
     class E:
         def __init__(self, period, event):
@@ -77,8 +63,8 @@ def test_is_date_query():
     assert not is_date_query("şifremi unuttum")
 
 
-def test_contextual_retrieval_uses_only_last_two_user_messages():
-    from services.answer_pipeline import _contextual_retrieval_query
+def test_intent_analyzer_context_uses_only_last_two_user_messages():
+    from services.answer_pipeline import _previous_user_turns
 
     context = (
         {"role": "user", "content": "ilk kullanıcı mesajı"},
@@ -86,26 +72,8 @@ def test_contextual_retrieval_uses_only_last_two_user_messages():
         {"role": "user", "content": "ikinci kullanıcı mesajı"},
         {"role": "user", "content": "üçüncü kullanıcı mesajı"},
     )
-    result = _contextual_retrieval_query("güncel mesaj", context)
-    assert result == "ikinci kullanıcı mesajı\nüçüncü kullanıcı mesajı\ngüncel mesaj"
-    assert "bot cevabı" not in result
-    assert "ilk kullanıcı" not in result
-
-
-def test_selector_question_separates_history_from_current_message():
-    from services.answer_pipeline import _selector_question
-
-    result = _selector_question(
-        "Fakat şu an dört ders görünüyor",
-        (
-            {"role": "user", "content": "Yedi ders görünüyordu"},
-            {"role": "bot", "content": "Derslerinizi OBS'den görebilirsiniz"},
-        ),
-    )
-    assert "Önceki konuşma" in result
-    assert "Öğrenci: Yedi ders görünüyordu" in result
-    assert "Asistan: Derslerinizi" in result
-    assert result.endswith("Fakat şu an dört ders görünüyor")
+    result = _previous_user_turns(context)
+    assert result == ("ikinci kullanıcı mesajı", "üçüncü kullanıcı mesajı")
 
 
 def test_candidate_pool_deduplicates_by_qna_id_and_has_stable_order(monkeypatch):
@@ -159,32 +127,6 @@ def test_candidate_pool_deduplicates_by_qna_id_and_has_stable_order(monkeypatch)
     assert first == second
     assert [candidate["qna_id"] for candidate in first] == [1, 2, 3, 4]
     assert sum(candidate["answer"] == "ortak" for candidate in first) == 2
-
-
-def test_current_query_candidates_precede_contextual_candidates(monkeypatch):
-    from services import answer_pipeline
-
-    class Qdrant:
-        def search(self, query, limit):
-            del limit
-            if "önceki" in query:
-                return [{
-                    "id": 1, "qna_id": 1, "question": "context",
-                    "answer": "context", "score": 1.0, "source": "qdrant",
-                }]
-            return [{
-                "id": 9, "qna_id": 9, "question": "current",
-                "answer": "current", "score": 0.1, "source": "qdrant",
-            }]
-
-    monkeypatch.setattr(answer_pipeline, "QDRANT_PROVIDER", Qdrant())
-    monkeypatch.setattr(answer_pipeline, "meili_search_safe", lambda _q, limit: [])
-
-    pool = answer_pipeline._build_candidate_pool(
-        "güncel", [], ({"role": "user", "content": "önceki"},)
-    )
-
-    assert [candidate["qna_id"] for candidate in pool] == [9, 1]
 
 
 def test_calendar_candidates_are_sorted_and_deduplicated(monkeypatch):

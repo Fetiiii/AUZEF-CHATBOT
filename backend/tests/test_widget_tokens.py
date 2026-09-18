@@ -51,7 +51,6 @@ def test_context_enabled_passes_only_owned_previous_messages(client, monkeypatch
     assert captured[1][0] == "Fakat şimdi farklı"
     assert captured[1][1] == (
         {"role": "user", "content": "İlk soru"},
-        {"role": "bot", "content": "cevap-1"},
     )
     assert second["conversation_id"] == first["conversation_id"]
 
@@ -76,7 +75,7 @@ def test_context_applies_message_and_total_character_caps(db, monkeypatch):
     db.commit()
 
     assert chat._load_recent_context(db, conv.id) == (
-        {"role": "bot", "content": "12345"},
+        {"role": "user", "content": "abcde"},
         {"role": "user", "content": "ABCDE"},
     )
 

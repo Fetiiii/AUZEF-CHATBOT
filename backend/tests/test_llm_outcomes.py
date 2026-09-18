@@ -63,13 +63,18 @@ def test_provider_exception_and_timeout_are_distinct():
     assert "secret provider detail" not in str(failed_result.invocation)
 
 
-def test_splitter_error_keeps_phase0_regex_fallback_and_status():
+def test_intent_analyzer_error_falls_back_to_lossless_single_and_keeps_status():
     provider = ScriptedProvider(error=RuntimeError("down"))
-    result = provider.split_questions_with_result("vize ne zaman? final ne zaman?")
-    assert result.subquestions == ["vize ne zaman", "final ne zaman"]
+    current = "vize ne zaman? final ne zaman?"
+    result = provider.analyze_intents_with_result(current)
+    assert result.analysis.intent_count == 1
+    assert result.analysis.intents[0].source_text == current
+    assert result.analysis.intents[0].resolved_text == current
+    assert result.analysis.intents[0].context_used is False
+    assert result.analysis.intents[0].calendar_relevant is False
     assert result.status is LLMOutcomeStatus.MODEL_ERROR
     assert result.parse_status is LLMParseStatus.FALLBACK
-    assert result.fallback_used is True
+    assert result.fallback_to_single is True
 
 
 def test_openai_adapter_preserves_metadata_and_omits_unsupported_optional_settings(monkeypatch):

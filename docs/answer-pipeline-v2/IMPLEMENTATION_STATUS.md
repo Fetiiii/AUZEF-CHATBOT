@@ -13,7 +13,7 @@ Phase 1 — Observability + Model Config Foundation
 STATUS: PASS
 
 Phase 2 — Intent Analyzer
-STATUS: NOT_STARTED
+STATUS: PASS
 
 Phase 3 — Calendar V2
 STATUS: NOT_STARTED
@@ -62,3 +62,24 @@ STATUS: NOT_STARTED
 - [x] No Phase 2 implementation was started.
 
 Detailed evidence: [`PHASE_1_REPORT.md`](PHASE_1_REPORT.md).
+
+## Phase 2 acceptance record
+
+- [x] The V1 splitter is replaced on the production path by Intent Analyzer V2.
+- [x] SINGLE is the ambiguity default; MULTI is limited to two independent
+      answer needs.
+- [x] Strict typed `source_text`, `normalized_text`, `resolved_text`,
+      `context_used`, and `calendar_relevant` output is validated.
+- [x] Model/parse/three-plus failures preserve the raw current turn as SINGLE;
+      regex splitting is removed.
+- [x] The analyzer receives at most two previous owned user turns and no bot
+      messages; resolved intent is the only downstream query.
+- [x] The speculative/discarded selector call is removed; call counts are one
+      analyzer plus one selector per intent.
+- [x] Decision trace schema v2 records analyzer config, status, safe per-intent
+      facts, latency, and available usage without raw user content.
+- [x] Calendar V2, Selector V2, semantic-NONE redesign, and degraded-mode
+      redesign were not started.
+- [x] Targeted tests pass and the full suite has no new regression.
+
+Detailed evidence: [`PHASE_2_REPORT.md`](PHASE_2_REPORT.md).

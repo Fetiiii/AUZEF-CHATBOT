@@ -1,15 +1,15 @@
-"""Cevap üretim pipeline'ı: LLM seçici ana yol + eşik tabanlı yedek zincir.
+"""Cevap üretim pipeline'ı: Intent Analyzer + LLM selector + V1 fallback.
 
 Tasarım: Takvim artık bir "ön kapı" değil, aday havuzundaki bir kayıttır.
-LLM açıkken her soru (alt sorulara bölünüp) QnA + takvim adaylarından oluşan
-TEK bir havuzdan birebir (verbatim) seçtirilir; LLM asla cevap üretmez.
+LLM açıkken current turn 1 veya en fazla 2 resolved intent'e dönüştürülür;
+her intent QnA + takvim adaylarından oluşan tek havuzdan birebir seçtirilir.
+LLM asla son kullanıcı cevabı üretmez.
 LLM kapalı/hatalı/seçim yoksa eşik tabanlı yola (takvim kelime eşleşmesi →
 Meili ≥0.90 → Qdrant >0.75) düşülür.
 """
 import math
 import os
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Optional
 
@@ -58,34 +58,13 @@ class LLMPipelineError(RuntimeError):
         self.status = status
 
 
-def _contextual_retrieval_query(query: str, conversation_context: tuple[dict, ...]) -> str:
-    """Son iki kullanıcı mesajını güncel retrieval sorgusuna ekler."""
-    previous_user_messages = [
+def _previous_user_turns(conversation_context: tuple[dict, ...]) -> tuple[str, ...]:
+    """Return only the last two previous user turns for Intent Analyzer V2."""
+    return tuple([
         item["content"].strip()
         for item in conversation_context
         if item.get("role") == "user" and item.get("content", "").strip()
-    ][-2:]
-    if not previous_user_messages:
-        return query
-    return "\n".join([*previous_user_messages, query])
-
-
-def _selector_question(query: str, conversation_context: tuple[dict, ...]) -> str:
-    """Geçmiş ile güncel soruyu seçici için açıkça ayırır."""
-    if not conversation_context:
-        return query
-    role_labels = {"user": "Öğrenci", "bot": "Asistan"}
-    history = "\n".join(
-        f"{role_labels.get(item.get('role'), 'Mesaj')}: {item.get('content', '').strip()}"
-        for item in conversation_context
-        if item.get("content", "").strip()
-    )
-    if not history:
-        return query
-    return (
-        "Önceki konuşma (yalnız güncel mesajı anlamlandırmak için):\n"
-        f"{history}\n\nGüncel öğrenci mesajı (kararın ana girdisi):\n{query}"
-    )
+    ][-2:])
 
 
 # Birbirine çok yakın retrieval skorları sağlayıcı/float ayrıntıları yüzünden
@@ -234,7 +213,6 @@ def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
 def _build_candidate_pool_result(
     query: str,
     calendar_entries: list,
-    conversation_context: tuple[dict, ...] = (),
     routing_policy: RoutingGuardPolicy | None = None,
 ) -> CandidatePoolBuild:
     """Bir (alt) soru için LLM seçiciye verilecek aday havuzunu kurar:
@@ -296,8 +274,6 @@ def _build_candidate_pool_result(
     raw = []
     qdrant_hits = []
     meili_hits = []
-    context_qdrant_hits = []
-    context_meili_hits = []
     try:
         qdrant_hits = QDRANT_PROVIDER.search(query, limit=24)
         raw.extend(
@@ -307,27 +283,6 @@ def _build_candidate_pool_result(
         pass
     meili_hits = meili_search_safe(query, limit=5)
     raw.extend(_decorate_hits(meili_hits, stage=0, provider_priority=1))
-    contextual_query = _contextual_retrieval_query(query, conversation_context)
-    if contextual_query != query:
-        try:
-            context_qdrant_hits = QDRANT_PROVIDER.search(contextual_query, limit=12)
-            raw.extend(
-                _decorate_hits(
-                    context_qdrant_hits,
-                    stage=1,
-                    provider_priority=0,
-                )
-            )
-        except Exception:
-            pass
-        context_meili_hits = meili_search_safe(contextual_query, limit=3)
-        raw.extend(
-            _decorate_hits(
-                context_meili_hits,
-                stage=1,
-                provider_priority=1,
-            )
-        )
 
     seen = set()
     eligible_after_guard_count = 0
@@ -368,8 +323,8 @@ def _build_candidate_pool_result(
             "calendar_candidate_count": len(seen_calendar),
             "qdrant_candidate_count": len(qdrant_hits),
             "meili_candidate_count": len(meili_hits),
-            "context_qdrant_candidate_count": len(context_qdrant_hits),
-            "context_meili_candidate_count": len(context_meili_hits),
+            "context_qdrant_candidate_count": 0,
+            "context_meili_candidate_count": 0,
             "deduped_candidate_count": len(pool),
             "eligible_after_guard_count": eligible_after_guard_count + len(seen_calendar),
             "guard_rejections": guard_rejections,
@@ -382,12 +337,11 @@ def _build_candidate_pool_result(
 def _build_candidate_pool(
     query: str,
     calendar_entries: list,
-    conversation_context: tuple[dict, ...] = (),
     routing_policy: RoutingGuardPolicy | None = None,
 ) -> list:
     """Compatibility wrapper retaining the Phase 0 candidate-list contract."""
     return _build_candidate_pool_result(
-        query, calendar_entries, conversation_context, routing_policy
+        query, calendar_entries, routing_policy
     ).candidates
 
 
@@ -395,7 +349,6 @@ def _select_from_pool(
     query: str,
     calendar_entries: list,
     prov,
-    conversation_context: tuple[dict, ...] = (),
     routing_policy: RoutingGuardPolicy | None = None,
     trace: DecisionTrace | None = None,
     trace_purpose: str = "selector",
@@ -405,7 +358,6 @@ def _select_from_pool(
     build = _build_candidate_pool_result(
         query,
         calendar_entries,
-        conversation_context,
         routing_policy,
     )
     candidates = build.candidates
@@ -415,12 +367,10 @@ def _select_from_pool(
     if not candidates:
         return PoolSelection(None, False, 0, [])
     if hasattr(prov, "ask_with_result"):
-        result = prov.ask_with_result(
-            _selector_question(query, conversation_context), candidates
-        )
+        result = prov.ask_with_result(query, candidates)
     else:
         # Compatibility for repository-local/custom V1 provider doubles.
-        answer = prov.ask(_selector_question(query, conversation_context), candidates)
+        answer = prov.ask(query, candidates)
         selected_index = next(
             (i for i, item in enumerate(candidates) if item.get("answer") == answer),
             None,
@@ -458,19 +408,11 @@ def _llm_answer(
     routing_policy: RoutingGuardPolicy | None = None,
     trace: DecisionTrace | None = None,
 ) -> LLMAnswerResult:
-    """Ana yol: soruyu alt sorulara böler, her alt soru için birleşik aday
-    havuzundan (QnA + takvim) birebir cevap seçtirir, cevapları birleştirir.
+    """Analyze the current turn, then select once for each resolved intent.
 
-    Latency: 'soruyu böl' (split) ile 'tek soru olsaydı seç' (spekülatif seçim)
-    AYNI ANDA (paralel) çalıştırılır. Soru tek çıkarsa spekülatif seçim sonucu
-    kullanılır — iki LLM çağrısı ardışık değil yan yana olduğundan tek soru
-    ~yarı sürede döner. Çoklu çıkarsa spekülatif sonuç atılır ve her alt soru
-    için ayrı seçim yapılır (çoklu-soru doğruluğu korunur, split her zaman
-    çalıştığı için noktalama olmayan çoklu sorular da yakalanır).
-
-    Dönüş typed cevap + outcome + seçilen QnA kimlikleridir. LLM'e HİÇ
-    ulaşılamazsa typed pipeline hatası yükseltir; dış fallback davranışı
-    Phase 0 ile aynı kalır."""
+    Context is consumed only by the analyzer. Retrieval and selector receive the
+    resolved intent, never the full conversation. Existing candidate, selector,
+    composition, and fallback semantics remain unchanged."""
     calendar_entries = db.query(AcademicCalendar).all()
     prov = get_llm_provider(db)
     if prov is None:
@@ -478,88 +420,32 @@ def _llm_answer(
     if trace is not None:
         trace.set_llm(enabled=True, configs=getattr(prov, "configs", None))
 
-    ex = ThreadPoolExecutor(max_workers=2)
-    try:
-        split_future = ex.submit(
-            prov.split_questions_with_result
-            if hasattr(prov, "split_questions_with_result")
-            else prov.split_questions,
-            query,
-        )
-        single_future = ex.submit(
-            _select_from_pool,
-            query,
-            calendar_entries,
-            prov,
-            conversation_context,
-            routing_policy,
-            trace,
-            "speculative_full_query",
+    previous_user_turns = _previous_user_turns(conversation_context)
+    analysis_result = prov.analyze_intents_with_result(query, previous_user_turns)
+    if trace is not None:
+        analyzer_config = prov.effective_config(LLMCapability.INTENT_ANALYZER)
+        trace.record_intent_analyzer(
+            analysis_result,
+            analyzer_config.to_dict(),
+            config_fingerprint=analyzer_config.fingerprint,
+            current_input_length=len(query),
+            previous_user_context_count=len(previous_user_turns),
         )
 
-        split_result = split_future.result()
-        if hasattr(split_result, "subquestions"):
-            sub_questions = split_result.subquestions or [query]
-            if trace is not None:
-                config = prov.effective_config(LLMCapability.INTENT_ANALYZER).to_dict()
-                trace.record_splitter(split_result, config, input_length=len(query))
-        else:
-            sub_questions = split_result or [query]
-
-        if len(sub_questions) <= 1:
-            # Tek soru: paralel yürüyen spekülatif seçimi kullan.
-            try:
-                selection = single_future.result()
-            except Exception:
-                raise RuntimeError("LLM erişilemedi (tek soru seçimi)")
-            if not selection.reached_llm:
-                raise RuntimeError("aday havuzu boş (retrieval)")
-            result = selection.result
-            if result is None:
-                raise RuntimeError("LLM seçim sonucu yok")
-            if trace is not None:
-                trace.record_selector(
-                    result,
-                    config=prov.effective_config(LLMCapability.SELECTOR).to_dict(),
-                    candidate_count=selection.candidate_count,
-                    candidate_qna_ids=selection.candidate_qna_ids,
-                    purpose="speculative_full_query",
-                    used_in_final=True,
-                )
-            if result.status in (LLMOutcomeStatus.MODEL_ERROR, LLMOutcomeStatus.TIMEOUT):
-                raise LLMPipelineError(
-                    "LLM erişilemedi (tek soru seçimi)", result.status
-                )
-            return LLMAnswerResult(
-                answer=result.answer,
-                status=result.status,
-                selected_qna_ids=(
-                    [result.selected_qna_id]
-                    if result.selected_qna_id is not None else []
-                ),
-                answer_count=1 if result.answer else 0,
-            )
-    finally:
-        # Çoklu soruda spekülatif seçim boşa gider; arka planda bitmesine izin
-        # ver, sonucunu bekleme (wait=False).
-        ex.shutdown(wait=False)
-
-    # Çoklu soru: her alt soru için ayrı seçim (spekülatif sonuç atıldı).
     answers = []
     selected_qna_ids = []
     any_success = False  # en az bir alt soruda LLM'e ULAŞILDI mı?
     observed_non_success = []
     observed_errors = []
-    for sub_q in sub_questions:
+    for position, intent in enumerate(analysis_result.analysis.intents, start=1):
         try:
             selection = _select_from_pool(
-                sub_q,
+                intent.resolved_text,
                 calendar_entries,
                 prov,
-                conversation_context,
                 routing_policy,
                 trace,
-                "subquestion",
+                f"intent_{position}",
             )
         except Exception:
             continue
@@ -572,7 +458,7 @@ def _llm_answer(
                 config=prov.effective_config(LLMCapability.SELECTOR).to_dict(),
                 candidate_count=selection.candidate_count,
                 candidate_qna_ids=selection.candidate_qna_ids,
-                purpose="subquestion",
+                purpose=f"intent_{position}",
                 used_in_final=result.answer is not None,
             )
         if result.status in (LLMOutcomeStatus.MODEL_ERROR, LLMOutcomeStatus.TIMEOUT):
@@ -596,7 +482,7 @@ def _llm_answer(
             if LLMOutcomeStatus.TIMEOUT in observed_errors
             else LLMOutcomeStatus.MODEL_ERROR
         )
-        raise LLMPipelineError("LLM tüm alt sorularda erişilemedi", status)
+        raise LLMPipelineError("LLM tüm intent'lerde erişilemedi", status)
     aggregate_status = (
         LLMOutcomeStatus.SEMANTIC_NONE
         if LLMOutcomeStatus.SEMANTIC_NONE in observed_non_success

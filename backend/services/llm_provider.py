@@ -16,39 +16,22 @@ from services.llm_config import (
     default_model,
     resolve_llm_config_set,
 )
+from services.intent_analyzer import (
+    build_intent_analyzer_prompt,
+    parse_intent_analysis,
+    safe_single_intent,
+)
 from services.llm_types import (
+    IntentAnalysis,
+    IntentAnalyzerResult,
     LLMInvocationResult,
     LLMOutcomeStatus,
     LLMParseStatus,
     LLMResponseMetadata,
     SelectorResult,
-    SplitterResult,
 )
 
 load_dotenv()
-
-
-def _regex_split(message: str) -> list:
-    """LLM ile ayırma başarısız olursa kullanılan basit yedek ayırıcı.
-
-    Yalnızca '?' ve satır sonu gibi belirgin ayraçlara bakar; noktalama
-    olmayan durumlarda tek soru olarak döndürür.
-    """
-    message = message.strip()
-    if not message:
-        return []
-    parts = re.split(r'[?\n]+', message)
-    questions = [p.strip() for p in parts if len(p.strip()) >= 3]
-    if len(questions) <= 1:
-        return [message]
-    seen = set()
-    unique = []
-    for q in questions:
-        key = q.lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(q)
-    return unique
 
 
 class BaseLLMProvider(ABC):
@@ -143,74 +126,44 @@ class BaseLLMProvider(ABC):
             invocation=invocation,
         )
 
-    def _build_split_prompt(self, message: str) -> tuple:
-        system = (
-            "Sen bir soru ayırıcı asistansın. "
-            "Kullanıcının mesajındaki birbirinden farklı soruları ayırırsın. "
-            "Noktalama işareti (soru işareti, virgül vb.) hiç olmasa bile "
-            "farklı konulardaki soruları tespit edersin. "
-            "Soruları asla cevaplamazsın, sadece ayırırsın."
-        )
-        user = (
-            f"Kullanıcı mesajı: {message}\n\n"
-            "Mesajdaki her farklı soruyu ayrı bir satıra yaz. "
-            "Her soruyu, kendi başına anlaşılır ve eksiksiz olacak şekilde yaz. "
-            "Mesajda tek bir soru varsa sadece o soruyu tek satır olarak yaz. "
-            "Numaralandırma, açıklama veya başka hiçbir şey ekleme."
-        )
-        return system, user
+    def analyze_intents(
+        self, message: str, previous_user_turns: list[str] | tuple[str, ...] = ()
+    ) -> IntentAnalysis:
+        return self.analyze_intents_with_result(message, previous_user_turns).analysis
 
-    def _parse_split(self, raw: str, original: str) -> list:
-        if not raw:
-            return [original]
-        lines = []
-        for line in raw.splitlines():
-            # baştaki madde/numara işaretlerini temizle ("1. ", "- ", "* ", "• ")
-            line = re.sub(r'^\s*(?:[-*•]|\d+[.)])\s*', '', line).strip()
-            if len(line) >= 3:
-                lines.append(line)
-        seen = set()
-        unique = []
-        for l in lines:
-            key = l.lower()
-            if key not in seen:
-                seen.add(key)
-                unique.append(l)
-        return unique or [original]
-
-    def split_questions(self, message: str) -> list:
-        """Mesajı LLM ile alt sorulara böler (noktalama olmasa bile).
-
-        Selector mantığı korunur: bu adım sadece soruları ayırmak içindir,
-        cevaplar daha sonra her alt soru için ayrı ayrı birebir seçtirilir.
-        Herhangi bir hata olursa basit regex yedeğine düşer.
-        """
-        return self.split_questions_with_result(message).subquestions
-
-    def split_questions_with_result(self, message: str) -> SplitterResult:
+    def analyze_intents_with_result(
+        self, message: str, previous_user_turns: list[str] | tuple[str, ...] = ()
+    ) -> IntentAnalyzerResult:
+        """Analyze one current turn using strict JSON and a lossless SINGLE fallback."""
         message = message.strip()
-        if not message:
-            return SplitterResult(subquestions=[])
+        fallback = safe_single_intent(message)
         config = self.effective_config(LLMCapability.INTENT_ANALYZER)
-        system, user = self._build_split_prompt(message)
+        previous = [text.strip() for text in previous_user_turns if text.strip()][-2:]
+        system, user = build_intent_analyzer_prompt(message, previous)
         invocation = self._invoke(system, user, config)
         if invocation.status is not LLMOutcomeStatus.SUCCESS:
-            return SplitterResult(
-                subquestions=_regex_split(message),
+            return IntentAnalyzerResult(
+                analysis=fallback,
                 status=invocation.status,
                 parse_status=LLMParseStatus.FALLBACK,
-                fallback_used=True,
+                fallback_to_single=True,
                 invocation=invocation,
             )
-        parsed = self._parse_split(invocation.text or "", message)
-        return SplitterResult(
-            subquestions=parsed,
-            status=LLMOutcomeStatus.SUCCESS,
-            parse_status=(
-                LLMParseStatus.SUCCESS if invocation.text else LLMParseStatus.INVALID_OUTPUT
-            ),
-            invocation=invocation,
-        )
+        try:
+            analysis = parse_intent_analysis(
+                invocation.text or "",
+                current_user_turn=message,
+                previous_user_turns=previous,
+            )
+        except ValueError:
+            return IntentAnalyzerResult(
+                analysis=fallback,
+                status=LLMOutcomeStatus.INVALID_OUTPUT,
+                parse_status=LLMParseStatus.INVALID_OUTPUT,
+                fallback_to_single=True,
+                invocation=invocation,
+            )
+        return IntentAnalyzerResult(analysis=analysis, invocation=invocation)
 
     def ask(self, question: str, context_list: list) -> Optional[str]:
         """Aday havuzundan birebir seçim. Tüm sağlayıcılarda aynı: prompt kur,

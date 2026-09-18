@@ -6,6 +6,9 @@ import threading
 from services.decision_trace import DecisionTrace, emit_decision_trace
 from services.llm_config import resolve_llm_config_set
 from services.llm_types import (
+    IntentAnalysis,
+    IntentAnalyzerResult,
+    IntentItem,
     LLMInvocationResult,
     LLMOutcomeStatus,
     LLMParseStatus,
@@ -158,6 +161,53 @@ def test_trace_distinguishes_semantic_none_invalid_model_error_and_timeout():
     assert selectors[2]["model_error"] is True
     assert selectors[3]["call_status"] == "timeout"
     assert selectors[3]["timeout"] is True
+
+
+def test_intent_analyzer_trace_keeps_error_cause_and_never_logs_text():
+    sensitive = "student@example.org verification-839201"
+    analysis = IntentAnalysis(
+        intent_count=1,
+        intents=[IntentItem(
+            source_text=sensitive,
+            normalized_text=sensitive,
+            resolved_text=sensitive,
+            context_used=False,
+            calendar_relevant=False,
+        )],
+    )
+    invocation = LLMInvocationResult(
+        status=LLMOutcomeStatus.TIMEOUT,
+        text=None,
+        latency_ms=15.5,
+        metadata=LLMResponseMetadata(
+            requested_model="gpt-4o-mini", input_tokens=20, output_tokens=0
+        ),
+        error_type="TimeoutError",
+    )
+    result = IntentAnalyzerResult(
+        analysis=analysis,
+        status=LLMOutcomeStatus.TIMEOUT,
+        parse_status=LLMParseStatus.FALLBACK,
+        fallback_to_single=True,
+        invocation=invocation,
+    )
+    config = resolve_llm_config_set("openai", environ={}).intent_analyzer
+    trace = DecisionTrace(endpoint="test")
+    trace.record_intent_analyzer(
+        result,
+        config.to_dict(),
+        config_fingerprint=config.fingerprint,
+        current_input_length=len(sensitive),
+        previous_user_context_count=2,
+    )
+    serialized = json.dumps(trace.to_dict(), ensure_ascii=False)
+    analyzer = trace.to_dict()["intent_analyzer"]
+    assert analyzer["call_status"] == "timeout"
+    assert analyzer["outcome_status"] == "timeout"
+    assert analyzer["parse_status"] == "fallback"
+    assert analyzer["fallback_to_single"] is True
+    assert analyzer["usage"] == {"input_tokens": 20, "output_tokens": 0}
+    assert sensitive not in serialized
 
 
 def test_emit_is_one_structured_log_record(caplog):

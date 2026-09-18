@@ -19,6 +19,7 @@ from core.deps import (
 )
 from services.answer_pipeline import answer_question as _answer_question
 from services.decision_trace import DecisionTrace, emit_decision_trace
+from services.intent_analyzer import MAX_PREVIOUS_USER_TURNS
 
 logger = logging.getLogger("auzef")
 router = APIRouter()
@@ -35,7 +36,7 @@ def _positive_int_env(name: str, default: int) -> int:
     return value
 
 
-CHAT_CONTEXT_ENABLED = os.getenv("CHAT_CONTEXT_ENABLED", "false").strip().lower() == "true"
+CHAT_CONTEXT_ENABLED = os.getenv("CHAT_CONTEXT_ENABLED", "true").strip().lower() == "true"
 CHAT_CONTEXT_MAX_MESSAGES = _positive_int_env("CHAT_CONTEXT_MAX_MESSAGES", 4)
 CHAT_CONTEXT_MAX_CHARS = _positive_int_env("CHAT_CONTEXT_MAX_CHARS", 1200)
 
@@ -95,19 +96,20 @@ def _store_message(db: Session, conversation_id: int, role: str, content: str, s
 
 
 def _load_recent_context(db: Session, conversation_id: int) -> tuple[dict, ...]:
-    """Güncel mesajdan ÖNCEKİ sınırlı konuşma geçmişini kronolojik döndürür."""
+    """Return at most two owned previous user turns in chronological order."""
+    user_turn_limit = min(CHAT_CONTEXT_MAX_MESSAGES, MAX_PREVIOUS_USER_TURNS)
     rows = (
         db.query(ConversationMessage)
         .filter(
             ConversationMessage.conversation_id == conversation_id,
-            ConversationMessage.role.in_(("user", "bot")),
+            ConversationMessage.role == "user",
         )
         .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
-        .limit(CHAT_CONTEXT_MAX_MESSAGES)
+        .limit(user_turn_limit)
         .all()
     )
     remaining = CHAT_CONTEXT_MAX_CHARS
-    per_message_limit = max(1, CHAT_CONTEXT_MAX_CHARS // CHAT_CONTEXT_MAX_MESSAGES)
+    per_message_limit = max(1, CHAT_CONTEXT_MAX_CHARS // user_turn_limit)
     newest_first = []
     for row in rows:
         content = (row.content or "").strip()

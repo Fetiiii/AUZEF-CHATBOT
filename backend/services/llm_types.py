@@ -1,9 +1,11 @@
-"""Typed internal outcomes for LLM calls and V1 parsing."""
+"""Typed internal outcomes for LLM calls and answer-pipeline parsing."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Annotated, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class LLMOutcomeStatus(str, Enum):
@@ -65,10 +67,40 @@ class SelectorResult:
     invocation: Optional[LLMInvocationResult] = None
 
 
+IntentText = Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class IntentItem(BaseModel):
+    """One current-turn intent after minimal normalization/context resolution."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
+
+    source_text: IntentText
+    normalized_text: IntentText
+    resolved_text: IntentText
+    context_used: bool
+    calendar_relevant: bool
+
+
+class IntentAnalysis(BaseModel):
+    """Strict V2 analyzer contract: exactly one or two intents."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    intent_count: Literal[1, 2]
+    intents: Annotated[list[IntentItem], Field(min_length=1, max_length=2)]
+
+    @model_validator(mode="after")
+    def count_matches_items(self) -> "IntentAnalysis":
+        if self.intent_count != len(self.intents):
+            raise ValueError("intent_count must equal intents length")
+        return self
+
+
 @dataclass(frozen=True)
-class SplitterResult:
-    subquestions: list[str] = field(default_factory=list)
+class IntentAnalyzerResult:
+    analysis: IntentAnalysis
     status: LLMOutcomeStatus = LLMOutcomeStatus.SUCCESS
     parse_status: LLMParseStatus = LLMParseStatus.SUCCESS
-    fallback_used: bool = False
+    fallback_to_single: bool = False
     invocation: Optional[LLMInvocationResult] = None

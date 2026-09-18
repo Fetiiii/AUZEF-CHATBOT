@@ -11,13 +11,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from services.llm_config import EffectiveLLMConfigSet
-from services.llm_types import SelectorResult, SplitterResult
+from services.llm_types import IntentAnalyzerResult, SelectorResult
 
 logger = logging.getLogger("auzef")
 
 
 @dataclass
 class DecisionTrace:
+    schema_version: int = field(default=2, init=False)
     endpoint: str
     conversation_id: Optional[int] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -30,7 +31,7 @@ class DecisionTrace:
     context: dict = field(default_factory=dict)
     ai_config_fingerprint: Optional[str] = None
     effective_configs: dict = field(default_factory=dict)
-    splitter: Optional[dict] = None
+    intent_analyzer: Optional[dict] = None
     retrieval: list[dict] = field(default_factory=list)
     selectors: list[dict] = field(default_factory=list)
     fallback: dict = field(default_factory=lambda: {
@@ -63,22 +64,45 @@ class DecisionTrace:
                 self.effective_configs = configs.to_dict()
                 self.ai_config_fingerprint = configs.fingerprint
 
-    def record_splitter(
-        self, result: SplitterResult, config: dict, *, input_length: int
+    def record_intent_analyzer(
+        self,
+        result: IntentAnalyzerResult,
+        config: dict,
+        *,
+        config_fingerprint: str,
+        current_input_length: int,
+        previous_user_context_count: int,
     ) -> None:
         invocation = result.invocation
         with self._lock:
-            self.splitter = {
+            self.intent_analyzer = {
                 "provider": config.get("provider"),
-                "model": config.get("model"),
+                "requested_model": config.get("model"),
+                "actual_model": (
+                    invocation.metadata.actual_model if invocation else None
+                ),
                 "effective_config": config,
-                "input_length": input_length,
-                "output_subquestion_count": len(result.subquestions),
+                "config_fingerprint": config_fingerprint,
+                "current_input_length": current_input_length,
+                "previous_user_context_count": previous_user_context_count,
+                "intent_count": result.analysis.intent_count,
+                "intents": [
+                    {
+                        "position": index,
+                        "source_length": len(item.source_text),
+                        "normalized_length": len(item.normalized_text),
+                        "resolved_length": len(item.resolved_text),
+                        "context_used": item.context_used,
+                        "calendar_relevant": item.calendar_relevant,
+                    }
+                    for index, item in enumerate(result.analysis.intents, start=1)
+                ],
                 "call_status": (
                     invocation.status.value if invocation else result.status.value
                 ),
+                "outcome_status": result.status.value,
                 "parse_status": result.parse_status.value,
-                "fallback_used": result.fallback_used,
+                "fallback_to_single": result.fallback_to_single,
                 "latency_ms": invocation.latency_ms if invocation else None,
                 "provider_metadata": (
                     invocation.metadata.to_trace_dict() if invocation else None
@@ -181,6 +205,7 @@ class DecisionTrace:
         with self._lock:
             return {
                 "event": "answer_pipeline_decision_trace",
+                "schema_version": self.schema_version,
                 "request": {
                     "request_id": self.request_id,
                     "conversation_id": self.conversation_id,
@@ -192,7 +217,7 @@ class DecisionTrace:
                     "effective_configs": self.effective_configs,
                 },
                 "context": self.context,
-                "splitter": self.splitter,
+                "intent_analyzer": self.intent_analyzer,
                 "retrieval": list(self.retrieval),
                 "selectors": list(self.selectors),
                 "fallback": dict(self.fallback),
