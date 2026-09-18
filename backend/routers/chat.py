@@ -18,6 +18,7 @@ from core.deps import (
     log_query as _log_query,
 )
 from services.answer_pipeline import answer_question as _answer_question
+from services.decision_trace import DecisionTrace, emit_decision_trace
 
 logger = logging.getLogger("auzef")
 router = APIRouter()
@@ -195,13 +196,29 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
             pass
         conv = None
 
+    trace = DecisionTrace(
+        endpoint="widget_chat",
+        conversation_id=conv.id if conv is not None else None,
+    )
+    trace.set_context(enabled=CHAT_CONTEXT_ENABLED, messages=conversation_context)
+
     # Cevap üret: LLM seçici ana yol (birleşik QnA + takvim havuzu, çoklu soru)
     # + eşik yedeği. Takvim artık ön kapı değil, havuzdaki bir aday.
-    answer, source = _answer_question(
-        q, db, conversation_context=conversation_context
-    )
+    try:
+        answer, source = _answer_question(
+            q, db, conversation_context=conversation_context, trace=trace
+        )
+    except Exception:
+        trace.finalize(outcome="error", source="none", qna_ids=[], answer_count=0)
+        emit_decision_trace(trace)
+        raise
     if answer:
         background_tasks.add_task(_log_query, source, "success", ip)
+        trace.finalize(
+            outcome="answer", source=source,
+            answer_count=None if source == "llm" else 1,
+        )
+        emit_decision_trace(trace)
         return _widget_reply(db, conv, answer, source)
 
     # Öneriler
@@ -209,6 +226,8 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
         suggestions = MEILI_PROVIDER.get_suggestions(q, limit=20)
         if suggestions:
             background_tasks.add_task(_log_query, "none", "suggest", ip)
+            trace.finalize(outcome="suggestions", source="none", qna_ids=[], answer_count=0)
+            emit_decision_trace(trace)
             return _widget_reply(
                 db, conv,
                 "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
@@ -218,6 +237,8 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
         pass
 
     background_tasks.add_task(_log_query, "none", "suggest", ip)
+    trace.finalize(outcome="no_answer", source="none", qna_ids=[], answer_count=0)
+    emit_decision_trace(trace)
     return _widget_reply(db, conv, "Bu konuda bilgim bulunmuyor.", "none")
 
 
@@ -261,13 +282,20 @@ def set_talep_status(conversation_id: int, body: TalepRequest, db: Session = Dep
 @router.get("/api/search")
 def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(..., min_length=2, max_length=1000), db: Session = Depends(get_db)):
     ip = request.client.host if request.client else None
+    trace = DecisionTrace(endpoint="api_search")
+    trace.set_context(enabled=False, messages=())
 
     try:
         # Cevap üret: LLM seçici ana yol (birleşik QnA + takvim havuzu, çoklu
         # soru) + eşik yedeği. Takvim artık ön kapı değil, havuzdaki bir aday.
-        answer, source = _answer_question(q, db)
+        answer, source = _answer_question(q, db, trace=trace)
         if answer:
             background_tasks.add_task(_log_query, source, "success", ip)
+            trace.finalize(
+                outcome="answer", source=source,
+                answer_count=None if source == "llm" else 1,
+            )
+            emit_decision_trace(trace)
             return {
                 "source": source,
                 "status": "success",
@@ -283,6 +311,8 @@ def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(.
             pass
 
         background_tasks.add_task(_log_query, "none", "suggest", ip)
+        trace.finalize(outcome="suggestions", source="none", qna_ids=[], answer_count=0)
+        emit_decision_trace(trace)
         return {
             "source": "none",
             "status": "suggest",
@@ -295,6 +325,8 @@ def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(.
         # tam traceback sunucu loguna yazılır.
         logger.exception("Arama sırasında beklenmeyen hata")
         background_tasks.add_task(_log_query, "none", "error", ip)
+        trace.finalize(outcome="error", source="none", qna_ids=[], answer_count=0)
+        emit_decision_trace(trace)
         return {"status": "error", "message": "Beklenmeyen bir sistem hatası oluştu. Lütfen tekrar deneyin."}
 
 

@@ -31,7 +31,8 @@ def test_context_enabled_passes_only_owned_previous_messages(client, monkeypatch
 
     captured = []
 
-    def answer(question, db, conversation_context=()):
+    def answer(question, db, conversation_context=(), trace=None):
+        del trace
         captured.append((question, conversation_context))
         return f"cevap-{len(captured)}", "llm"
 
@@ -149,3 +150,27 @@ def test_widget_falls_back_to_suggestions_when_no_answer(client):
 def test_message_length_cap(client):
     d = _chat(client, "x" * 2000)
     assert "çok uzun" in d["answer"]
+
+
+def test_widget_request_uses_one_correlated_pii_safe_trace(client, monkeypatch):
+    import routers.chat as chat
+
+    captured = {}
+
+    def answer(question, db, conversation_context=(), trace=None):
+        del question, db, conversation_context
+        captured["pipeline_trace"] = trace
+        return "cevap", "meilisearch"
+
+    def emit(trace):
+        captured["emitted"] = trace.to_dict()
+
+    monkeypatch.setattr(chat, "_answer_question", answer)
+    monkeypatch.setattr(chat, "emit_decision_trace", emit)
+    response = _chat(client, "kimlikNo 12345678901")
+    snapshot = captured["emitted"]
+    assert response["answer"] == "cevap"
+    assert captured["pipeline_trace"].request_id == snapshot["request"]["request_id"]
+    assert snapshot["request"]["endpoint"] == "widget_chat"
+    assert snapshot["request"]["conversation_id"] == response["conversation_id"]
+    assert "12345678901" not in str(snapshot)

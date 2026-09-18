@@ -1,0 +1,162 @@
+"""Typed LLM outcomes retain V1 public behavior while preserving causes."""
+from types import SimpleNamespace
+
+from services.llm_config import resolve_llm_config_set
+import services.llm_provider as llm_provider
+from services.llm_provider import BaseLLMProvider, GeminiProvider, OpenAIProvider
+from services.llm_types import LLMOutcomeStatus, LLMParseStatus
+
+
+class ScriptedProvider(BaseLLMProvider):
+    provider_name = "openai"
+
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.model = "gpt-4o-mini"
+        self._configs = resolve_llm_config_set("openai", environ={})
+
+    def _complete(self, _system, _user, max_tokens=5):
+        del max_tokens
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def _candidates():
+    return [
+        {"qna_id": 10, "question": "q1", "answer": "a1"},
+        {"qna_id": 20, "question": "q2", "answer": "a2"},
+    ]
+
+
+def test_selector_success_retains_index_qna_and_compatibility_answer():
+    provider = ScriptedProvider("[2]")
+    result = provider.ask_with_result("soru", _candidates())
+    assert result.status is LLMOutcomeStatus.SUCCESS
+    assert result.parse_status is LLMParseStatus.SUCCESS
+    assert result.selected_index == 1
+    assert result.selected_qna_id == 20
+    assert result.answer == "a2"
+    assert provider.ask("soru", _candidates()) == "a2"
+
+
+def test_semantic_none_and_invalid_output_are_distinct_but_both_compatible_none():
+    semantic = ScriptedProvider("0")
+    invalid = ScriptedProvider("cevap yok")
+    out_of_range = ScriptedProvider("7")
+    assert semantic.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.SEMANTIC_NONE
+    assert invalid.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.INVALID_OUTPUT
+    assert out_of_range.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.INVALID_OUTPUT
+    assert semantic.ask("s", _candidates()) is None
+    assert invalid.ask("s", _candidates()) is None
+
+
+def test_provider_exception_and_timeout_are_distinct():
+    failed = ScriptedProvider(error=ValueError("secret provider detail"))
+    timed_out = ScriptedProvider(error=TimeoutError("late"))
+    failed_result = failed.ask_with_result("s", _candidates())
+    timeout_result = timed_out.ask_with_result("s", _candidates())
+    assert failed_result.status is LLMOutcomeStatus.MODEL_ERROR
+    assert timeout_result.status is LLMOutcomeStatus.TIMEOUT
+    assert failed_result.invocation.error_type == "ValueError"
+    assert "secret provider detail" not in str(failed_result.invocation)
+
+
+def test_splitter_error_keeps_phase0_regex_fallback_and_status():
+    provider = ScriptedProvider(error=RuntimeError("down"))
+    result = provider.split_questions_with_result("vize ne zaman? final ne zaman?")
+    assert result.subquestions == ["vize ne zaman", "final ne zaman"]
+    assert result.status is LLMOutcomeStatus.MODEL_ERROR
+    assert result.parse_status is LLMParseStatus.FALLBACK
+    assert result.fallback_used is True
+
+
+def test_openai_adapter_preserves_metadata_and_omits_unsupported_optional_settings(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_SELECTOR_REASONING_EFFORT", "high")
+    monkeypatch.setenv("LLM_SELECTOR_STRUCTURED_OUTPUT_ENABLED", "true")
+    provider = OpenAIProvider()
+    captured = {}
+    response = SimpleNamespace(
+        id="provider-response-id",
+        model="resolved-model",
+        usage=SimpleNamespace(prompt_tokens=12, completion_tokens=1),
+        choices=[SimpleNamespace(
+            message=SimpleNamespace(content="1"), finish_reason="stop"
+        )],
+    )
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return response
+
+    provider.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    result = provider.ask_with_result("soru", _candidates())
+    meta = result.invocation.metadata
+    assert result.status is LLMOutcomeStatus.SUCCESS
+    assert meta.requested_model == "gpt-4o-mini"
+    assert meta.actual_model == "resolved-model"
+    assert meta.provider_response_id == "provider-response-id"
+    assert meta.input_tokens == 12 and meta.output_tokens == 1
+    assert meta.finish_reason == "stop"
+    assert "timeout" not in captured
+    assert "reasoning_effort" not in captured
+    assert "response_format" not in captured
+    assert captured["max_tokens"] == 5 and captured["temperature"] == 0
+
+
+def test_openai_explicit_timeout_and_retry_are_applied(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_SELECTOR_TIMEOUT_SECONDS", "8")
+    monkeypatch.setenv("LLM_SELECTOR_MAX_RETRIES", "4")
+    provider = OpenAIProvider()
+    captured = {}
+
+    class Client:
+        def __init__(self):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create)
+            )
+
+        def with_options(self, **kwargs):
+            captured["client_options"] = kwargs
+            return self
+
+        def create(self, **kwargs):
+            captured["request"] = kwargs
+            return SimpleNamespace(
+                id="id", model="model", usage=None,
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="1"), finish_reason="stop"
+                )],
+            )
+
+    provider.client = Client()
+    assert provider.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.SUCCESS
+    assert captured["client_options"] == {"max_retries": 4}
+    assert captured["request"]["timeout"] == 8
+
+
+def test_gemini_explicit_timeout_and_retry_use_client_http_options(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_SELECTOR_TIMEOUT_SECONDS", "8")
+    monkeypatch.setenv("LLM_SELECTOR_MAX_RETRIES", "4")
+    calls = []
+
+    def client_factory(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(llm_provider.genai, "Client", client_factory)
+    provider = GeminiProvider()
+    config = provider.effective_config(llm_provider.LLMCapability.SELECTOR)
+    first = provider._client_for_config(config)
+    second = provider._client_for_config(config)
+    assert first is second
+    assert len(calls) == 2  # default client + one configured cached client
+    options = calls[1]["http_options"]
+    assert options.timeout == 8000
+    assert options.retry_options.attempts == 5

@@ -31,6 +31,28 @@ def test_search_is_public_and_routed():
     assert "status" in r.json()
 
 
+def test_search_passes_request_trace_without_conversation(client, monkeypatch):
+    import routers.chat as chat
+
+    captured = {}
+
+    def answer(question, db, conversation_context=(), trace=None):
+        del question, db, conversation_context
+        captured["trace"] = trace
+        return "cevap", "meilisearch"
+
+    monkeypatch.setattr(chat, "_answer_question", answer)
+    monkeypatch.setattr(
+        chat, "emit_decision_trace", lambda trace: captured.setdefault("snapshot", trace.to_dict())
+    )
+    response = client.get("/api/search", params={"q": "merhaba"})
+    assert response.status_code == 200
+    assert response.json()["answer"] == "cevap"
+    assert captured["trace"].request_id == captured["snapshot"]["request"]["request_id"]
+    assert captured["snapshot"]["request"]["endpoint"] == "api_search"
+    assert captured["snapshot"]["request"]["conversation_id"] is None
+
+
 def test_qna_and_calendar_bulk_update_not_shadowed(make_user, login):
     make_user("editor@iu.tr", role="editor")
     c = login("editor@iu.tr")

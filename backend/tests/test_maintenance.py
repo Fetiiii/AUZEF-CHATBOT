@@ -104,7 +104,8 @@ def test_api_search_is_not_blocked_by_maintenance(sup, monkeypatch):
     assert sup.put("/api/settings/maintenance", json={"on": True}).status_code == 200
     calls = []
 
-    def answer(question, db, conversation_context=()):
+    def answer(question, db, conversation_context=(), trace=None):
+        del trace
         calls.append(question)
         return "Arama çalışıyor.", "meilisearch"
 

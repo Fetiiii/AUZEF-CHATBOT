@@ -10,7 +10,7 @@ Phase 0 — Baseline Freeze
 STATUS: PASS
 
 Phase 1 — Observability + Model Config Foundation
-STATUS: NOT_STARTED
+STATUS: PASS
 
 Phase 2 — Intent Analyzer
 STATUS: NOT_STARTED
@@ -42,4 +42,23 @@ STATUS: NOT_STARTED
 - [x] Migration invariants are machine-readable.
 - [x] Benchmark provenance is documented without copying datasets.
 - [x] Runtime-critical source digests are unchanged.
-- [x] No Phase 1 implementation was started.
+- [x] No Phase 1 implementation had started at the Phase 0 freeze.
+
+## Phase 1 acceptance record
+
+- [x] Capability-based `intent_analyzer` and `selector` config exists.
+- [x] Phase 0 effective provider/model and generation defaults are preserved.
+- [x] Reasoning, timeout, retry, and structured-output foundation fields exist.
+- [x] Stable secret-free config fingerprints exist.
+- [x] Success, semantic-none, invalid-output, model-error, and timeout outcomes
+      are internally distinguishable.
+- [x] Request-scoped, structured, PII-safe decision traces are emitted.
+- [x] Candidate IDs/order, selected QnA, fallback reason, provider/config,
+      latency, and available usage metadata are traceable.
+- [x] Existing admin/DB LLM ON/OFF behavior is preserved.
+- [x] Splitter, selector, Calendar, context, guard, fallback, widget, and search
+      behavior remain Phase 0-compatible.
+- [x] Targeted tests pass and the full suite has no new regression.
+- [x] No Phase 2 implementation was started.
+
+Detailed evidence: [`PHASE_1_REPORT.md`](PHASE_1_REPORT.md).
