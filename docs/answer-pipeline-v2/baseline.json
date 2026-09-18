@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "phase": "phase_0_baseline_freeze",
+  "status": "PASS",
+  "recorded_date": "2026-09-18",
+  "source_of_truth": {
+    "path": "docs/ANSWER_PIPELINE_V2_ARCHITECTURE.md",
+    "sha256": "31230299c166387d111174f19dfbfbbcec074dda6b6164e8a324a1a2b2f8230e",
+    "semantic_edits_in_phase_0": false
+  },
+  "git": {
+    "branch": "production-readiness",
+    "starting_head": "e2985358604bd38b30bf91c84c9309f6c61cd551"
+  },
+  "pipeline": {
+    "widget_endpoint": {
+      "route": "POST /widget-chat",
+      "function": "backend.routers.chat.widget_chat",
+      "path": "backend/routers/chat.py"
+    },
+    "search_endpoint": {
+      "route": "GET /api/search",
+      "function": "backend.routers.chat.search",
+      "path": "backend/routers/chat.py"
+    },
+    "answer_entrypoint": "backend.services.answer_pipeline.answer_question",
+    "splitter": "backend.services.llm_provider.BaseLLMProvider.split_questions",
+    "selector": "backend.services.llm_provider.BaseLLMProvider.ask",
+    "selector_parser": "backend.services.llm_provider.BaseLLMProvider._parse_selection",
+    "candidate_builder": "backend.services.answer_pipeline._build_candidate_pool",
+    "llm_orchestrator": "backend.services.answer_pipeline._llm_answer",
+    "fallback": "backend.services.answer_pipeline._fallback_answer",
+    "calendar_functions": [
+      "backend.services.answer_pipeline.is_date_query",
+      "backend.services.answer_pipeline.search_calendar",
+      "backend.services.calendar_utils.match_calendar_entry",
+      "backend.services.calendar_utils.format_calendar_answer"
+    ],
+    "routing_guard_module": "backend/services/routing_guards.py",
+    "context_loader": "backend.routers.chat._load_recent_context",
+    "provider_module": "backend/services/llm_provider.py",
+    "provider_config_module": "backend/core/deps.py",
+    "admin_llm_config_module": "backend/admin/settings_api.py"
+  },
+  "model_config": {
+    "provider_resolution": "LLM_PROVIDER environment variable; supported values openrouter, openai, gemini",
+    "runtime_enabled_source": "DB SystemConfig.LLM_ENABLED and an available provider/key",
+    "default_seeded_enabled": false,
+    "openrouter_key_precedence": [
+      "DB SystemConfig.OPENROUTER_API_KEY",
+      "environment OPENROUTER_API_KEY"
+    ],
+    "default_models": {
+      "openai": "gpt-4o-mini",
+      "openrouter": "openai/gpt-4o-mini",
+      "gemini": "gemini-2.5-flash-lite"
+    },
+    "selector_max_tokens": 5,
+    "splitter_max_tokens": 300,
+    "temperature": 0,
+    "reasoning_effort_supported": false,
+    "explicit_timeout_supported": false,
+    "explicit_retry_policy_supported": false,
+    "structured_output_supported_by_pipeline": false,
+    "capability_specific_model_config": false
+  },
+  "behavior_flags": {
+    "chat_context_enabled_default": false,
+    "chat_context_max_messages_default": 4,
+    "chat_context_max_chars_default": 1200,
+    "splitter_runs_on_every_llm_enabled_request": true,
+    "splitter_max_intents": null,
+    "splitter_semantic_reformulation_possible": true,
+    "calendar_all_rows_in_every_llm_candidate_pool": true,
+    "calendar_year_filter": false,
+    "calendar_term_filter": false,
+    "selector_none_retries_meili_qdrant_threshold_fallback": true,
+    "selector_none_reopens_calendar": false,
+    "selector_exception_reopens_calendar": true,
+    "routing_guard_store_failure_is_fail_closed": true,
+    "routing_guard_active_semantic_selector_only": {
+      "selector_allowed": true,
+      "fallback_allowed": false
+    }
+  },
+  "critical_source_sha256": {
+    "backend/services/answer_pipeline.py": "a1de2c31217e16f0609bd83358a64e17e9a4377cfe7676cf0743d78f51a82186",
+    "backend/services/llm_provider.py": "bf29f9f4c4c673cba1d4a6f301a77e5781ca266a7b6031e80beb20886abadfcc",
+    "backend/services/providers.py": "ab76ba04c41d969b33cfe960072064d3cfbfc88639f913c23a0ac32d1e83eb75",
+    "backend/services/routing_guards.py": "5c30a7d4dc838cd9ccbcc74c1efea0b7ef7ac103efe8efccedde0611c7f477a3",
+    "backend/services/calendar_utils.py": "a54bbfceda1fbc2f81945e0d86722bf9ace23506bfa193979a482f8de8f566db",
+    "backend/routers/chat.py": "e257399fafc75ee4fc3318f69130b648f249555ad065d301ba24e2eb947fff1f",
+    "backend/core/deps.py": "66aa2f797493851b7e93b92a5c713bf19e78b3fe3c5e6ab136742c11ac3332e5",
+    "backend/admin/settings_api.py": "e66f910b6c3c615b48ea1d1149ec698abba1f73a0811c81e140c64e3992b9010",
+    "backend/core/database.py": "ac9b3ed09fc94071a0600b605f1718ed243a48a400512f1e00bbbb230bcec6e1",
+    "backend/main.py": "a90bb937181e2f2985afa3944bdc86b057c9e72d14581d76a67e8a6577dda7b4",
+    "backend/routers/calendar.py": "27d6930ca1526e1379543a22190738a256fa3284899fbb0d1b24c79aa2a95e35",
+    "backend/routers/qna.py": "68cb35537fe9bd6b462df3b639023ee7dbcc1af184a9d6c33638c0a6fd0fedd2",
+    "chatbot-web/src/widget.js": "b84472c98483fc3326c167245e5808941c4c345531e28388c87f182b217a4db2"
+  },
+  "migration_invariants": [
+    {
+      "id": "meili_retrieval_exists",
+      "expected": true,
+      "evidence": "backend.services.providers.MeiliSearchProvider.search"
+    },
+    {
+      "id": "qdrant_retrieval_exists",
+      "expected": true,
+      "evidence": "backend.services.providers.QdrantProvider.search"
+    },
+    {
+      "id": "curated_answer_returned_verbatim",
+      "expected": true,
+      "evidence": "BaseLLMProvider._parse_selection returns context_list[index].answer"
+    },
+    {
+      "id": "routing_guard_store_failure_fail_closed",
+      "expected": true,
+      "evidence": "answer_question returns (None, none) when RoutingGuardPolicy.load raises"
+    },
+    {
+      "id": "qna_candidate_dedupe_uses_qna_id",
+      "expected": true,
+      "evidence": "answer_pipeline._candidate_identity"
+    },
+    {
+      "id": "widget_uses_answer_question",
+      "expected": true,
+      "evidence": "routers.chat.widget_chat calls _answer_question"
+    },
+    {
+      "id": "api_search_uses_answer_question",
+      "expected": true,
+      "evidence": "routers.chat.search calls _answer_question"
+    },
+    {
+      "id": "admin_llm_on_off_exists",
+      "expected": true,
+      "evidence": "admin.settings_api reads and writes SystemConfig.LLM_ENABLED"
+    },
+    {
+      "id": "qna_sync_targets_meili_and_qdrant",
+      "expected": true,
+      "evidence": "routers.qna.sync_providers and sync_providers_batch"
+    },
+    {
+      "id": "conversation_ownership_token_exists",
+      "expected": true,
+      "evidence": "routers.chat._token_matches"
+    },
+    {
+      "id": "final_multi_answer_composition_is_deterministic",
+      "expected": true,
+      "evidence": "answer_pipeline._llm_answer exact-dedupes and joins answers"
+    }
+  ],
+  "tests": {
+    "canonical_environment": "running backend container with critical runtime SHA256 equal to host; isolated temporary PostgreSQL 15 databases",
+    "relevant_suite": {
+      "command": "python -m pytest -q tests/test_pure_functions.py tests/test_retrieval_thresholds.py tests/test_routing_guards.py tests/test_widget_tokens.py tests/test_maintenance.py tests/test_settings.py tests/test_routing.py",
+      "collected": 59,
+      "passed": 59,
+      "failed": 0,
+      "skipped": 0,
+      "warnings": 1,
+      "duration_seconds": 19.63
+    },
+    "full_backend_suite": {
+      "command": "python -m pytest -q tests",
+      "collected": 176,
+      "passed": 168,
+      "failed": 7,
+      "skipped": 1,
+      "warnings": 1,
+      "duration_seconds": 75.0,
+      "failure_classification": "environment_layout",
+      "failed_test_file": "tests/test_production_app_runtime.py",
+      "reason": "The backend-only container does not include the repository-level /deploy/production tree expected by these tests. Expected files exist in the host repository."
+    },
+    "noncanonical_attempts": [
+      {
+        "result": "INTERNAL_ERROR",
+        "reason": "host Python missing project dependencies including SQLAlchemy"
+      },
+      {
+        "result": "INTERNAL_ERROR",
+        "reason": "repository-root invocation could not resolve backend core package"
+      },
+      {
+        "result": "NOT_RUN",
+        "reason": "fresh backend image did not contain pytest"
+      }
+    ]
+  },
+  "benchmark_provenance": {
+    "dataset_copied_into_repository": false,
+    "primary_metric": "Exact E2E",
+    "evaluation_targets": 503,
+    "scored_targets": 486,
+    "unscored_context_required": 17,
+    "models": {
+      "4o-mini": {
+        "exact_count": 362,
+        "denominator": 486,
+        "exact_percent_approx": 74.5
+      },
+      "Luna-high": {
+        "exact_count": 364,
+        "denominator": 486,
+        "exact_percent_approx": 74.9
+      }
+    },
+    "retrieval": {
+      "candidate_recall_percent_approx": 99.6,
+      "recall_at_3_percent_approx": 98.2,
+      "recall_at_10_percent_approx": 99.6
+    }
+  },
+  "mutation_control": {
+    "runtime_critical_initial_equals_final": true,
+    "runtime_behavior_changed": false,
+    "allowed_changed_paths": [
+      "docs/ANSWER_PIPELINE_V2_ARCHITECTURE.md",
+      "docs/answer-pipeline-v2/BASELINE.md",
+      "docs/answer-pipeline-v2/baseline.json",
+      "docs/answer-pipeline-v2/IMPLEMENTATION_STATUS.md"
+    ]
+  }
+}
