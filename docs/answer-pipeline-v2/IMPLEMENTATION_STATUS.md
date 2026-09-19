@@ -49,16 +49,22 @@ Phase 7B-Semantic Adjudication Prep
 STATUS: PASS
 
 Phase 7B-Semantic Adjudication First Review
-STATUS: PARTIAL_COMPLETE
+STATUS: PASS
 
 Phase 7B-Semantic Adjudication Full Candidate Follow-up
-STATUS: READY_FOR_HUMAN_REVIEW
+STATUS: PASS
 
 Phase 7B-Semantic Adjudication Review
-STATUS: WAITING_FOR_19_CASES
+STATUS: PASS
+
+Phase 7B-Semantic Gold V1
+STATUS: PASS
+
+Phase 7B-Semantic Rescore
+STATUS: PASS
 
 Phase 7B-Prompt HOLDOUT Live
-STATUS: BLOCKED_PENDING_ADJUDICATION
+STATUS: WAITING_FOR_HUMAN_VARIANT_SELECTION
 
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
@@ -591,3 +597,48 @@ Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_PREP_REPORT.md`](PHASE_7B_SE
 - [x] **Tests.** Adjudication module 27/27; full suite 508/508.
 
 Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_FOLLOWUP_REPORT.md`](PHASE_7B_SEMANTIC_ADJUDICATION_FOLLOWUP_REPORT.md).
+
+## Phase 7B-Semantic Adjudication + Semantic Gold V1 + Rescore record
+
+- [x] **Human decisions.** The input file was sha256-verified over raw
+      bytes (`b88ef9a8…`, 106 rows: 87 first pass + 19 follow-up).
+- [x] **Review lock.** `0fbc3bd4…` was written before any audit access.
+      - **Validation:** no NEED_FULL_CANDIDATES, no blank rows, labels valid,
+        87 first-pass decisions unchanged, follow-up ids exact.
+      - **Label mapping:** recomputed from the blind labelling and
+        cross-checked against the audit view.
+- [x] **Outcomes (106):**
+
+      | Outcome | Cases |
+      |---|---:|
+      | KEEP_CURRENT | 46 |
+      | CHANGE_GOLD | 28 |
+      | MULTI_ACCEPTABLE | 8 |
+      | EXPECT_NONE | 1 |
+      | EXCLUDE_AMBIGUOUS | 10 |
+      | CONTENT_REVIEW_REQUIRED | 2 |
+      | RETRIEVAL_OR_KB_MAPPING_REVIEW | 11 |
+
+      - 27 old Golds were rejected, 25 of them alias-derived.
+      - Blind control: 19 KEEP and 1 EXCLUDE out of 20.
+- [x] **Semantic Gold V1** (`36ab1d6f…`) is a child artifact with
+      provenance and queues. The parent Gold is unchanged. Evaluable primary
+      cases went from 482 to 461, with 1 expected NONE.
+- [x] **Re-score** used saved outputs only; zero live calls.
+      - **Semantic DEV (77):**
+
+        | | Exact | Net |
+        |---|---:|---:|
+        | Production | 51 | +5 |
+        | A | 64 | +18 |
+        | B | 56 | +10 |
+        | First candidate | 46 | — |
+      - **Stage A (137 → 115 evaluable):** production 75/115.
+- [x] **Gate unchanged.** Both variants pass it, so there is no automatic
+      winner and HOLDOUT is WAITING_FOR_HUMAN_VARIANT_SELECTION.
+- [x] **Nothing else changed.** Production prompt, config, KB and alias
+      table are the same, and the prompts are the same. Tests: new 9/9, full
+      suite 517/517. Stage B and Phase 7C not started.
+
+Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_RESULT.md`](PHASE_7B_SEMANTIC_ADJUDICATION_RESULT.md),
+[`PHASE_7B_SEMANTIC_RESCORE_REPORT.md`](PHASE_7B_SEMANTIC_RESCORE_REPORT.md).

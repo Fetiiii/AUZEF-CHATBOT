@@ -899,6 +899,171 @@ def cmd_adjudication_followup(args) -> None:
            "reviewed_gold_file_verified": gold_verified})
 
 
+def cmd_adjudication_lock(args) -> None:
+    """Lock the merged human decisions. Never reads audit-view.jsonl."""
+    import datetime as _dt
+
+    from benchmarks.selector_v2 import semantic_gold as sg
+
+    with no_live_calls():
+        lock = sg.lock_review(decisions_bytes=Path(args.decisions).read_bytes(),
+                              expected_sha=args.expected_sha256,
+                              review_dir=Path(args.review_dir), followup_dir=Path(args.followup_dir))
+        manifest = sg.write_lock(Path(args.review_dir) / sg.LOCK_DIR, lock,
+                                 _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
+    _dump({k: manifest[k] for k in ("lock_fingerprint", "review_case_count", "decision_counts",
+                                    "rounds", "source_decision_sha256")})
+
+
+def cmd_semantic_apply_rescore(args) -> None:
+    """After lock: audit → Semantic Gold V1 (child) → re-score saved outputs."""
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2 import semantic_gold as sg
+    from benchmarks.selector_v2.challenge import (
+        first_candidate_correct, load_challenge, reference_universe,
+    )
+    from benchmarks.selector_v2.evaluator import metrics
+    from benchmarks.selector_v2.prompt_contract import load_committed_manifest, prompt_manifest
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    with no_live_calls():
+        review_dir = Path(args.review_dir)
+        lock_manifest, records, audit = sg.open_audit_after_lock(review_dir, review_dir / sg.LOCK_DIR)
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        cm, cases = load_challenge(Path(args.challenge), manifest)
+        if lock_manifest["snapshot_fingerprint"] != manifest["snapshot_fingerprint"]:
+            raise SystemExit("lock belongs to another snapshot")
+        if prompt_manifest() != load_committed_manifest():
+            raise SystemExit("prompt manifest drift")
+        parent_fp = manifest["snapshot_fingerprint"]
+        built = sg.build_semantic_gold(snapshots, records, audit,
+                                       lock_fp=lock_manifest["lock_fingerprint"], parent_fp=parent_fp)
+        acct = sg.accounting(records, audit, built["derived"])
+        sem = sg.semantic_snapshots(snapshots, built["cases"])
+
+        def jl(rows):
+            return "".join(json.dumps(r, ensure_ascii=False, sort_keys=True, default=str) + "\n"
+                           for r in rows)
+
+        prov = built["provenance"]
+        gold_dir = Path(args.gold_out)
+        files = {
+            "semantic-gold.jsonl": "".join(c.model_dump_json() + "\n" for c in built["cases"]),
+            "changes.jsonl": jl(prov),
+            "excluded-cases.jsonl": jl([p for p in prov if p["derived_outcome"] == "EXCLUDE_AMBIGUOUS"]),
+            "content-review-queue.jsonl": jl([p for p in prov
+                                              if p["derived_outcome"] == "CONTENT_REVIEW_REQUIRED"]),
+            "retrieval-kb-review-queue.jsonl": jl([p for p in prov if p["derived_outcome"]
+                                                   == "RETRIEVAL_OR_KB_MAPPING_REVIEW"]),
+        }
+        hashes = sg.write_immutable(gold_dir, files)
+        dens_old = sg.denominators(snapshots)
+        dens_new = sg.denominators(sem)
+        sg.write_immutable(gold_dir, {"manifest.json": json.dumps({
+            "version": sg.SEMANTIC_GOLD_VERSION, "semantic_gold_fingerprint": built["fingerprint"],
+            "parent_snapshot_fingerprint": parent_fp,
+            "parent_reviewed_gold_all_sha256": manifest["dataset"]["source"]["gold_all_sha256"],
+            "review_lock_fingerprint": lock_manifest["lock_fingerprint"],
+            "reviewed_cases": len(records), "accounting": acct,
+            "denominators_parent": dens_old, "denominators_semantic": dens_new,
+            "artifact_sha256": hashes}, ensure_ascii=False, indent=2, sort_keys=True) + "\n"})
+
+        # ── re-score (saved outputs only) ──
+        split = px.load_split(challenge_ids={c["case_id"] for c in cases})
+        membership = {c["case_id"]: c["membership"] for c in cases}
+        side = {**dict.fromkeys(split["dev"], "DEV"), **dict.fromkeys(split["holdout"], "HOLDOUT")}
+        runs_raw = {"production": load_results(Path(args.stage_a_run) / RESULTS_FILE).by_case}
+        for item in args.run:
+            name, _, path = item.partition("=")
+            runs_raw[name] = load_results(Path(path) / RESULTS_FILE).by_case
+        sem_by = {s.case.case_id: s for s in sem}
+        old_by = {s.case.case_id: s for s in snapshots}
+        dev_old = [i for i in split["dev"] if old_by[i].selector_evaluable]
+        dev_sem = [i for i in split["dev"] if sem_by[i].selector_evaluable]
+        runs_sem = {n: sg.rescore_run(sem, r) for n, r in runs_raw.items()}
+        empty_slices: dict = {}
+        rep_old = {n: px.dev_report(snapshots, dev_old, r, membership, empty_slices, label=n,
+                                    split_side=side) for n, r in runs_raw.items()}
+        rep_sem = {n: px.dev_report(sem, dev_sem, r, membership, empty_slices, label=n,
+                                    split_side=side) for n, r in runs_sem.items()}
+        # Like-for-like: OLD Gold on the SAME semantic-evaluable ids (isolates relabelling
+        # from the removal of excluded cases).
+        rep_old_same = {n: px.dev_report(snapshots, dev_sem, r, membership, empty_slices,
+                                         label=n, split_side=side) for n, r in runs_raw.items()}
+        gates = {n: px.selection_gate(rep_sem[n], rep_sem["production"])
+                 for n in rep_sem if n != "production"}
+        paired = px.compare_runs(sem, dev_sem, runs_sem)
+        fc_old = px._acc(dev_old, {i: first_candidate_correct(old_by[i]) for i in dev_old})
+        fc_sem = px._acc(dev_sem, {i: first_candidate_correct(sem_by[i]) for i in dev_sem})
+        full_old = reference_universe(snapshots)
+        full_sem = reference_universe(sem)
+        challenge_ids = [c["case_id"] for c in cases]
+        stage_a_old = metrics([old_by[i] for i in challenge_ids if old_by[i].selector_evaluable],
+                              runs_raw["production"])
+        stage_a_sem = metrics([sem_by[i] for i in challenge_ids if sem_by[i].selector_evaluable],
+                              runs_sem["production"])
+        outcomes = {cid: d["outcome"] for cid, d in built["derived"].items()}
+        rejected = set(acct["old_gold_rejected_ids"])
+        review_slices = {}
+        for name, pred in (("KEEP_CURRENT", lambda c: outcomes.get(c) == "KEEP_CURRENT"),
+                           ("CHANGE_GOLD", lambda c: outcomes.get(c) == "CHANGE_GOLD"),
+                           ("MULTI_ACCEPTABLE", lambda c: outcomes.get(c) == "MULTI_ACCEPTABLE"),
+                           ("EXPECT_NONE", lambda c: outcomes.get(c) == "EXPECT_NONE"),
+                           ("OLD_GOLD_REJECTED", lambda c: c in rejected)):
+            ids = [i for i in dev_sem if pred(i)]
+            review_slices[name] = {n: px._acc(ids, {i: runs_sem[n][i].correct for i in ids
+                                                    if i in runs_sem[n]}) for n in runs_sem}
+        review_slices["EXCLUDED_IN_DEV"] = {
+            k: sum(1 for i in split["dev"] if outcomes.get(i) == k)
+            for k in ("EXCLUDE_AMBIGUOUS", "CONTENT_REVIEW_REQUIRED", "RETRIEVAL_OR_KB_MAPPING_REVIEW")}
+        none_cases = [cid for cid, o in outcomes.items() if o == "EXPECT_NONE"]
+        none_diag = {cid: {"split": side.get(cid), **{
+            n: (runs_raw[n][cid].decision, runs_sem[n][cid].outcome.value)
+            if cid in runs_raw[n] and cid in runs_sem[n] else None for n in runs_raw}}
+            for cid in none_cases}
+        passing = sorted(n for n, g in gates.items() if g["passed"])
+        holdout = ("BLOCKED_NO_VARIANT_PASSED_SEMANTIC_GATE" if not passing else
+                   "READY_PENDING_EXPLICIT_APPROVAL" if len(passing) == 1 else
+                   "WAITING_FOR_HUMAN_VARIANT_SELECTION")
+
+        def brief(r):
+            return {"cases": r["cases"], "exact": r["exact"], "value": r["selector_value"],
+                    "false_none": r["false_none"], "none_output": r["none_output"],
+                    "general": r["general_expected"], "specific": r["specific_expected"],
+                    "near_qna": r["near_qna"], "easy_control": r["easy_control"],
+                    "validity": r["validity"], "gs_case_correctness": r["gs_case_correctness"]}
+
+        report = {
+            "semantic_gold_fingerprint": built["fingerprint"],
+            "review_lock_fingerprint": lock_manifest["lock_fingerprint"],
+            "denominators": {"parent": dens_old, "semantic": dens_new,
+                             "dev_parent": len(dev_old), "dev_semantic": len(dev_sem)},
+            "first_candidate": {
+                "full_parent": {"correct": sum(map(first_candidate_correct, full_old)), "cases": len(full_old)},
+                "full_semantic": {"correct": sum(map(first_candidate_correct, full_sem)), "cases": len(full_sem)},
+                "dev_parent": fc_old, "dev_semantic": fc_sem},
+            "stage_a_production_137": {"parent": stage_a_old, "semantic": stage_a_sem},
+            "dev_parent": {n: brief(r) for n, r in rep_old.items()},
+            "dev_parent_on_semantic_ids": {n: brief(r) for n, r in rep_old_same.items()},
+            "first_candidate_parent_on_semantic_ids": px._acc(
+                dev_sem, {i: first_candidate_correct(old_by[i]) for i in dev_sem}),
+            "dev_semantic": {n: brief(r) for n, r in rep_sem.items()},
+            "gates": gates, "passing_variants": passing, "winner": None,
+            "paired_semantic": paired["paired"], "diff_counts_semantic": paired["diff_counts"],
+            "review_slices_dev": review_slices, "expected_none_diagnostic": none_diag,
+            "holdout_status": holdout,
+            "notes": ["471/472 (clear selector errors) are HOLDOUT: no live A/B outputs exist",
+                      "a single expected-NONE case cannot support NONE precision/recall claims"],
+        }
+        out = Path(args.rescore_out)
+        out.mkdir(parents=True, exist_ok=True)
+        _dump(report, out / "semantic-rescore.json")
+        _dump(paired["diffs"], out / "semantic-case-diffs.json")
+    _dump({"semantic_gold_fingerprint": built["fingerprint"], "outcomes": acct["outcomes"],
+           "holdout_status": holdout, "passing": passing})
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -1159,6 +1324,19 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(name, required=True)
     p.add_argument("--gold-dir", help="reviewed Gold dir, to verify its sha256 read-only")
     p.set_defaults(func=cmd_adjudication_followup)
+
+    p = sub.add_parser("adjudication-lock", help="lock merged human decisions (no audit access)")
+    for name in ("--decisions", "--expected-sha256", "--review-dir", "--followup-dir"):
+        p.add_argument(name, required=True)
+    p.set_defaults(func=cmd_adjudication_lock)
+
+    p = sub.add_parser("semantic-apply-rescore",
+                       help="after lock: Semantic Gold V1 + re-score saved outputs")
+    for name in ("--review-dir", "--snapshot", "--challenge", "--stage-a-run", "--gold-out",
+                 "--rescore-out"):
+        p.add_argument(name, required=True)
+    p.add_argument("--run", action="append", required=True, help="name=run_dir")
+    p.set_defaults(func=cmd_semantic_apply_rescore)
 
     p = sub.add_parser("postmortem", help="deterministic Stage A failure analysis (no LLM)")
     p.add_argument("--snapshot", required=True)
