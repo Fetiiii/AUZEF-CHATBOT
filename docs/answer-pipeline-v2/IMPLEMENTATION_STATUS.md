@@ -30,8 +30,11 @@ STATUS: PASS
 Phase 7A — Selector Benchmark Harness
 STATUS: PASS
 
-Phase 7B — Model / Reasoning Evaluation
-STATUS: NOT_STARTED
+Phase 7B-Prep — Model / Reasoning Evaluation Preparation
+STATUS: PASS
+
+Phase 7B-Live — Model / Reasoning Live Evaluation
+STATUS: BLOCKED_PENDING_APPROVAL
 
 Phase 7C — Metadata Necessity
 STATUS: NOT_STARTED
@@ -284,3 +287,63 @@ Detailed evidence: [`PHASE_6_REPORT.md`](PHASE_6_REPORT.md).
 - [x] Phase 7B not started.
 
 Detailed evidence: [`PHASE_7A_REPORT.md`](PHASE_7A_REPORT.md).
+
+## Phase 7B-Prep acceptance record
+
+- [x] **Nothing frozen or production-side moved.**
+      - **Phase 7A snapshot:** unchanged (`3e558768…`, file sha256
+        re-verified).
+      - **Selector:** the prompt/contract (`3f49b198…`) and eligibility are
+        unchanged.
+      - **Production model/config:** registry v1, `af9eb2d0…`, unchanged.
+- [x] **First-candidate baseline reproduced exactly:** 462/482 = 0.958506,
+      with the same 20 wrong case ids as Phase 7A.
+- [x] **Selector-value metrics:** rescue, corruption, preserve, unresolved
+      and net corrections, reported separately from accuracy.
+- [x] **Challenge set `challenge-v1`.**
+      - **Selection:** model-independent.
+      - **Groups:** the union of first-candidate-wrong, near_qna,
+        general_specific, kb_overlap_flagged and multi_acceptable.
+      - **Control:** a deterministic hash-ordered easy control of 30.
+      - **Size:** 137 unique cases.
+      - **Fingerprint:** `bed2dad1…`.
+      - **Immutability:** the artifact is immutable.
+- [x] **Reporting layers.** `FULL_REFERENCE_EXACT` and `CHALLENGE_EXACT` are
+      named and reported separately. Reports also include position-1 vs
+      non-position-1, rank1_wrong rescue and right-first corruption,
+      general vs specific, near-QnA per pair, and KB overlap with its
+      selection-bias caveat.
+- [x] **Reasoning transport.**
+      - **Providers:** only openai and openrouter carry low/medium/high.
+      - **Null:** a null level sends nothing, so the production payload is
+        unchanged (tested).
+      - **Unsupported:** the level is rejected before any request, and the
+        registry refuses to store it. It is never silently ignored.
+      - **Fingerprint:** the level changes the config fingerprint.
+- [x] **Registry discovery.** 3 selector models were found. Only
+      openrouter/openai/gpt-4o-mini is runnable (the other providers have no
+      key). No model is reasoning-capable. `openai/gpt-5.6-luna` is
+      NOT_REGISTERED, and no model id was invented.
+- [x] **Live plan (`live-plan.json`, `a4dd2c8a…`).**
+      - **Stage A:** 1 × 137 calls.
+      - **Stage B policy:** baseline + ≤2 configs; at most 1,446 calls, or
+        1,035 incremental.
+      - **Challenge token estimate:** ≈310 k input per config
+        (APPROXIMATE).
+      - **Price:** PRICE_REQUIRED, with no dollar figure.
+- [x] **Live run approval.** A live run requires the plan file plus
+      `--approve-plan-fingerprint`. Any mismatch in plan, snapshot,
+      challenge, contract or config is refused.
+- [x] **Isolation.** Benchmark runs do not write registry config, do not
+      touch the production circuit breaker and do not create DecisionTrace
+      entries (tested).
+- [x] **Self-tests on the challenge set** (HARNESS SELF-TEST):
+      first_candidate 117/137 (rescue 0, corruption 0); oracle 137/137
+      (rescue 20); always_none 0/137 (corruption 117).
+- [x] **No automatic winner.**
+- [x] **Tests.** Targeted 20/20; full suite 455/455 (repository-root
+      layout). Zero real provider calls.
+- [x] Phase 7B-Live is BLOCKED_PENDING_APPROVAL, and Phase 7C has not
+      started.
+
+Detailed evidence: [`PHASE_7B_PREP_REPORT.md`](PHASE_7B_PREP_REPORT.md).

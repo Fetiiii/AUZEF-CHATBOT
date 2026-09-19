@@ -86,5 +86,27 @@ fingerprint, snapshot fingerprint, run mode and candidate order. It writes to
 `runs/<run_id>/results.jsonl`. Resume skips completed keys, rejects foreign
 results and ignores torn lines.
 
-`reasoning_effort` live runs are refused until the adapters transmit that
-value (g34).
+## Phase 7B-Prep additions
+
+| Module | Role |
+|---|---|
+| `challenge.py` | First-candidate baseline, frozen challenge set (`challenge-v1`), rescue/corruption metrics, FULL vs CHALLENGE report |
+| `plan.py` | Registry discovery, fingerprinted live plan, approval validation |
+
+```bash
+… challenge --snapshot <snap> --out <root>/challenge-v1          # freeze (immutable)
+… run --snapshot <snap> --challenge <root>/challenge-v1 --out <r> --fake-policy first_candidate
+… challenge-eval --snapshot <snap> --challenge <root>/challenge-v1 --run-dir <run_dir>
+… registry-models --out <root>/registry-models.json              # read-only, guarded
+… live-plan --snapshot <snap> --challenge <root>/challenge-v1 \
+    --registry <root>/registry-models.json --production-config <root>/production-config.json \
+    [--prior-model provider/model] [--price provider/model=IN:OUT] --out <root>/live-plan.json
+# live (Stage A): all 7A gates + the plan and its fingerprint
+… run … --challenge <root>/challenge-v1 --live --confirm-live-provider-calls \
+    --provider P --model M [--reasoning-effort low|medium|high] \
+    --live-plan <root>/live-plan.json --approve-plan-fingerprint <plan_fingerprint>
+```
+
+Reasoning levels travel only through the adapter transport
+(`services.llm_config.REASONING_TRANSPORT`: openai/openrouter
+low|medium|high). Any other level is refused before a request.

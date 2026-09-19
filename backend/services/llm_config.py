@@ -21,6 +21,47 @@ class ReasoningEffort(str, Enum):
     HIGH = "high"
 
 
+class ReasoningTransportError(ValueError):
+    """A reasoning_effort was configured that the provider adapter cannot send.
+
+    Raised before any outbound request: a labeled-but-untransmitted
+    reasoning level must never be silently ignored.
+    """
+
+
+# Adapter-level transport only: which provider request protocols can carry a
+# reasoning level. Whether a *model* accepts it is registry data
+# (supports_reasoning_effort / allowed_reasoning_efforts), never guessed here.
+# OpenAI Chat Completions: top-level ``reasoning_effort``; OpenRouter: unified
+# ``reasoning.effort`` request field. Gemini (thinking_budget/thinking_level)
+# has no 1:1 low/medium/high mapping, so it is intentionally unsupported.
+REASONING_TRANSPORT = {
+    "openai": frozenset({"low", "medium", "high"}),
+    "openrouter": frozenset({"low", "medium", "high"}),
+}
+
+
+def reasoning_transport_supported(provider: str, effort) -> bool:
+    if effort is None:
+        return True
+    value = getattr(effort, "value", effort)
+    return value in REASONING_TRANSPORT.get(provider, frozenset())
+
+
+def reasoning_request_fields(provider: str, effort) -> dict:
+    """Provider request fields for a reasoning level ({} when unset)."""
+    if effort is None:
+        return {}
+    value = getattr(effort, "value", effort)
+    if not reasoning_transport_supported(provider, value):
+        raise ReasoningTransportError(
+            f"reasoning_effort={value!r} cannot be transmitted by the {provider!r} adapter"
+        )
+    if provider == "openai":
+        return {"reasoning_effort": value}
+    return {"extra_body": {"reasoning": {"effort": value}}}
+
+
 _DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
     "openrouter": "openai/gpt-4o-mini",

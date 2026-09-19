@@ -202,18 +202,36 @@ def cmd_run(args) -> None:
     if contract_fp != manifest["selector_contract_fingerprint"]:
         print("WARNING: current selector contract differs from the snapshot's; results go "
               "to a new namespace", file=sys.stderr)
+    challenge_manifest, case_ids = None, None
+    if args.challenge:
+        from benchmarks.selector_v2.challenge import load_challenge
+
+        challenge_manifest, challenge_cases = load_challenge(Path(args.challenge), manifest)
+        case_ids = {c["case_id"] for c in challenge_cases}
     if args.live:
+        from benchmarks.selector_v2.plan import load_approved_plan
+
         config = selector_config(
             provider=args.provider, model=args.model, temperature=args.temperature,
             max_tokens=args.max_tokens, reasoning_effort=args.reasoning_effort,
             timeout_seconds=args.timeout_seconds, max_retries=args.max_retries,
         )
+        plan = load_approved_plan(
+            args.live_plan and Path(args.live_plan), args.approve_plan_fingerprint,
+            snapshot_fingerprint=manifest["snapshot_fingerprint"],
+            challenge_fingerprint=(challenge_manifest or {}).get("challenge_fingerprint"),
+            contract_fingerprint=contract_fp, config_fingerprint=config.fingerprint,
+        )
+        if plan["stage"] == "A" and case_ids is None:
+            raise SystemExit("Stage A plan: --challenge is required (challenge cases only)")
         backend = LiveSelectorBackend(config)
         mode = "LIVE"
-        plan = estimate(snapshots, max_tokens=config.max_tokens, primary_only=args.primary_only)
-        print(f"LIVE RUN: provider={config.provider} model={config.model} "
-              f"planned_calls<={plan['calls_per_config']} (max_cases={args.max_cases}) "
-              f"est_input_tokens={plan['input_tokens']['total']} ({plan['tokenizer']})",
+        subset = [s for s in snapshots if case_ids is None or s.case.case_id in case_ids]
+        est = estimate(subset, max_tokens=config.max_tokens, primary_only=args.primary_only)
+        print(f"LIVE RUN (plan {plan['plan_fingerprint'][:12]}): provider={config.provider} "
+              f"model={config.model} reasoning={args.reasoning_effort} "
+              f"planned_calls<={est['calls_per_config']} (max_cases={args.max_cases}) "
+              f"est_input_tokens={est['input_tokens']['total']} ({est['tokenizer']})",
               file=sys.stderr)
     else:
         config = selector_config(provider=FAKE_PROVIDER, model=f"fake-{args.fake_policy}",
@@ -232,7 +250,8 @@ def cmd_run(args) -> None:
     def execute():
         return run_benchmark(snapshots, backend, identity, Path(args.out),
                              concurrency=args.concurrency, max_cases=args.max_cases,
-                             retry_errors=args.retry_errors, primary_only=args.primary_only)
+                             retry_errors=args.retry_errors, primary_only=args.primary_only,
+                             case_ids=case_ids)
 
     if args.live:
         summary = execute()
@@ -240,8 +259,125 @@ def cmd_run(args) -> None:
         with no_live_calls():
             summary = execute()
     report = _write_report(Path(args.snapshot), Path(summary.run_dir))
+    if args.challenge:
+        with no_live_calls():
+            _write_challenge_report(Path(args.snapshot), Path(args.challenge),
+                                    Path(summary.run_dir))
     _dump({"summary": summary.__dict__, "label": report["label"],
            "primary": report["primary"], "denominators": report["denominators"]})
+
+
+def _write_challenge_report(snapshot_dir: Path, challenge_dir: Path, run_dir: Path) -> dict:
+    from benchmarks.selector_v2.challenge import correctness, load_challenge, two_layer_report
+    from benchmarks.selector_v2.evaluator import SELF_TEST_LABEL
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    manifest, snapshots = load_snapshot(snapshot_dir)
+    challenge_manifest, cases = load_challenge(challenge_dir, manifest)
+    results = load_results(run_dir / RESULTS_FILE).by_case
+    modes = {r.run_mode for r in results.values()}
+    label = SELF_TEST_LABEL if any(m.startswith("DRY_RUN_FAKE") for m in modes) else "LIVE MODEL RUN"
+    report = two_layer_report(snapshots, [c["case_id"] for c in cases],
+                              correctness(snapshots, results), label=label, results=results)
+    report["challenge_fingerprint"] = challenge_manifest["challenge_fingerprint"]
+    _dump(report, run_dir / "challenge-metrics.json")
+    return report
+
+
+def cmd_challenge(args) -> None:
+    from benchmarks.selector_v2.challenge import (
+        build_challenge, first_candidate_correctness, two_layer_report, write_challenge,
+    )
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    with no_live_calls():
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        built = build_challenge(snapshots)
+        baseline = two_layer_report(snapshots, [c["case_id"] for c in built["cases"]],
+                                    first_candidate_correctness(snapshots),
+                                    label="FIRST_CANDIDATE_BASELINE (diagnostic, not production)")
+        summary = {"counts": built["counts"], "first_candidate_baseline": baseline}
+        challenge_manifest = write_challenge(Path(args.out), manifest, built, summary)
+    _dump({"challenge_fingerprint": challenge_manifest["challenge_fingerprint"],
+           "counts": built["counts"],
+           "first_candidate_full": baseline["FULL_REFERENCE_EXACT"]["exact"],
+           "first_candidate_challenge": baseline["CHALLENGE_EXACT"]["exact"]})
+
+
+def cmd_challenge_eval(args) -> None:
+    with no_live_calls():
+        report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
+                                         Path(args.run_dir))
+    _dump({"label": report["label"],
+           "FULL_REFERENCE_EXACT": report["FULL_REFERENCE_EXACT"]["exact"],
+           "CHALLENGE_EXACT": report["CHALLENGE_EXACT"]["exact"],
+           "challenge_selector_value": report["CHALLENGE_EXACT"]["selector_value"]})
+
+
+def cmd_registry_models(args) -> None:
+    from benchmarks.selector_v2.plan import discover_selector_models
+
+    with no_live_calls(_infra_hosts()):
+        from core.database import SessionLocal
+        from core.deps import provider_key_configured
+        from services.ai_registry import SUPPORTED_PROVIDERS, list_models
+
+        db = SessionLocal()
+        try:
+            models = [m.to_dict() for m in list_models(db)]
+            keys = {p: provider_key_configured(p, db) for p in SUPPORTED_PROVIDERS}
+        finally:
+            db.close()
+    _dump({"provider_key_present": keys,
+           "models": discover_selector_models(models, keys)},
+          Path(args.out) if args.out else None)
+
+
+def _parse_prices(args) -> dict:
+    prices = {}
+    for item in args.price or []:
+        name, _, value = item.partition("=")
+        inp, _, out = value.partition(":")
+        prices[name] = (float(inp), float(out))
+    if args.input_price_per_1m is not None and args.output_price_per_1m is not None:
+        prices["*"] = (args.input_price_per_1m, args.output_price_per_1m)
+    return prices
+
+
+def cmd_live_plan(args) -> None:
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.contract import selector_contract_fingerprint
+    from benchmarks.selector_v2.plan import build_live_plan, write_plan
+    from benchmarks.selector_v2.snapshot import load_snapshot
+    from benchmarks.selector_v2.tokens import estimate
+
+    with no_live_calls():
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        challenge_manifest, cases = load_challenge(Path(args.challenge), manifest)
+        registry = json.loads(Path(args.registry).read_text(encoding="utf-8"))
+        production = json.loads(Path(args.production_config).read_text(encoding="utf-8"))
+        ids = {c["case_id"] for c in cases}
+        max_tokens = production["selector"]["max_tokens"]
+        challenge_est = estimate([s for s in snapshots if s.case.case_id in ids],
+                                 max_tokens=max_tokens, primary_only=True)
+        full_est = estimate(snapshots, max_tokens=max_tokens, primary_only=True)
+        plan = build_live_plan(
+            snapshot_manifest=manifest, challenge_manifest=challenge_manifest,
+            contract_fingerprint=selector_contract_fingerprint(),
+            production_selector=production["selector"], discovered=registry["models"],
+            challenge_estimate=challenge_est, full_estimate=full_est,
+            prior_models=args.prior_model or [], prices=_parse_prices(args),
+        )
+        plan["token_estimates"] = {"challenge_per_config": challenge_est,
+                                   "full_per_config": full_est}
+        from benchmarks.selector_v2.plan import plan_fingerprint
+
+        plan["plan_fingerprint"] = plan_fingerprint(plan)
+        write_plan(Path(args.out), plan)
+    _dump({"plan_fingerprint": plan["plan_fingerprint"], "stage_a": plan["stage_a"],
+           "configs": [c["config_id"] for c in plan["proposed_configs"]],
+           "blocked": plan["blocked_or_unregistered"]})
 
 
 def cmd_evaluate(args) -> None:
@@ -342,7 +478,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--candidate-order", default="production",
                    help="production | permute:<seed> (position-bias extension point)")
     p.add_argument("--primary-only", action="store_true")
+    p.add_argument("--challenge", help="restrict to a frozen challenge artifact dir")
+    p.add_argument("--live-plan", help="approved live plan (required with --live)")
+    p.add_argument("--approve-plan-fingerprint", help="explicit plan_fingerprint approval")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("challenge", help="freeze the selector challenge set (offline)")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_challenge)
+
+    p = sub.add_parser("challenge-eval", help="two-layer FULL/CHALLENGE report for a run")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--challenge", required=True)
+    p.add_argument("--run-dir", required=True)
+    p.set_defaults(func=cmd_challenge_eval)
+
+    p = sub.add_parser("registry-models", help="selector-eligible registry models (read-only)")
+    p.add_argument("--out")
+    p.set_defaults(func=cmd_registry_models)
+
+    p = sub.add_parser("live-plan", help="build the fingerprinted live-run approval plan")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--challenge", required=True)
+    p.add_argument("--registry", required=True, help="registry-models output JSON")
+    p.add_argument("--production-config", required=True, help="config-snapshot output JSON")
+    p.add_argument("--prior-model", action="append",
+                   help="provider/model used in earlier benchmarks (reported if unregistered)")
+    p.add_argument("--price", action="append", help="provider/model=IN_PER_1M:OUT_PER_1M")
+    p.add_argument("--input-price-per-1m", type=float)
+    p.add_argument("--output-price-per-1m", type=float)
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_live_plan)
 
     p = sub.add_parser("evaluate", help="(re)compute metrics for a run dir")
     p.add_argument("--snapshot", required=True)

@@ -14,6 +14,7 @@ from services.llm_config import (
     EffectiveLLMConfigSet,
     LLMCapability,
     default_model,
+    reasoning_request_fields,
     resolve_llm_config_set,
 )
 from services.candidate_eligibility import SelectorCandidate
@@ -173,6 +174,8 @@ class _OpenAICompatibleProvider(BaseLLMProvider):
     def _invoke(
         self, system: str, user: str, config: EffectiveLLMConfig
     ) -> LLMInvocationResult:
+        # Validated before the request: raises instead of silently dropping.
+        reasoning = reasoning_request_fields(self.provider_name, config.reasoning_effort)
         started = time.perf_counter()
         try:
             client = self.client
@@ -190,6 +193,7 @@ class _OpenAICompatibleProvider(BaseLLMProvider):
             # Omit unset optional values: passing None changes SDK defaults.
             if config.timeout_seconds is not None:
                 kwargs["timeout"] = config.timeout_seconds
+            kwargs.update(reasoning)
             response = client.chat.completions.create(**kwargs)
             usage = getattr(response, "usage", None)
             choice = response.choices[0]
@@ -259,6 +263,8 @@ class GeminiProvider(BaseLLMProvider):
     def _invoke(
         self, system: str, user: str, config: EffectiveLLMConfig
     ) -> LLMInvocationResult:
+        # No reasoning transport for Gemini: fail before the request.
+        reasoning_request_fields(self.provider_name, config.reasoning_effort)
         started = time.perf_counter()
         try:
             generate_config_kwargs = {

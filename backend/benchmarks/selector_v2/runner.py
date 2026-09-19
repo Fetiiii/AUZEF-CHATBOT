@@ -242,6 +242,7 @@ def run_benchmark(
     max_cases: Optional[int] = None,
     retry_errors: bool = False,
     primary_only: bool = False,
+    case_ids: Optional[set] = None,
 ) -> RunSummary:
     if not 1 <= concurrency <= MAX_CONCURRENCY:
         raise ValueError(f"concurrency must be 1..{MAX_CONCURRENCY}")
@@ -249,7 +250,8 @@ def run_benchmark(
     store.prepare()
     existing = store.load()
 
-    evaluable = [s for s in snapshots if s.selector_evaluable and (s.case.primary or not primary_only)]
+    evaluable = [s for s in snapshots if s.selector_evaluable and (s.case.primary or not primary_only)
+                 and (case_ids is None or s.case.case_id in case_ids)]
     todo: list[tuple[CaseSnapshot, int]] = []
     skipped = 0
     for snapshot in evaluable:

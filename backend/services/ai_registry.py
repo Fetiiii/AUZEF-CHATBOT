@@ -43,6 +43,7 @@ from services.llm_config import (
     EffectiveLLMConfigSet,
     LLMCapability,
     ReasoningEffort,
+    reasoning_transport_supported,
     resolve_llm_config_set,
 )
 
@@ -388,6 +389,13 @@ def validate_assignment(capability: LLMCapability, model: ModelDefinition,
             raise AIConfigError(
                 "invalid_reasoning_effort",
                 f"Model için izinli reasoning seviyeleri: {', '.join(model.allowed_reasoning_efforts)}",
+            )
+        if not reasoning_transport_supported(model.provider, params.reasoning_effort):
+            # Never store a level the adapter would not actually send.
+            raise AIConfigError(
+                "reasoning_transport_unsupported",
+                f"{model.provider} adapter'ı reasoning_effort={params.reasoning_effort!r} "
+                "değerini provider'a iletemiyor.",
             )
 
 
@@ -762,7 +770,8 @@ def _seed_model(db: Session, provider: str, identifier: str, display_name: str) 
         allowed_capabilities=_dump([cap.value for cap in CAPABILITIES]),
         # Proven with the strict JSON + Pydantic contract since Phase 2/4.
         supports_structured_output=1,
-        # Adapters do not transmit reasoning_effort (Phase 1 contract).
+        # Phase 0 defaults are non-reasoning models; reasoning support is
+        # declared per model by an operator, never assumed by the bootstrap.
         supports_reasoning_effort=0,
         allowed_reasoning_efforts="[]",
         qualification_status=QualificationStatus.LEGACY_APPROVED.value,

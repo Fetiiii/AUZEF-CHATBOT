@@ -81,7 +81,8 @@ def test_intent_analyzer_error_falls_back_to_lossless_single_and_keeps_status():
     assert result.fallback_to_single is True
 
 
-def test_openai_adapter_preserves_metadata_and_omits_unsupported_optional_settings(monkeypatch):
+def test_openai_adapter_preserves_metadata_transmits_reasoning_and_omits_structured_output(
+        monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("LLM_SELECTOR_REASONING_EFFORT", "high")
     monkeypatch.setenv("LLM_SELECTOR_STRUCTURED_OUTPUT_ENABLED", "true")
@@ -112,7 +113,8 @@ def test_openai_adapter_preserves_metadata_and_omits_unsupported_optional_settin
     assert meta.input_tokens == 12 and meta.output_tokens == 1
     assert meta.finish_reason == "stop"
     assert "timeout" not in captured
-    assert "reasoning_effort" not in captured
+    # Phase 7B-Prep: a configured reasoning level is transmitted (never dropped).
+    assert captured["reasoning_effort"] == "high"
     # Phase 4 uses strict JSON + Pydantic; native response_format is not sent.
     assert "response_format" not in captured
     assert captured["max_tokens"] == 32 and captured["temperature"] == 0

@@ -19,6 +19,8 @@ from services.llm_config import (
     EffectiveLLMConfigSet,
     LLMCapability,
     ReasoningEffort,
+    ReasoningTransportError,
+    reasoning_request_fields,
 )
 from services.llm_provider import BaseLLMProvider, _bind_configs
 from services.llm_types import SelectorResult
@@ -127,28 +129,28 @@ class FakeSelectorProvider(BaseLLMProvider):
 
 
 class LiveSelectorBackend:
-    """Production provider adapter bound to one explicit selector config.
+    """Production provider adapter bound to one explicit, ephemeral selector config.
 
     Constructed only behind the live gate (``--live`` +
-    ``--confirm-live-provider-calls``). API keys come from the environment
-    exactly as in production; nothing secret is written to results.
+    ``--confirm-live-provider-calls`` + an approved live plan). The config is
+    never written to the registry; API keys come from the environment exactly
+    as in production. It calls ``ask_with_result`` directly, so the production
+    circuit breaker and DecisionTrace are never touched.
     """
 
-    def __init__(self, config: EffectiveLLMConfig):
-        if config.reasoning_effort is not None:
-            # Phase 6/7 known gap (g34): adapters store but do not transmit
-            # reasoning_effort, so such a run would be mislabeled.
-            raise SystemExit(
-                "reasoning_effort is not transmitted by the production adapters yet; "
-                "a reasoning run would silently measure the default. Refused."
-            )
+    def __init__(self, config: EffectiveLLMConfig, client_factory=None):
+        try:
+            # Preflight: an untransmittable reasoning level fails before any request.
+            reasoning_request_fields(config.provider, config.reasoning_effort)
+        except ReasoningTransportError as exc:
+            raise SystemExit(f"live run refused: {exc}") from None
         from services.llm_provider import GeminiProvider, OpenAIProvider, OpenRouterProvider
 
         factories = {"openai": OpenAIProvider, "openrouter": OpenRouterProvider,
                      "gemini": GeminiProvider}
         if config.provider not in factories:
             raise SystemExit(f"unsupported live provider {config.provider!r}")
-        client = factories[config.provider](model=config.model)
+        client = (client_factory or factories[config.provider])(model=config.model)
         self.provider = _bind_configs(client, config_set_for(config))
 
     def select(self, snapshot: CaseSnapshot, candidates: Sequence[SelectorCandidate]) -> SelectorResult:

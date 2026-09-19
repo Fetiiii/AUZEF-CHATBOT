@@ -530,8 +530,8 @@ def test_guard_blocks_sockets_and_provider_sdks():
         Completions.create(None, model="x", messages=[])
 
 
-def test_reasoning_effort_live_run_is_refused_until_adapters_transmit_it():
-    config = selector_config(provider="openrouter", model="m", reasoning_effort="low")
+def test_untransmittable_reasoning_live_run_is_refused():
+    config = selector_config(provider="gemini", model="m", reasoning_effort="low")
     with pytest.raises(SystemExit):
         LiveSelectorBackend(config)
 
