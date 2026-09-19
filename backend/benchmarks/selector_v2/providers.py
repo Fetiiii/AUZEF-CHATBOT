@@ -12,6 +12,7 @@ import threading
 from dataclasses import replace
 from typing import Callable, Optional, Sequence
 
+from benchmarks.selector_v2.prompt_contract import PRODUCTION, load_prompt, select_with_prompt
 from benchmarks.selector_v2.schema import CaseSnapshot
 from services.candidate_eligibility import SelectorCandidate
 from services.llm_config import (
@@ -104,7 +105,7 @@ class FakeSelectorProvider(BaseLLMProvider):
 
     provider_name = FAKE_PROVIDER
 
-    def __init__(self, policy: str, config: EffectiveLLMConfig):
+    def __init__(self, policy: str, config: EffectiveLLMConfig, prompt=None):
         if policy not in FAKE_POLICIES:
             raise ValueError(f"unknown fake policy {policy!r}: {sorted(FAKE_POLICIES)}")
         self.policy_name = policy
@@ -113,17 +114,20 @@ class FakeSelectorProvider(BaseLLMProvider):
         self._local = threading.local()
         self.calls = 0
         self._calls_lock = threading.Lock()
+        self.prompt = prompt or load_prompt(PRODUCTION)
+        self.requests: list[tuple[str, str]] = []  # (system, user) as sent
 
     def _complete(self, system: str, user: str, max_tokens: int = 5) -> str:
         with self._calls_lock:
             self.calls += 1
+            self.requests.append((system, user))
         snapshot, candidates = self._local.current
         return self._policy(snapshot, candidates)
 
     def select(self, snapshot: CaseSnapshot, candidates: Sequence[SelectorCandidate]) -> SelectorResult:
         self._local.current = (snapshot, candidates)
         try:
-            return self.ask_with_result(snapshot.case.intent_text, candidates)
+            return select_with_prompt(self, self.prompt, snapshot.case.intent_text, candidates)
         finally:
             self._local.current = None
 
@@ -138,7 +142,7 @@ class LiveSelectorBackend:
     circuit breaker and DecisionTrace are never touched.
     """
 
-    def __init__(self, config: EffectiveLLMConfig, client_factory=None):
+    def __init__(self, config: EffectiveLLMConfig, client_factory=None, prompt=None):
         try:
             # Preflight: an untransmittable reasoning level fails before any request.
             reasoning_request_fields(config.provider, config.reasoning_effort)
@@ -152,6 +156,7 @@ class LiveSelectorBackend:
             raise SystemExit(f"unsupported live provider {config.provider!r}")
         client = (client_factory or factories[config.provider])(model=config.model)
         self.provider = _bind_configs(client, config_set_for(config))
+        self.prompt = prompt or load_prompt(PRODUCTION)
 
     def select(self, snapshot: CaseSnapshot, candidates: Sequence[SelectorCandidate]) -> SelectorResult:
-        return self.provider.ask_with_result(snapshot.case.intent_text, candidates)
+        return select_with_prompt(self.provider, self.prompt, snapshot.case.intent_text, candidates)

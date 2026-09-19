@@ -39,7 +39,13 @@ STATUS: PASS
 Phase 7B-Postmortem — Selector Failure Anatomy + Experiment Design
 STATUS: PASS
 
-Phase 7B-Prompt Experiment
+Phase 7B-Prompt Prep — Selector Prompt Experiment Harness
+STATUS: PASS
+
+Phase 7B-Prompt DEV Live
+STATUS: BLOCKED_PENDING_EXPLICIT_APPROVAL
+
+Phase 7B-Prompt HOLDOUT Live
 STATUS: NOT_STARTED
 
 Phase 7B-Live Stage B — Full Reference Validation
@@ -429,3 +435,44 @@ Detailed evidence: [`PHASE_7B_STAGE_A_REPORT.md`](PHASE_7B_STAGE_A_REPORT.md).
       Phase 7C not started.
 
 Detailed evidence: [`PHASE_7B_POSTMORTEM_REPORT.md`](PHASE_7B_POSTMORTEM_REPORT.md).
+
+## Phase 7B-Prompt Prep acceptance record
+
+- [x] **Production unchanged.** Production prompt `2d59cfb6…` and selector
+      contract `3f49b198…` are the same, with no `backend/services` diff.
+- [x] **Frozen inputs unchanged.** Snapshot, challenge and split were
+      re-verified on load.
+- [x] **Benchmark-only prompt override.** Only the system prompt varies;
+      the production serializer, schema, parser, adapter and model config
+      are reused. The production prompt is read at runtime and has no copy.
+- [x] **Variants versioned.** `variant_a_v1` and `variant_b_v1` are
+      versioned `.md` artifacts with committed fingerprints and a
+      whitespace policy. They are postmortem-derived, and B is a pure
+      NONE-threshold ablation. No benchmark ids or text appear in them
+      (tested).
+- [x] **Fingerprints separated.** Prompt fingerprint and serializer
+      contract fingerprint (`d50fbee4…`) are distinct.
+- [x] **Split frozen and committed.** The DEV/HOLDOUT split is committed as
+      ids only: 95/42, fingerprint `0fcb2441…`. The HOLDOUT limitation
+      (tuning-separation, not blind) is documented.
+- [x] **Production DEV baseline reproduced from Stage A:** 34/95, rescue
+      6/13, corruption 54/82, net −48, false NONE 29. No new calls. The
+      first-candidate DEV diagnostic is 82/95.
+- [x] **DEV evaluation.** DEV report with taxonomy slices and critical
+      cases 471/472 (both in HOLDOUT). Selection gate defined; no automatic
+      winner.
+- [x] **HOLDOUT gate enforced:** it requires a selected DEV winner, a
+      passing gate report and, for live runs, its own approved plan.
+- [x] **DEV live plan** `c8847848…`: 95 A + 95 B = 190 calls; 0 production
+      and 0 HOLDOUT calls.
+      - Tokens: approx 436,602 input (calibrated ≈360,808), about 3,230
+        output.
+      - Cost: PRICE_REQUIRED.
+      - Provider: OpenRouter only.
+- [x] **Isolation.** Result namespaces are separated by prompt and split,
+      with resume. Production DB, breaker and DecisionTrace are untouched
+      (tested).
+- [x] **Tests.** New 15/15; full suite 479/479. Zero live calls.
+      Phase 7C not started.
+
+Detailed evidence: [`PHASE_7B_PROMPT_PREP_REPORT.md`](PHASE_7B_PROMPT_PREP_REPORT.md).

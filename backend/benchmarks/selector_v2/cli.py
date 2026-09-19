@@ -453,6 +453,190 @@ def cmd_postmortem(args) -> None:
                      "fp": split["split_fingerprint"]}})
 
 
+def _prompt_inputs(args):
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    manifest, snapshots = load_snapshot(Path(args.snapshot))
+    cm, cases = load_challenge(Path(args.challenge), manifest)
+    reference = None
+    if getattr(args, "postmortem", None):
+        reference = json.loads((Path(args.postmortem) / "prompt-experiment-split.json")
+                               .read_text(encoding="utf-8"))
+    split = px.load_split(challenge_ids={c["case_id"] for c in cases}, reference=reference)
+    return manifest, snapshots, cm, cases, split
+
+
+def cmd_prompt_run(args) -> None:
+    """Run ONE benchmark prompt on DEV or HOLDOUT (only the system prompt varies)."""
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2.prompt_contract import (
+        PRODUCTION, load_prompt, serializer_contract_fingerprint,
+    )
+    from benchmarks.selector_v2.providers import (
+        FAKE_PROVIDER, FakeSelectorProvider, LiveSelectorBackend, selector_config,
+    )
+    from benchmarks.selector_v2.runner import RunIdentity, run_benchmark
+
+    check_live_gate(live=args.live, confirmed=args.confirm_live_provider_calls,
+                    provider=args.provider, model=args.model)
+    prompt = load_prompt(args.prompt)
+    if prompt.prompt_id == PRODUCTION:
+        raise SystemExit("production prompt is not rerun: reuse the Stage A run as the baseline")
+    with no_live_calls():
+        manifest, snapshots, _cm, _cases, split = _prompt_inputs(args)
+    serializer_fp = serializer_contract_fingerprint()
+    if args.case_set == "holdout":
+        px.holdout_guard(prompt=prompt, selected_winner=args.selected_dev_winner,
+                         gate_report_path=args.dev_gate_report and Path(args.dev_gate_report),
+                         split_fp=split["split_fingerprint"], live=args.live,
+                         plan_path=args.holdout_plan and Path(args.holdout_plan),
+                         approved_fp=args.approve_holdout_plan_fingerprint)
+        case_ids = set(split["holdout"])
+    else:
+        case_ids = set(split["dev"])
+    if args.live:
+        config = selector_config(provider=args.provider, model=args.model,
+                                 temperature=args.temperature, max_tokens=args.max_tokens,
+                                 reasoning_effort=args.reasoning_effort)
+        if args.case_set == "dev":
+            px.validate_dev_plan(args.live_plan and Path(args.live_plan),
+                                 args.approve_plan_fingerprint,
+                                 snapshot_fp=manifest["snapshot_fingerprint"],
+                                 split_fp=split["split_fingerprint"], serializer_fp=serializer_fp,
+                                 prompt=prompt, config=config)
+        backend = LiveSelectorBackend(config, prompt=prompt)
+        mode = "LIVE"
+    else:
+        config = selector_config(provider=FAKE_PROVIDER, model=f"fake-{args.fake_policy}",
+                                 max_tokens=args.max_tokens)
+        backend = FakeSelectorProvider(args.fake_policy, config, prompt=prompt)
+        mode = f"DRY_RUN_FAKE:{args.fake_policy}"
+    identity = RunIdentity(
+        selector_contract_fingerprint=serializer_fp, config=config,
+        snapshot_fingerprint=manifest["snapshot_fingerprint"], run_mode=mode,
+        prompt_fingerprint=prompt.fingerprint, split_fingerprint=split["split_fingerprint"],
+    )
+
+    def execute():
+        return run_benchmark(snapshots, backend, identity, Path(args.out),
+                             concurrency=args.concurrency, max_cases=args.max_cases,
+                             retry_errors=args.retry_errors, primary_only=True,
+                             case_ids=case_ids)
+
+    if args.live:
+        with no_live_calls([LIVE_PROVIDERS[config.provider]], block_sdks=False):
+            summary = execute()
+    else:
+        with no_live_calls():
+            summary = execute()
+    _dump({"summary": summary.__dict__, "prompt": prompt.to_dict(), "case_set": args.case_set})
+
+
+def _dev_context(args):
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+
+    manifest, snapshots, cm, cases, split = _prompt_inputs(args)
+    membership = {c["case_id"]: c["membership"] for c in cases}
+    failures = [json.loads(line) for line in (Path(args.postmortem) / "failure-cases.jsonl")
+                .read_text(encoding="utf-8").splitlines() if line.strip()]
+    slices = px.taxonomy_slices(failures)
+    side = {**{i: "DEV" for i in split["dev"]}, **{i: "HOLDOUT" for i in split["holdout"]}}
+    baseline = load_results(Path(args.stage_a_run) / RESULTS_FILE).by_case
+    return manifest, snapshots, cm, cases, split, membership, slices, side, baseline
+
+
+def cmd_prompt_prep(args) -> None:
+    """Offline: verify inputs, production DEV baseline, DEV plan, prompt diff."""
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2.challenge import selector_value
+    from benchmarks.selector_v2.contract import selector_contract_fingerprint
+    from benchmarks.selector_v2.prompt_contract import (
+        PROMPT_IDS, load_committed_manifest, load_prompt, prompt_manifest,
+        serializer_contract_fingerprint,
+    )
+    from benchmarks.selector_v2.providers import selector_config
+    from benchmarks.selector_v2.tokens import estimate
+
+    with no_live_calls():
+        manifest, snapshots, cm, cases, split, membership, slices, side, baseline = _dev_context(args)
+        live_manifest = prompt_manifest()
+        if live_manifest != load_committed_manifest():
+            raise SystemExit("prompt manifest drift: a prompt or the serializer changed")
+        prompts = {pid: load_prompt(pid) for pid in PROMPT_IDS}
+        dev = split["dev"]
+        prod = px.dev_report(snapshots, dev, baseline, membership, slices,
+                             label="production (Stage A reuse)", split_side=side)
+        holdout_prod = px.dev_report(snapshots, split["holdout"], baseline, membership, slices,
+                                     label="production HOLDOUT (Stage A, reference only)",
+                                     split_side=side)
+        by_id = {s.case.case_id: s for s in snapshots}
+        fc = px.first_candidate_results(snapshots, dev)
+        first_candidate = {"exact": px._acc(dev, fc),
+                           "note": "diagnostic comparator only; not the prompt-selection standard"}
+        dev_snaps = [by_id[i] for i in dev]
+        config = selector_config(provider="openrouter", model="openai/gpt-4o-mini")
+        prod_est = estimate(dev_snaps, max_tokens=config.max_tokens, primary_only=True)
+        actual = sum(baseline[i].input_tokens or 0 for i in dev)
+        calibration = {"factor": round(actual / prod_est["input_tokens"]["total"], 4),
+                       "source": "Stage A actual OpenRouter input tokens on DEV / "
+                                 "approximate estimate of the production prompt on DEV",
+                       "stage_a_dev_actual_input_tokens": actual,
+                       "production_prompt_dev_estimate": prod_est["input_tokens"]["total"]}
+        plan = px.build_dev_plan(
+            snapshot_manifest=manifest, challenge_manifest=cm, split=split,
+            serializer_fp=serializer_contract_fingerprint(), config=config,
+            prompts=[prompts["variant_a_v1"], prompts["variant_b_v1"]],
+            production_prompt=prompts["production"], dev_snapshots=dev_snaps,
+            baseline_run_id=Path(args.stage_a_run).name, calibration=calibration)
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        _dump(plan, out / "live-plan-dev.json")
+        _dump({"production_dev": prod, "production_holdout_reference": holdout_prod,
+               "first_candidate_dev": first_candidate,
+               "taxonomy_slices": {k: {"all": len(v), "dev": sum(side[i] == "DEV" for i in v),
+                                       "holdout": sum(side[i] == "HOLDOUT" for i in v)}
+                                   for k, v in slices.items()},
+               "selector_contract_fingerprint": selector_contract_fingerprint(),
+               "prompts": live_manifest, "split_fingerprint": split["split_fingerprint"],
+               "selection_gate_definition": list(px.selection_gate(prod, prod)["checks"])},
+              out / "prep-summary.json")
+        (out / "prompt-diff.md").write_text(px.prompt_diff_markdown(prompts), encoding="utf-8")
+    _dump({"plan_fingerprint": plan["plan_fingerprint"], "calls": plan["calls"],
+           "tokens": plan["estimated_tokens_total"],
+           "production_dev": {"exact": prod["exact"], "value": prod["selector_value"],
+                              "false_none": prod["false_none"]},
+           "first_candidate_dev": first_candidate["exact"]})
+
+
+def cmd_prompt_dev_eval(args) -> None:
+    """DEV report + selection gate for one variant run (no winner is chosen)."""
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2.runner import RESULTS_FILE, RUN_MANIFEST, load_results
+
+    with no_live_calls():
+        manifest, snapshots, cm, cases, split, membership, slices, side, baseline = _dev_context(args)
+        run_dir = Path(args.run_dir)
+        identity = json.loads((run_dir / RUN_MANIFEST).read_text(encoding="utf-8"))
+        if identity.get("split_fingerprint") != split["split_fingerprint"]:
+            raise SystemExit("run belongs to another split")
+        results = load_results(run_dir / RESULTS_FILE).by_case
+        dev = split["dev"]
+        prod = px.dev_report(snapshots, dev, baseline, membership, slices,
+                             label="production (Stage A reuse)", split_side=side)
+        variant = px.dev_report(snapshots, dev, results, membership, slices,
+                                label=identity.get("prompt_fingerprint", "?"), split_side=side)
+        report = {"prompt_fingerprint": identity.get("prompt_fingerprint"),
+                  "split_fingerprint": split["split_fingerprint"],
+                  "run_id": identity.get("run_id"), "run_mode": identity.get("run_mode"),
+                  "variant_dev": variant, "production_dev": prod,
+                  "gate": px.selection_gate(variant, prod), "winner": None}
+        _dump(report, run_dir / "dev-gate-report.json")
+    _dump({"gate": report["gate"], "exact": variant["exact"], "value": variant["selector_value"]})
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -648,6 +832,41 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-dir", required=True)
     p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_stage_report)
+
+    p = sub.add_parser("prompt-prep", help="offline prompt-experiment prep (DEV plan, baseline, diff)")
+    for name in ("--snapshot", "--challenge", "--stage-a-run", "--postmortem", "--out"):
+        p.add_argument(name, required=True)
+    p.set_defaults(func=cmd_prompt_prep)
+
+    p = sub.add_parser("prompt-run", help="run one benchmark prompt on DEV/HOLDOUT (gated)")
+    for name in ("--snapshot", "--challenge", "--out"):
+        p.add_argument(name, required=True)
+    p.add_argument("--postmortem", help="postmortem dir (split cross-check)")
+    p.add_argument("--prompt", required=True, help="variant_a_v1 | variant_b_v1")
+    p.add_argument("--case-set", required=True, choices=["dev", "holdout"])
+    p.add_argument("--fake-policy", default="oracle")
+    p.add_argument("--live", action="store_true")
+    p.add_argument(CONFIRM_FLAG, dest="confirm_live_provider_calls", action="store_true")
+    p.add_argument("--provider")
+    p.add_argument("--model")
+    p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument("--max-tokens", type=int, default=32)
+    p.add_argument("--reasoning-effort", choices=["low", "medium", "high"])
+    p.add_argument("--live-plan")
+    p.add_argument("--approve-plan-fingerprint")
+    p.add_argument("--selected-dev-winner")
+    p.add_argument("--dev-gate-report")
+    p.add_argument("--holdout-plan")
+    p.add_argument("--approve-holdout-plan-fingerprint")
+    p.add_argument("--concurrency", type=int, default=1)
+    p.add_argument("--max-cases", type=int)
+    p.add_argument("--retry-errors", action="store_true")
+    p.set_defaults(func=cmd_prompt_run)
+
+    p = sub.add_parser("prompt-dev-eval", help="DEV report + selection gate for a variant run")
+    for name in ("--snapshot", "--challenge", "--stage-a-run", "--postmortem", "--run-dir"):
+        p.add_argument(name, required=True)
+    p.set_defaults(func=cmd_prompt_dev_eval)
 
     p = sub.add_parser("postmortem", help="deterministic Stage A failure analysis (no LLM)")
     p.add_argument("--snapshot", required=True)

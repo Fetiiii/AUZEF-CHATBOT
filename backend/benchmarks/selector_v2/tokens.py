@@ -54,12 +54,15 @@ def estimate(
     output_price_per_1m: Optional[float] = None,
     configs_planned: int = 1,
     primary_only: bool = False,
+    system_prompt: Optional[str] = None,
 ) -> dict:
     method, count, exact = token_counter()
     cases = [s for s in snapshots if s.selector_evaluable and (s.case.primary or not primary_only)]
     inputs, chars, outputs = [], [], []
     for snapshot in cases:
         system, user = build_model_input(snapshot.case.intent_text, snapshot.selector_candidates())
+        if system_prompt is not None:  # benchmark prompt variant; user payload unchanged
+            system = system_prompt
         chars.append(len(system) + len(user))
         inputs.append(count(system) + count(user) + CHAT_FRAMING_TOKENS)
         if snapshot.case.expected_decision == "SELECT":

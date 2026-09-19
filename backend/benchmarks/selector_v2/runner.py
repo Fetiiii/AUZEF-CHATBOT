@@ -50,9 +50,13 @@ class RunIdentity:
     snapshot_fingerprint: str
     run_mode: str
     candidate_order: str = PRODUCTION_ORDER
+    # Prompt-experiment identity (Phase 7B). None keeps pre-existing run ids
+    # (e.g. the Stage A production run) unchanged.
+    prompt_fingerprint: Optional[str] = None
+    split_fingerprint: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {
+        identity = {
             "selector_contract_fingerprint": self.selector_contract_fingerprint,
             "config_fingerprint": self.config.fingerprint,
             "config": self.config.to_dict(),
@@ -60,6 +64,11 @@ class RunIdentity:
             "run_mode": self.run_mode,
             "candidate_order": self.candidate_order,
         }
+        if self.prompt_fingerprint is not None:
+            identity["prompt_fingerprint"] = self.prompt_fingerprint
+        if self.split_fingerprint is not None:
+            identity["split_fingerprint"] = self.split_fingerprint
+        return identity
 
     @property
     def run_id(self) -> str:

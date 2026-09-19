@@ -1,0 +1,27 @@
+{
+  "normalization": "CRLF->LF; rstrip each line; strip leading/trailing blank lines; no other change; normalized text is what the model receives",
+  "prompts": {
+    "production": {
+      "benchmark_only": false,
+      "chars": 1846,
+      "prompt_fingerprint": "2d59cfb65f0aaa08ffcc481d81fed5a89f29803251cdc8a5438da673cb867f3c",
+      "prompt_id": "production",
+      "source": "services.selector.SELECTOR_SYSTEM_PROMPT (runtime)"
+    },
+    "variant_a_v1": {
+      "benchmark_only": true,
+      "chars": 1858,
+      "prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+      "prompt_id": "variant_a_v1",
+      "source": "benchmarks/selector_v2/prompts/variant_a_v1.md"
+    },
+    "variant_b_v1": {
+      "benchmark_only": true,
+      "chars": 1926,
+      "prompt_fingerprint": "44893b6bb069da5b2849413b3d903fa3ff8dbfd1e1e7ea8242d1302135e093c9",
+      "prompt_id": "variant_b_v1",
+      "source": "benchmarks/selector_v2/prompts/variant_b_v1.md"
+    }
+  },
+  "serializer_contract_fingerprint": "d50fbee416ca98783e499454fe840c1fdc2ff41b5fb7445cbac20f6a72c7f5a9"
+}
