@@ -36,6 +36,12 @@ STATUS: PASS
 Phase 7B-Live Stage A — Production Selector Baseline on Challenge Set
 STATUS: PASS
 
+Phase 7B-Postmortem — Selector Failure Anatomy + Experiment Design
+STATUS: PASS
+
+Phase 7B-Prompt Experiment
+STATUS: NOT_STARTED
+
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
 
@@ -388,3 +394,38 @@ Detailed evidence: [`PHASE_7B_PREP_REPORT.md`](PHASE_7B_PREP_REPORT.md).
 - [x] **Tests.** Benchmark tests 66/66; full suite 458/458.
 
 Detailed evidence: [`PHASE_7B_STAGE_A_REPORT.md`](PHASE_7B_STAGE_A_REPORT.md).
+
+## Phase 7B-Postmortem acceptance record
+
+- [x] **Inputs verified and unchanged.** The Stage A results and the
+      snapshot/challenge artifacts were re-verified on load. None was
+      modified, and no live provider call was made.
+- [x] **Production unchanged.** The selector prompt/contract (`3f49b198…`)
+      and the production model/config are the same.
+- [x] **Every informative case accounted for** by a deterministic,
+      evidence-based taxonomy (`selector-failure-taxonomy-v1`): 74
+      corruptions, 12 unresolved, 8 rescues and 41 false NONE. Undecidable
+      cases stay NEEDS_HUMAN_REVIEW (37).
+- [x] **General-expected cases (11) analyzed one by one.** The
+      unstated-qualifier rule was violated in 2 of them. In 5, the user
+      stated the qualifier the model honored.
+- [x] **Prompt-vs-Gold mismatch measured.** Clear selector errors 2,
+      Gold/alias questionable 18, contract mismatch 29, undetermined 37.
+- [x] **Review queue kept separate.** It has recommendations only; Gold was
+      not edited.
+- [x] **Alias structure of the first-candidate baseline.** The first
+      candidate is the intent's exact-alias owner in 481/482 full-set cases.
+- [x] **Evidence counts.** Metadata candidates 7/86 (8.1%). An exact-alias
+      bypass would get 117 right and 20 wrong on the challenge set.
+- [x] **Deterministic stratified DEV/HOLDOUT split.** 95 DEV and 42
+      HOLDOUT, fingerprint `0fcb2441…`. Stage A metrics are reported per
+      split.
+- [x] **Two prompt variants, benchmark-agnostic** (enforced by a test).
+      Proposed matrix: 232 new calls if all steps run, OpenRouter only,
+      not approved.
+- [x] **Stage B:** DO_NOT_RUN_FULL_CURRENT_CONFIG. No model was added, no
+      reasoning experiment ran, and Stage B did not run.
+- [x] **Tests.** New 6/6, benchmark modules 72/72, full suite 464/464.
+      Phase 7C not started.
+
+Detailed evidence: [`PHASE_7B_POSTMORTEM_REPORT.md`](PHASE_7B_POSTMORTEM_REPORT.md).

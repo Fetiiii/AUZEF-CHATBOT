@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from benchmarks.selector_v2 import BENCHMARK_VERSION
+from benchmarks.selector_v2.contract import fingerprint
 from benchmarks.selector_v2.safety import (
     CONFIRM_FLAG, LIVE_PROVIDERS, check_live_gate, no_live_calls,
 )
@@ -343,6 +344,115 @@ def cmd_stage_report(args) -> None:
     _dump(summary["run_summary"])
 
 
+def cmd_postmortem(args) -> None:
+    from benchmarks.selector_v2 import postmortem as pm
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.contract import selector_contract_fingerprint
+    from benchmarks.selector_v2.prompt_variants import VARIANTS, variant_contract_fingerprint
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.snapshot import load_near_pairs, load_snapshot
+
+    with no_live_calls(_infra_hosts()):
+        from core.database import QnAQuery, SessionLocal
+
+        db = SessionLocal()
+        try:
+            alias_rows = [(int(r[0]), r[1]) for r in db.query(QnAQuery.qna_id, QnAQuery.query_text)]
+        finally:
+            db.close()
+    with no_live_calls():
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        cm, cases = load_challenge(Path(args.challenge), manifest)
+        run_dir = Path(args.run_dir)
+        results = load_results(run_dir / RESULTS_FILE).by_case
+        stage_queue = json.loads(Path(args.review_queue).read_text(encoding="utf-8"))
+        queue = [c["case_id"] for c in stage_queue["cases"]]
+        alias_map = pm.build_alias_map(alias_rows)
+        pairs = load_near_pairs()
+        built = pm.build_postmortem(snapshots, cases, results, alias_map, pairs, queue)
+        acc = built["accounted"]
+        expected = {"corruption": 74, "unresolved": 12, "rescue": 8, "false_none": 41}
+        if any(acc[k] != v for k, v in expected.items()) or not acc["every_failure_has_primary"]:
+            raise SystemExit(f"postmortem accounting mismatch: {acc}")
+        split = pm.stratified_split(cases)
+        split["production_stage_a"] = {
+            "DEV": pm._metrics_for(split["dev"], built["packets"]),
+            "HOLDOUT": pm._metrics_for(split["holdout"], built["packets"]),
+        }
+        dev_failures = [f for f in built["failures"] if f["case_id"] in set(split["dev"])]
+        split["dev_failure_primary_distribution"] = pm._counter(
+            f["classification"]["primary"] for f in dev_failures)
+        split["holdout_policy"] = ("HOLDOUT case texts/ids must not be used to design prompts; "
+                                   "prompt variants cite only DEV category distributions")
+        summary = built["summary"]
+        summary["alias_structure"] = {
+            "full_primary": pm.alias_structure(snapshots, alias_map),
+            "challenge": pm.alias_structure(snapshots, alias_map, {c["case_id"] for c in cases}),
+            "alias_table_fingerprint": fingerprint(sorted(alias_rows)),
+        }
+        summary["exact_alias_candidate_cases"] = summary["alias_structure"]["challenge"]
+        summary["inputs"] = {
+            "snapshot_fingerprint": manifest["snapshot_fingerprint"],
+            "challenge_fingerprint": cm["challenge_fingerprint"],
+            "stage_a_run_id": run_dir.name,
+            "production_selector_contract_fingerprint": selector_contract_fingerprint(),
+        }
+        n_dev, n_hold = len(split["dev"]), len(split["holdout"])
+        plan = {
+            "plan_kind": "prompt-experiment-proposal", "live": False, "approved": False,
+            "provider_policy": "OpenRouter only",
+            "model": "openrouter / openai/gpt-4o-mini (current production model)",
+            "split_fingerprint": split["split_fingerprint"],
+            "snapshot_fingerprint": manifest["snapshot_fingerprint"],
+            "challenge_fingerprint": cm["challenge_fingerprint"],
+            "variants": {name: {"contract_fingerprint": variant_contract_fingerprint(text),
+                                "chars": len(text)} for name, text in VARIANTS.items()},
+            "matrix": [
+                {"step": 1, "config": "current model + production prompt", "case_set": "DEV+HOLDOUT",
+                 "new_calls": 0, "note": "already measured in Stage A (run 9dfc72c140dc7e93)"},
+                {"step": 2, "config": "current model + variant_a_practical_qualifier",
+                 "case_set": "DEV", "new_calls": n_dev},
+                {"step": 3, "config": "current model + variant_b_none_threshold_ablation",
+                 "case_set": "DEV", "new_calls": n_dev},
+                {"step": 4, "config": "one variant chosen by human review of steps 2-3",
+                 "case_set": "HOLDOUT", "new_calls": n_hold,
+                 "note": "separate approval; HOLDOUT is scored once"},
+            ],
+            "total_new_calls_if_all_steps": 2 * n_dev + n_hold,
+            "cost": "PRICE_REQUIRED",
+            "prerequisite": "harness support for running a variant system prompt "
+                            "(contract fingerprint = variant fingerprint); not yet implemented",
+            "later": {
+                "stronger_model": "best prompt + same HOLDOUT, after registering a model "
+                                  "available on OpenRouter (no id proposed here)",
+                "reasoning": "only after a reasoning-capable OpenRouter model is registered "
+                             "and a prompt baseline exists",
+            },
+            "stage_b_full_current_config": "DO_NOT_RUN_FULL_CURRENT_CONFIG",
+        }
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+
+        def jsonl(name, rows):
+            (out / name).write_text("".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                            for r in rows), encoding="utf-8")
+
+        jsonl("failure-cases.jsonl", built["failures"])
+        jsonl("false-none.jsonl", built["false_none"])
+        jsonl("specificity-cases.jsonl", built["specificity"])
+        jsonl("rescues.jsonl", built["rescues"])
+        _dump({"review_queue": built["review"], "note": "recommendations only; Gold unchanged"},
+              out / "review-queue.json")
+        _dump(summary, out / "taxonomy-summary.json")
+        _dump(split, out / "prompt-experiment-split.json")
+        _dump(plan, out / "experiment-plan.json")
+    _dump({"accounted": acc, "corruption": summary["corruption_primary"],
+           "unresolved": summary["unresolved_primary"], "false_none": summary["false_none_primary"],
+           "groups": {k: v["count"] for k, v in summary["mismatch_groups"].items()},
+           "split": {"dev": len(split["dev"]), "holdout": len(split["holdout"]),
+                     "fp": split["split_fingerprint"]}})
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -538,6 +648,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-dir", required=True)
     p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_stage_report)
+
+    p = sub.add_parser("postmortem", help="deterministic Stage A failure analysis (no LLM)")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--challenge", required=True)
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--review-queue", required=True)
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_postmortem)
 
     p = sub.add_parser("registry-models", help="selector-eligible registry models (read-only)")
     p.add_argument("--out")
