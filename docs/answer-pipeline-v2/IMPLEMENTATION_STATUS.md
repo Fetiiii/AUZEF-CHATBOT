@@ -75,6 +75,9 @@ STATUS: PASS (KEEP_CURRENT x2; recorded reviewer is an LLM)
 Phase 7B-Variant C DEV (qualifier contract)
 STATUS: FAIL (qualifier-improvement and 471/472 checks); FINAL VALIDATION BLOCKED
 
+Phase 7B-Model Capability Experiment (variant_c_v1 × openai/gpt-5.6-luna)
+STATUS: STOP_BEFORE_LIVE (config parity: temperature 0 / reasoning none not transmittable; 0 calls)
+
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
 
@@ -746,3 +749,23 @@ Detailed evidence: [`PHASE_7B_QUALIFIER_FAILURE_POSTMORTEM.md`](PHASE_7B_QUALIFI
       539/539.
 
 Detailed evidence: [`PHASE_7B_VARIANT_C_DEV_REPORT.md`](PHASE_7B_VARIANT_C_DEV_REPORT.md).
+
+## Phase 7B-Model Capability Experiment record
+
+- [x] **Adjudication provenance corrected** for new reports and manifests:
+      blind model adjudication, `adjudicator_type = model`, adjudicator
+      GPT-5.6 Sol.
+      - "Semantic Gold is based on blinded adjudication by GPT-5.6 Sol, not
+        independent human annotation."
+      - Historical artifacts and Gold are unchanged.
+      - Final validation still requires independent human review.
+- [x] **Capability validation** (catalog metadata only; 0 inference calls).
+      The slug `openai/gpt-5.6-luna` exists.
+      - `temperature` is not supported on any of its 7 endpoints.
+      - It is reasoning-capable, and the adapter cannot send reasoning
+        "none".
+      - Result: **STOP_BEFORE_LIVE**. No alternative config was tried.
+- [ ] **M1 / M2 NOT RUN.** Final validation BLOCKED. The order experiment is
+      DEFERRED_ORDER_BIAS_WEAK.
+
+Detailed evidence: [`PHASE_7B_MODEL_CAPABILITY_EXPERIMENT.md`](PHASE_7B_MODEL_CAPABILITY_EXPERIMENT.md).
