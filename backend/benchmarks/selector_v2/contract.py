@@ -19,6 +19,9 @@ from services.llm_types import SelectorDecision
 from services.selector import SELECTOR_SYSTEM_PROMPT, build_selector_prompt
 
 PRODUCTION_ORDER = "production"
+# Deterministic hash-neutral order (Phase 7B order experiment; never production).
+NEUTRAL_ORDER = "neutral"
+NEUTRAL_ORDER_SALT = "selector-neutral-order-v1"
 
 
 def sha256_text(text: str) -> str:
@@ -72,11 +75,13 @@ def order_candidates(
     items = list(candidates)
     if order == PRODUCTION_ORDER:
         return items
+    if order == NEUTRAL_ORDER:
+        return sorted(items, key=lambda c: sha256_text(f"{NEUTRAL_ORDER_SALT}|{case_id}|{c.candidate_ref}"))
     if order.startswith("permute:") and order.split(":", 1)[1]:
         rng = random.Random(f"{order}|{case_id}")
         rng.shuffle(items)
         return items
-    raise ValueError(f"unknown candidate order {order!r} (production | permute:<seed>)")
+    raise ValueError(f"unknown candidate order {order!r} (production | neutral | permute:<seed>)")
 
 
 def build_model_input(intent_text: str, candidates: Sequence[SelectorCandidate]) -> tuple[str, str]:

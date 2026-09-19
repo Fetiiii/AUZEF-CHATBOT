@@ -66,6 +66,9 @@ STATUS: PASS
 Phase 7B-Prompt HOLDOUT Live (variant_a_v1, Semantic Gold V1)
 STATUS: FAIL (promotion gate: critical 471/472; run valid, 42/42 calls)
 
+Phase 7B-Qualifier Failure Postmortem + Order-Bias Prep
+STATUS: PASS (offline; 471/472 blind review NOT_STARTED; order experiment prepared, not run)
+
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
 
@@ -670,3 +673,41 @@ Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_RESULT.md`](PHASE_7B_SEMANTI
       unchanged. Tests: new 6/6, full suite 523/523.
 
 Detailed evidence: [`PHASE_7B_VARIANT_A_HOLDOUT_REPORT.md`](PHASE_7B_VARIANT_A_HOLDOUT_REPORT.md).
+
+## Phase 7B-Qualifier Failure Postmortem + Order-Bias Prep record
+
+- [x] **471/472 blind packet** (`bf73542d…`):
+      - all eligible candidates (9 and 6), anonymous labels in hash order;
+      - no Gold, model output, rank or score visible;
+      - review NOT_STARTED; no Gold changed and no rescore done.
+- [x] **Qualifier inventory** (model-independent lexicon taxonomy): 206
+      cases.
+      - By split: DEV 46, old HOLDOUT 18, outside the challenge set 142.
+      - 192 semantic-evaluable; 100 GENERAL and 38 SPECIFIC expected.
+- [x] **Order analysis:**
+      - position 1 is accepted in 166/192 cases;
+      - 6 general-expected cases have the too-specific qna:342 at position 1:
+        465 and 469–473.
+- [x] **Position association** (saved outputs only): verdict
+      **ORDER_BIAS_WEAK**. Variant A's Group-B wrong SELECTs are at
+      position 1 in 4/21 (×1.63 of chance, p = 0.23).
+- [x] **Compliance heuristic:** UNSTATED_QUALIFIER_ASSUMED is 8 for Variant A
+      and 4 for production (challenge set).
+- [x] **Order experiment prepared, not run:**
+      - ORIGINAL_ORDER vs NEUTRAL_ORDER, which differ only in order;
+      - 38-case diagnostic set, all in DEV or old HOLDOUT;
+      - 76 planned calls.
+- [x] **Recommended next step:** a Variant C qualifier-contract prompt, with
+      the prompt as the only variable, after the 471/472 review.
+- [x] **Final validation strategy:**
+      - old HOLDOUT is consumed;
+      - the unused pool has 345 cases: easy by construction, 0 hard-slice
+        cases, not adjudicated;
+      - two parts: 120 cases from the pool plus a new production-like
+        reviewed set;
+      - the freeze protocol is defined.
+- [x] **Isolation:** 0 live calls. HOLDOUT artifacts, prompt, Semantic Gold
+      and production contract unchanged. New tests 8/8, full suite 531/531.
+
+Detailed evidence: [`PHASE_7B_QUALIFIER_FAILURE_POSTMORTEM.md`](PHASE_7B_QUALIFIER_FAILURE_POSTMORTEM.md),
+[`PHASE_7B_FINAL_VALIDATION_STRATEGY.md`](PHASE_7B_FINAL_VALIDATION_STRATEGY.md).

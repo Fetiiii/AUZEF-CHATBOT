@@ -1336,6 +1336,357 @@ def cmd_semantic_holdout_eval(args) -> None:
            "paired": metrics["paired_vs_production"]})
 
 
+def _tree_sha256(root: Path) -> dict:
+    return {str(p.relative_to(root)): _file_sha256(p)
+            for p in sorted(Path(root).rglob("*")) if p.is_file()}
+
+
+def cmd_qualifier_postmortem(args) -> None:
+    """Offline: 471/472 blind packet, qualifier inventory, order analysis,
+    order-experiment prep and final-validation contamination accounting."""
+    from benchmarks.selector_v2 import adjudication as adj
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2 import qualifier_postmortem as qp
+    from benchmarks.selector_v2 import semantic_gold as sg
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.postmortem import _case_key
+    from benchmarks.selector_v2.contract import sha256_text
+    from benchmarks.selector_v2.prompt_contract import load_committed_manifest, load_prompt, prompt_manifest
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.snapshot import load_near_pairs, load_snapshot
+
+    with no_live_calls():
+        out = Path(args.out)
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        cm, cases = load_challenge(Path(args.challenge), manifest)
+        split = px.load_split(challenge_ids={c["case_id"] for c in cases})
+        gold_manifest, gold_cases = sh.load_semantic_gold(Path(args.semantic_gold), args.expected_gold_fp)
+        if prompt_manifest() != load_committed_manifest():
+            raise SystemExit("prompt manifest drift")
+        prompt = load_prompt(sh.SELECTED_PROMPT_ID)
+        if prompt.fingerprint != sh.SELECTED_PROMPT_FINGERPRINT:
+            raise SystemExit("variant_a_v1 changed")
+        holdout_dir = Path(args.holdout_dir)
+        holdout_record = {"semantic_holdout_a_sha256": _tree_sha256(holdout_dir),
+                          "prompt_fingerprint": prompt.fingerprint,
+                          "semantic_gold_fingerprint": gold_manifest["semantic_gold_fingerprint"],
+                          "holdout_manifest_outcome": json.loads(
+                              (holdout_dir / "manifest.json").read_text(encoding="utf-8"))["outcome"]}
+        sh.verify_baseline(holdout_dir / sh.BASELINE_FILE)
+        sem = sg.semantic_snapshots(snapshots, gold_cases)
+        sem_by = {s.case.case_id: s for s in sem}
+        parent_by = {s.case.case_id: s for s in snapshots}
+        side = {**dict.fromkeys(split["dev"], "DEV"), **dict.fromkeys(split["holdout"], "HOLDOUT")}
+        production = load_results(Path(args.stage_a_run) / RESULTS_FILE).by_case
+        variant_a = {**load_results(Path(args.dev_run) / RESULTS_FILE).by_case}
+        a_hold = load_results(Path(args.holdout_run) / RESULTS_FILE).by_case
+        if set(variant_a) & set(a_hold):
+            raise SystemExit("DEV and HOLDOUT Variant A outputs overlap")
+        variant_a.update(a_hold)
+        runs = {"production": production, "variant_a_v1": variant_a}
+
+        # 1. blind 471/472 packet (no Gold / model / rank information)
+        records = qp.blind_records(parent_by, list(qp.CRITICAL_CASES))
+        md, csv_text = qp.review_markdown(records), qp.review_template_csv(records)
+        cases_jsonl = "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in records)
+        refs = sorted({c.candidate_ref for cid in qp.CRITICAL_CASES for c in parent_by[cid].candidates})
+        problems = qp.review_violations(records, csv_text, md, forbidden_refs=refs)
+        if problems:
+            raise SystemExit(f"review packet contamination: {problems[:10]}")
+        review_dir = out / "review"
+        hashes = adj.write_immutable(review_dir, {"review-packet.md": md, "review-template.csv": csv_text,
+                                                  "review-cases.jsonl": cases_jsonl})
+        review_fp = qp.review_fingerprint(manifest["snapshot_fingerprint"], records)
+        adj.write_immutable(review_dir, {"manifest.json": json.dumps({
+            "schema": qp.REVIEW_SCHEMA_VERSION, "review_packet_fingerprint": review_fp,
+            "case_ids": list(qp.CRITICAL_CASES),
+            "candidate_counts": {r["case_id"]: r["candidate_count"] for r in records},
+            "decisions_allowed": list(qp.REVIEW_DECISIONS),
+            "label_order": "sha256(case_id|candidate_ref) (same blind labelling as the semantic review; "
+                           "labels are recomputable from the frozen snapshot)",
+            "source_snapshot_fingerprint": manifest["snapshot_fingerprint"],
+            "human_review_status": "NOT_STARTED", "artifact_sha256": hashes},
+            ensure_ascii=False, indent=2, sort_keys=True) + "\n"})
+
+        # 2. inventory (model-independent)
+        inv = qp.inventory(snapshots, sem_by, side)
+        inv_ids = {r["case_id"] for r in inv}
+        for r in inv:
+            r["expectation"] = qp.expectation_class(r, sem_by[r["case_id"]])["class"]
+        evaluable_inv = [r for r in inv if r["semantic_evaluable"]]
+
+        def count(rows, key):
+            outc: dict = {}
+            for r in rows:
+                outc[r[key]] = outc.get(r[key], 0) + 1
+            return dict(sorted(outc.items()))
+
+        inv_summary = {
+            "version": qp.INVENTORY_VERSION,
+            "definition": qp.__doc__.split("* A case")[1].split("* The 471")[0].strip(),
+            "lexicon": [c for c, _ in qp.QUALIFIER_LEXICON], "lexicon_exclusions": list(qp.LEXICON_EXCLUSIONS),
+            "total_qualifier_sensitive": len(inv),
+            "by_split": count(inv, "split"), "by_mode": count(inv, "mode"),
+            "semantic_evaluable": len(evaluable_inv), "excluded": len(inv) - len(evaluable_inv),
+            "excluded_by_reason": count([r for r in inv if not r["semantic_evaluable"]], "semantic_status_reason"),
+            "expectation": count(inv, "expectation"),
+            "expectation_by_mode": {m: count([r for r in inv if r["mode"] == m], "expectation")
+                                    for m in ("STATED", "UNSTATED")},
+            "qualifier_concepts": count([{"q": p["qualifier"]} for r in inv for p in r["pairs"]], "q"),
+        }
+
+        # 3. Phase 7A general/specific pairs (fixture metadata; membership = both members
+        #    present in the frozen candidate set, model-independent)
+        gs_rows = []
+        for pair in load_near_pairs():
+            if pair.relation != "general_specific":
+                continue
+            g_id = pair.a if pair.roles[0] == "general" else pair.b
+            s_id = pair.b if g_id == pair.a else pair.a
+            g_q, s_q = pair.questions if g_id == pair.a else pair.questions[::-1]
+            g_ref, s_ref = f"qna:{g_id}", f"qna:{s_id}"
+
+            def semantic_class(s):
+                if not s.selector_evaluable:
+                    return "EXCLUDED"
+                if s.case.expected_decision == "NONE":
+                    return "NONE"
+                acc = set(s.case.acceptable_candidate_refs)
+                if len(acc) > 1:
+                    return "MULTI_ACCEPTABLE"
+                return "GENERAL" if acc == {g_ref} else "SPECIFIC" if acc == {s_ref} else "OTHER"
+
+            members = [s for s in sem if s.case.primary
+                       and {g_ref, s_ref} <= {c.candidate_ref for c in s.candidates}]
+            rows = [{"case_id": s.case.case_id, "split": side.get(s.case.case_id, "OUTSIDE_CHALLENGE"),
+                     "user_text": s.case.intent_text,
+                     "user_states_qualifier": bool(qp.qualifiers(s_q) - qp.qualifiers(g_q)
+                                                   & qp.qualifiers(s.case.intent_text)),
+                     "phase7a_role": next((t.split(":")[1] for t in parent_by[s.case.case_id].derived_tags
+                                           if t.startswith("gs_expected:")), None),
+                     "semantic": semantic_class(s)}
+                    for s in sorted(members, key=lambda s: _case_key(s.case.case_id))]
+            counts: dict = {}
+            for r in rows:
+                counts[r["semantic"]] = counts.get(r["semantic"], 0) + 1
+            gs_rows.append({"pair": pair.key, "general": {"ref": g_ref, "question": g_q},
+                            "specific": {"ref": s_ref, "question": s_q},
+                            "qualifier": sorted(qp.qualifiers(s_q) - qp.qualifiers(g_q)),
+                            "cases_with_both_members": len(rows), "semantic_counts": counts,
+                            "cases": rows})
+
+        # 4. order analysis on semantic-evaluable qualifier cases
+        order_rows = [qp.order_row(r, sem_by[r["case_id"]]) for r in evaluable_inv]
+        order_summary = {
+            "cases": len(order_rows),
+            "position1_accepted": sum(r["position1_accepted"] for r in order_rows),
+            "position1_not_accepted": sum(not r["position1_accepted"] for r in order_rows),
+            "position1_too_specific": sum(r["position1_too_specific"] for r in order_rows),
+            "general_expected": sum(r["expectation"] == "GENERAL" for r in order_rows),
+            "specific_expected": sum(r["expectation"] == "SPECIFIC" for r in order_rows),
+            "general_expected_but_specific_position1": sum(
+                r["general_expected_specific_position1"] for r in order_rows),
+            "general_expected_but_specific_position1_ids": [
+                r["case_id"] for r in order_rows if r["general_expected_specific_position1"]],
+        }
+
+        # 5. first-position association (saved outputs only; no selection by output)
+        qual_eval_ids = [r["case_id"] for r in evaluable_inv]
+        assoc_qual = qp.position_association(sem_by, qual_eval_ids, runs)
+        challenge_eval = [c["case_id"] for c in cases if sem_by[c["case_id"]].selector_evaluable]
+        assoc_challenge = qp.position_association(sem_by, challenge_eval, runs)
+        verdicts = {"qualifier_set": {n: qp.order_bias_verdict(assoc_qual, n) for n in runs},
+                    "challenge_set": {n: qp.order_bias_verdict(assoc_challenge, n) for n in runs}}
+
+        # 6. prompt-rule compliance (saved Variant A / production outputs)
+        comp = {n: qp.compliance_table(sem_by, challenge_eval, r) for n, r in runs.items()}
+        comp_qual = {n: qp.compliance_table(sem_by, [i for i in qual_eval_ids if i in r], r)
+                     for n, r in runs.items()}
+
+        # 7. 471/472 engineering diagnostics (never in the review packet)
+        critical = {}
+        for cid in qp.CRITICAL_CASES:
+            snap = sem_by[cid]
+            order = qp.original_order(snap)
+            texts = {c.candidate_ref: c.canonical_text for c in snap.candidates}
+            row = next((r for r in inv if r["case_id"] == cid), None)
+            specific = {x for p in (row or {}).get("pairs", []) for x in p["specific"]}
+            general = {x for p in (row or {}).get("pairs", []) for x in p["general"]}
+            critical[cid] = {
+                "user_text": snap.case.intent_text,
+                "user_qualifiers": sorted(qp.qualifiers(snap.case.intent_text)),
+                "candidates": [{"retrieval_position": i + 1, "ref": ref, "canonical_question": texts[ref],
+                                "qualifiers": sorted(qp.qualifiers(texts[ref])),
+                                "qualifier_class": ("SPECIFIC" if ref in specific else
+                                                    "GENERAL" if ref in general else "UNRELATED")}
+                               for i, ref in enumerate(order)],
+                "current_semantic_gold": list(snap.case.acceptable_candidate_refs),
+                "gold_provenance": "parent reviewed Gold, not re-adjudicated (pending blind review)",
+                "accepted_retrieval_positions": [order.index(r) + 1 for r in snap.case.acceptable_candidate_refs
+                                                 if r in order],
+                "qna342_retrieval_position": order.index("qna:342") + 1 if "qna:342" in order else None,
+                "neutral_order_positions": {"accepted": [qp.neutral_order(snap).index(r) + 1
+                                                         for r in snap.case.acceptable_candidate_refs],
+                                            "qna:342": qp.neutral_order(snap).index("qna:342") + 1},
+                "saved_decisions": {n: {"selected": runs[n][cid].selected_candidate_ref,
+                                        "outcome": runs[n][cid].outcome.value} for n in runs},
+            }
+
+        # 8. order experiment prep (no call)
+        diag_rows = []
+        for r in evaluable_inv:
+            cid = r["case_id"]
+            if side.get(cid) not in ("DEV", "HOLDOUT"):
+                continue
+            exp = qp.expectation_class(r, sem_by[cid])
+            if exp["class"] not in ("GENERAL", "SPECIFIC", "MULTI_ACCEPTABLE"):
+                continue
+            info = qp.informative({}, r, sem_by[cid])
+            if info["informative"] or cid in qp.CRITICAL_CASES:
+                diag_rows.append({"case_id": cid, "split": side[cid], "expectation": exp["class"],
+                                  "forced": cid in qp.CRITICAL_CASES, **info})
+        for cid in qp.CRITICAL_CASES:
+            if cid not in {d["case_id"] for d in diag_rows}:
+                diag_rows.append({"case_id": cid, "split": side.get(cid), "forced": True,
+                                  **qp.informative({}, next(r for r in inv if r["case_id"] == cid), sem_by[cid])})
+        diag_rows.sort(key=lambda d: _case_key(d["case_id"]))
+        diag_ids = [d["case_id"] for d in diag_rows]
+        if not set(diag_ids) <= set(split["dev"]) | set(split["holdout"]):
+            raise SystemExit("diagnostic set must stay inside the consumed DEV/HOLDOUT cases")
+        conditions = {cid: qp.condition_requests(parent_by[cid], prompt.text) for cid in diag_ids}
+        if not all(c["only_order_differs"] for c in conditions.values()):
+            raise SystemExit("order conditions differ in more than candidate order")
+        diag = {
+            "version": qp.DIAGNOSTIC_VERSION,
+            "purpose": "Does changing candidate order change qualifier errors? NOT a validation set; "
+                       "never used for promotion accuracy.",
+            "selection_criteria": [
+                "cases 471 and 472 (forced)",
+                "qualifier-sensitive (inventory v1), semantic-evaluable",
+                "already-consumed challenge cases only (DEV or old HOLDOUT), so the unused pool stays "
+                "independent for final validation",
+                "Semantic Gold expectation GENERAL, SPECIFIC or MULTI_ACCEPTABLE",
+                "ordering informative: the neutral order flips the relative order of the first accepted "
+                "candidate and the first non-accepted qualifier-pair rival, OR moves a qualifier-pair "
+                "member off position 1",
+                "no model output used for selection",
+                "asserted: every id is in previous DEV or previous HOLDOUT; none is in the unused pool",
+            ],
+            "case_ids": diag_ids, "size": len(diag_ids), "rows": diag_rows,
+            "fingerprint": fingerprint({"version": qp.DIAGNOSTIC_VERSION, "ids": diag_ids}),
+        }
+        plan = {
+            "plan_kind": "selector-order-diagnostic", "live": False, "approved": False,
+            "provider": "openrouter", "model": "openai/gpt-4o-mini", "reasoning": None,
+            "temperature": 0.0, "max_tokens": 32, "config_fingerprint": sh.PROMOTION_GATE and
+            json.loads((holdout_dir / sh.PLAN_FILE).read_text(encoding="utf-8"))["config_fingerprint"],
+            "prompt_id": prompt.prompt_id, "prompt_fingerprint": prompt.fingerprint,
+            "conditions": {"ORIGINAL_ORDER": "variant_a_v1 + current retrieval candidate order",
+                           "NEUTRAL_ORDER": "variant_a_v1 + sha256('selector-neutral-order-v1|case|ref') order"},
+            "single_variable": "candidate order only (prompt, model, config, candidates, content fixed)",
+            "diagnostic_set_fingerprint": diag["fingerprint"],
+            "diagnostic_case_count": len(diag_ids),
+            "calls": {"ORIGINAL_ORDER": len(diag_ids), "NEUTRAL_ORDER": len(diag_ids),
+                      "total": 2 * len(diag_ids)},
+            "reuse_option": "ORIGINAL_ORDER outputs already exist (Variant A DEV/HOLDOUT runs); rerunning "
+                            "them controls for provider drift, reuse would halve the calls",
+            "cost": "PRICE_REQUIRED",
+            "actual_calls_this_phase": 0,
+        }
+        plan["plan_fingerprint"] = px.plan_fingerprint(plan)
+
+        # 9. contamination accounting + final validation proposal
+        primary_ids = [s.case.case_id for s in sem if s.case.primary]
+        evaluable_primary = [s.case.case_id for s in sem if s.case.primary and s.selector_evaluable]
+        source_of = {s.case.case_id: s.case.source_case_id for s in sem}
+        adj_manifest = json.loads((Path(args.adjudication_dir) / "manifest.json").read_text(encoding="utf-8"))
+        pm = Path(args.postmortem)
+        inspected = set(json.loads(l)["case_id"] for l in (pm / "failure-cases.jsonl").read_text(
+            encoding="utf-8").splitlines() if l.strip())
+        inspected |= {json.loads(l)["case_id"] for l in (pm / "specificity-cases.jsonl").read_text(
+            encoding="utf-8").splitlines() if l.strip()}
+
+        def queue_ids(items):
+            return {x if isinstance(x, str) else x["case_id"] for x in items}
+
+        inspected |= queue_ids(json.loads((pm / "review-queue.json").read_text(encoding="utf-8"))["review_queue"])
+        inspected |= queue_ids(json.loads(Path(args.prompt_review_queue).read_text(encoding="utf-8"))["cases"])
+        inspected |= set(qp.CRITICAL_CASES)
+        groups = {"previous_DEV": split["dev"], "previous_HOLDOUT": split["holdout"],
+                  "semantic_adjudication_reviewed": adj_manifest["case_ids"],
+                  "postmortem_inspected": sorted(inspected, key=_case_key)}
+        contam = qp.contamination(primary_ids, evaluable_primary, source_of, groups)
+        core_ids = {r["case_id"] for r in inv if r["expectation"] in ("GENERAL", "SPECIFIC", "MULTI_ACCEPTABLE")}
+        proposal = qp.final_validation_proposal(contam["remaining_ids"], sem_by, core_ids, inv_ids,
+                                                args.final_size)
+        pool = set(contam["remaining_ids"])
+        tags_of = lambda i: set(sem_by[i].all_tags)
+        contam["remaining_pool_hard_slices"] = {
+            "near_qna": sum(1 for i in pool if "near_qna" in tags_of(i)),
+            "general_specific": sum(1 for i in pool if "general_specific" in tags_of(i)),
+            "kb_overlap_flagged": sum(1 for i in pool if "kb_overlap_flagged" in tags_of(i)),
+            "qualifier_sensitive": sum(1 for i in pool if i in inv_ids),
+            "qualifier_core": sum(1 for i in pool if i in core_ids),
+            "first_candidate_correct": sum(1 for i in pool if qp.original_order(sem_by[i])[0]
+                                           in sem_by[i].case.acceptable_candidate_refs),
+            "semantically_adjudicated": sum(1 for i in pool if i in set(adj_manifest["case_ids"])),
+        }
+
+        # write engineering artifacts
+        def jl(rows):
+            return "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in rows)
+
+        eng = out / "engineering"
+        eng.mkdir(parents=True, exist_ok=True)
+        (eng / "qualifier-inventory.jsonl").write_text(jl(inv), encoding="utf-8")
+        (eng / "order-analysis.jsonl").write_text(jl(order_rows), encoding="utf-8")
+        _dump(inv_summary, eng / "inventory-summary.json")
+        _dump(gs_rows, eng / "general-specific-pairs.json")
+        _dump({"summary": order_summary}, eng / "order-summary.json")
+        _dump({"qualifier_set": assoc_qual, "challenge_set": assoc_challenge, "verdicts": verdicts},
+              eng / "position-association.json")
+        _dump({"challenge_set": {n: {k: v for k, v in c.items() if k != "rows"} for n, c in comp.items()},
+               "qualifier_set": {n: {k: v for k, v in c.items() if k != "rows"} for n, c in comp_qual.items()},
+               "rows_challenge": {n: c["rows"] for n, c in comp.items()},
+               "method": "deterministic lexicon heuristic; no LLM judge; review_queue lists uncertain rows"},
+              eng / "prompt-rule-compliance.json")
+        _dump(critical, eng / "critical-471-472.json")
+        exp_dir = out / "order-experiment"
+        _dump(diag, exp_dir / "diagnostic-set.json")
+        _dump(plan, exp_dir / "plan.json")
+        _dump({cid: {"only_order_differs": c["only_order_differs"], "order_changed": c["order_changed"],
+                     "ORIGINAL_ORDER": c["ORIGINAL_ORDER"]["order"], "NEUTRAL_ORDER": c["NEUTRAL_ORDER"]["order"],
+                     "user_payload_sha256": {k: sha256_text(c[k]["user"]) for k in ("ORIGINAL_ORDER", "NEUTRAL_ORDER")}}
+               for cid, c in conditions.items()}, exp_dir / "conditions.json")
+        fv = out / "final-validation"
+        _dump({k: v for k, v in contam.items()}, fv / "contamination.json")
+        _dump(proposal, fv / "proposal.json")
+        _dump(holdout_record, out / "holdout-immutability.json")
+        summary = {
+            "review_packet": {"path": str(review_dir), "fingerprint": review_fp,
+                              "candidate_counts": {r["case_id"]: r["candidate_count"] for r in records}},
+            "inventory": {k: inv_summary[k] for k in ("total_qualifier_sensitive", "by_split", "by_mode",
+                                                      "semantic_evaluable", "excluded", "expectation")},
+            "order": order_summary,
+            "association_qualifier": {n: {k: v for k, v in e.items()} for n, e in assoc_qual["by_run"].items()},
+            "association_groups": {k: v["cases"] for k, v in assoc_qual["groups"].items()},
+            "verdicts": {s: {n: v["verdict"] for n, v in d.items()} for s, d in verdicts.items()},
+            "compliance_variant_a_challenge": comp["variant_a_v1"]["counts"],
+            "compliance_variant_a_qualifier": comp_qual["variant_a_v1"]["counts"],
+            "compliance_production_challenge": comp["production"]["counts"],
+            "critical": {cid: {k: c[k] for k in ("accepted_retrieval_positions", "qna342_retrieval_position",
+                                                 "neutral_order_positions")} for cid, c in critical.items()},
+            "diagnostic": {"size": diag["size"], "ids": diag_ids, "calls": plan["calls"],
+                           "plan_fingerprint": plan["plan_fingerprint"]},
+            "contamination": {k: v for k, v in contam.items() if k != "remaining_ids"},
+            "final_validation": {k: v for k, v in proposal.items() if k != "proposed_ids"},
+            "live_calls": 0,
+        }
+        _dump(summary, out / "summary.json")
+    _dump(summary)
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -1636,6 +1987,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--approve-plan-fingerprint")
     p.add_argument("--fake-policy", default="oracle")
     p.set_defaults(func=cmd_semantic_holdout_run)
+
+    p = sub.add_parser("qualifier-postmortem",
+                       help="471/472 blind packet + qualifier/order analysis + order-experiment prep")
+    for name in ("--snapshot", "--challenge", "--stage-a-run", "--semantic-gold", "--expected-gold-fp",
+                 "--dev-run", "--holdout-run", "--holdout-dir", "--postmortem", "--adjudication-dir",
+                 "--prompt-review-queue", "--out"):
+        p.add_argument(name, required=True)
+    p.add_argument("--final-size", type=int, default=120)
+    p.set_defaults(func=cmd_qualifier_postmortem)
 
     p = sub.add_parser("semantic-holdout-eval", help="score variant_a_v1 HOLDOUT on Semantic Gold")
     holdout_args(p)
