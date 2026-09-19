@@ -30,7 +30,8 @@ def test_phase0_provider_model_defaults_are_preserved(provider, model):
 def test_capability_generation_defaults_are_preserved():
     configs = resolve_llm_config_set("openrouter", environ={})
     assert configs.intent_analyzer.max_tokens == 300
-    assert configs.selector.max_tokens == 5
+    # Phase 4: Selector V2 strict JSON output needs more than the V1 5 tokens.
+    assert configs.selector.max_tokens == 32
     assert configs.intent_analyzer.temperature == 0
     assert configs.selector.temperature == 0
     assert configs.selector.reasoning_effort is None

@@ -87,7 +87,7 @@ def test_maintenance_short_circuits_all_widget_work(sup, db, monkeypatch):
     monkeypatch.setattr(chat, "_store_message", unexpected)
     monkeypatch.setattr(chat, "_answer_question", unexpected)
     monkeypatch.setattr(chat, "_log_query", unexpected)
-    monkeypatch.setattr(chat.MEILI_PROVIDER, "get_suggestions", unexpected)
+    monkeypatch.setattr(chat, "guard_safe_suggestions", unexpected)
 
     response = sup.post("/widget-chat", json={"message": "Pahalı bir soru"})
 

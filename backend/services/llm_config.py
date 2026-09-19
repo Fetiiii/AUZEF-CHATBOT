@@ -28,7 +28,10 @@ _DEFAULT_MODELS = {
 }
 _DEFAULT_MAX_TOKENS = {
     LLMCapability.INTENT_ANALYZER: 300,
-    LLMCapability.SELECTOR: 5,
+    # Selector V2 returns strict JSON such as
+    # {"decision":"SELECT","candidate_ref":"calendar:12345"} (~15-20 tokens);
+    # the V1 numeric contract fit in 5. 32 is the minimum with safe headroom.
+    LLMCapability.SELECTOR: 32,
 }
 
 

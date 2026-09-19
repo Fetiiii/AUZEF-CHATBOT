@@ -59,43 +59,31 @@ class CountingProvider:
         return SelectorResult(
             status=LLMOutcomeStatus.SUCCESS,
             parse_status=LLMParseStatus.SUCCESS,
-            answer=candidate["answer"],
-            selected_index=0,
-            selected_qna_id=candidate["qna_id"],
-            raw_numeric_value=1,
+            answer=candidate.answer_text,
+            decision="SELECT",
+            selected_candidate_ref=candidate.candidate_ref,
+            selected_kind=candidate.kind.value,
+            selected_qna_id=candidate.qna_id,
         )
 
 
 def _candidate_builder(captured_queries, same_answer=False):
-    def build(query, _calendar_entries, _routing_policy=None):
-        from services.answer_pipeline import CandidatePoolBuild
+    def build(query, calendar_entries, routing_policy=None, **_kwargs):
+        from services.candidate_eligibility import build_candidate_set
 
         captured_queries.append(query)
         qna_id = len(captured_queries)
         answer = "aynı cevap" if same_answer else f"cevap-{qna_id}"
-        return CandidatePoolBuild(
-            candidates=[{"qna_id": qna_id, "question": query, "answer": answer}],
-            trace_snapshot={
-                "calendar_candidate_count": 0,
-                "qdrant_candidate_count": 1,
-                "meili_candidate_count": 0,
-                "context_qdrant_candidate_count": 0,
-                "context_meili_candidate_count": 0,
-                "deduped_candidate_count": 1,
-                "eligible_after_guard_count": 1,
-                "guard_rejections": {},
-                "candidate_qna_ids": [qna_id],
-                "candidate_order": [
-                    {
-                        "order": 1,
-                        "candidate_type": "qna",
-                        "qna_id": qna_id,
-                        "source": "qdrant",
-                        "retrieval_stage": "current",
-                        "score": 1.0,
-                    }
-                ],
-            },
+        return build_candidate_set(
+            calendar_entries=calendar_entries,
+            qna_hits=[{
+                "qna_id": qna_id, "question": query, "answer": answer,
+                "score": 1.0, "source": "qdrant",
+            }],
+            routing_policy=routing_policy,
+            active_qna_lookup=lambda ids: set(ids),
+            max_candidates=32,
+            qdrant_candidate_count=1,
         )
 
     return build
@@ -207,7 +195,7 @@ def test_trace_uses_v2_intent_analyzer_schema_without_raw_text(monkeypatch):
     _provider, _queries, _result = _run(monkeypatch, analysis, trace=trace)
     snapshot = trace.to_dict()
     analyzer = snapshot["intent_analyzer"]
-    assert snapshot["schema_version"] == 3
+    assert snapshot["schema_version"] == 4
     assert "splitter" not in snapshot
     assert analyzer["provider"] == "openai"
     assert analyzer["requested_model"] == "gpt-4o-mini"
@@ -224,6 +212,6 @@ def test_analyzer_capability_config_is_distinct_from_selector_config(monkeypatch
     trace = DecisionTrace(endpoint="test")
     provider, _queries, _result = _run(monkeypatch, analysis, trace=trace)
     assert provider.effective_config(LLMCapability.INTENT_ANALYZER).max_tokens == 300
-    assert provider.effective_config(LLMCapability.SELECTOR).max_tokens == 5
+    assert provider.effective_config(LLMCapability.SELECTOR).max_tokens == 32
     analyzer = trace.to_dict()["intent_analyzer"]
     assert analyzer["effective_config"]["capability"] == "intent_analyzer"

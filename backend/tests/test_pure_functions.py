@@ -2,25 +2,7 @@
 from types import SimpleNamespace
 
 import services.calendar_utils as calendar_utils
-import services.llm_provider as llm_provider
 from admin.settings_api import mask_key
-
-
-class _P(llm_provider.BaseLLMProvider):
-    def _complete(self, s, u, max_tokens=5): return ""
-    def ask(self, q, c): return None
-
-
-def test_parse_selection_accepts_noisy_numbers():
-    p = _P()
-    ctx = [{"answer": "A1"}, {"answer": "A2"}, {"answer": "A3"}]
-    assert p._parse_selection("2", ctx) == "A2"
-    assert p._parse_selection(" [3] ", ctx) == "A3"   # eskiden None dönerdi
-    assert p._parse_selection("1.", ctx) == "A1"
-    assert p._parse_selection("0", ctx) is None        # "uygun aday yok"
-    assert p._parse_selection("7", ctx) is None        # aralık dışı
-    assert p._parse_selection(None, ctx) is None
-    assert p._parse_selection("cevap yok", ctx) is None
 
 
 def test_calendar_matching():
@@ -121,13 +103,19 @@ def test_candidate_pool_deduplicates_by_qna_id_and_has_stable_order(monkeypatch)
         lambda _query, limit: meili_hits[:limit],
     )
 
-    first = answer_pipeline._build_candidate_pool("soru", [])
+    def active(ids):
+        return set(ids)
+
+    first = answer_pipeline._build_candidate_pool("soru", [], active_qna_lookup=active)
     qdrant.hits.reverse()
-    second = answer_pipeline._build_candidate_pool("soru", [])
+    second = answer_pipeline._build_candidate_pool("soru", [], active_qna_lookup=active)
 
     assert first == second
-    assert [candidate["qna_id"] for candidate in first] == [1, 2, 3, 4]
-    assert sum(candidate["answer"] == "ortak" for candidate in first) == 2
+    assert [candidate.qna_id for candidate in first] == [1, 2, 3, 4]
+    assert [candidate.candidate_ref for candidate in first] == [
+        "qna:1", "qna:2", "qna:3", "qna:4"
+    ]
+    assert sum(candidate.answer_text == "ortak" for candidate in first) == 2
 
 
 def test_calendar_candidates_are_sorted_and_deduplicated(monkeypatch):
@@ -149,7 +137,11 @@ def test_calendar_candidates_are_sorted_and_deduplicated(monkeypatch):
 
     pool = answer_pipeline._build_candidate_pool("soru", [guz, duplicate, bahar])
 
-    assert [candidate["question"] for candidate in pool] == [
-        "Bahar Final ne zaman?",
-        "Güz Vize ne zaman?",
+    assert [candidate.canonical_text for candidate in pool] == [
+        "Bahar Final",
+        "Güz Vize",
+    ]
+    assert [candidate.candidate_ref for candidate in pool] == [
+        "calendar:2",
+        "calendar:1",
     ]

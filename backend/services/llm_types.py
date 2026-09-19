@@ -55,15 +55,67 @@ class LLMInvocationResult:
     error_type: Optional[str] = None
 
 
+class SelectionOutcome(str, Enum):
+    """Per-intent Selector V2 outcome.
+
+    ``NO_ELIGIBLE_CANDIDATES`` is deliberately separate from ``SEMANTIC_NONE``:
+    the former means the selector was never called; the latter means a valid
+    selector response explicitly rejected every eligible candidate.
+    """
+
+    SELECTED = "selected"
+    SEMANTIC_NONE = "semantic_none"
+    NO_ELIGIBLE_CANDIDATES = "no_eligible_candidates"
+    INVALID_OUTPUT = "invalid_output"
+    MODEL_ERROR = "model_error"
+    TIMEOUT = "timeout"
+
+
+SELECTION_ERROR_OUTCOMES = frozenset({
+    SelectionOutcome.INVALID_OUTPUT,
+    SelectionOutcome.MODEL_ERROR,
+    SelectionOutcome.TIMEOUT,
+})
+
+
+CandidateRefText = Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class SelectorDecision(BaseModel):
+    """Strict Selector V2 output: SELECT one candidate_ref or NONE.
+
+    ``candidate_ref: null`` is accepted for NONE because strict JSON-schema
+    producers emit every declared key. No confidence, reason, explanation or
+    other field is accepted.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    decision: Literal["SELECT", "NONE"]
+    candidate_ref: Optional[CandidateRefText] = None
+
+    @model_validator(mode="after")
+    def ref_matches_decision(self) -> "SelectorDecision":
+        if self.decision == "SELECT" and self.candidate_ref is None:
+            raise ValueError("SELECT requires candidate_ref")
+        if self.decision == "NONE" and self.candidate_ref is not None:
+            raise ValueError("NONE must not carry candidate_ref")
+        return self
+
+
 @dataclass(frozen=True)
 class SelectorResult:
     status: LLMOutcomeStatus
     parse_status: LLMParseStatus
     answer: Optional[str]
-    selected_index: Optional[int]
+    decision: Optional[str] = None
+    selected_candidate_ref: Optional[str] = None
+    selected_kind: Optional[str] = None
     selected_qna_id: object = None
+    selected_calendar_id: Optional[int] = None
     selected_candidate_source: Optional[str] = None
-    raw_numeric_value: Optional[int] = None
+    # Safe internal code only (never raw provider text).
+    invalid_reason: Optional[str] = None
     invocation: Optional[LLMInvocationResult] = None
 
 

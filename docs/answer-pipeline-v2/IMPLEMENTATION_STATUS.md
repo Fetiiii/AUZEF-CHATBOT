@@ -19,7 +19,7 @@ Phase 3 — Calendar V2
 STATUS: PASS
 
 Phase 4 — Candidate Eligibility + Selector V2
-STATUS: NOT_STARTED
+STATUS: PASS
 
 Phase 5 — Degraded Mode
 STATUS: NOT_STARTED
@@ -109,3 +109,37 @@ Detailed evidence: [`PHASE_2_REPORT.md`](PHASE_2_REPORT.md).
       the seven known layout cases pass with repository-root mounting.
 
 Detailed evidence: [`PHASE_3_REPORT.md`](PHASE_3_REPORT.md).
+
+## Phase 4 acceptance record
+
+- [x] An explicit, objective-only eligibility layer precedes the selector
+      (structure, content, routing guard, `status=1`); guard/activity errors
+      fail closed; no score/rank/keyword/alias/metadata filtering.
+- [x] Calendar eligibility relies on Phase 3 routing; only structural checks
+      are added.
+- [x] Unified typed QnA/Calendar candidates with stable `qna:<id>` /
+      `calendar:<id>` refs; QnA dedupe by `qna_id`, Calendar by `calendar_id`.
+- [x] Bounded, configurable budget `SELECTOR_MAX_CANDIDATES` (default 32 =
+      Phase 3 retrieval ceiling; observed live maximum ≤ 20; no truncation).
+- [x] Zero eligible → no selector call (`NO_ELIGIBLE_CANDIDATES`); one eligible
+      → selector still runs.
+- [x] Semantic-verifier prompt with an explicit unstated-qualifier
+      (general/specific) rule; input is resolved intent + candidate content
+      only (no context, score, rank, provider, alias).
+- [x] Strict Pydantic `SELECT`/`NONE` output; numeric first-digit parser
+      removed; out-of-set ref, malformed, and empty → `INVALID_OUTPUT`.
+- [x] `SEMANTIC_NONE`, `INVALID_OUTPUT`, `MODEL_ERROR`, `TIMEOUT` are distinct;
+      NONE is final with no Meili/Qdrant/Calendar fallback; errors use an
+      explicitly traced compatibility fallback until Phase 5.
+- [x] No runtime confidence, reason code, or explanation.
+- [x] Curated QnA answers verbatim; Calendar answers deterministic.
+- [x] Suggestions are guard/validity/activity-safe non-answers.
+- [x] Decision trace schema v4 records eligibility, selection, and suggestions
+      without raw text.
+- [x] Phase 2/3 and LLM-OFF behavior unchanged; no semantic metadata or
+      exact-alias bypass added.
+- [x] Targeted tests pass; full suite has no new failure (repository-root
+      layout 313/313).
+- [x] Phase 5 not started.
+
+Detailed evidence: [`PHASE_4_REPORT.md`](PHASE_4_REPORT.md).

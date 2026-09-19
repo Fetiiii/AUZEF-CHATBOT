@@ -78,6 +78,18 @@ class MeiliSearchProvider(BaseSearchProvider):
         })
         return [hit['question'] for hit in results['hits']]
 
+    def get_suggestion_hits(self, query: str, limit: int = 3):
+        """Suggestion titles WITH their QnA ids so callers can apply the
+        routing-guard/activity rules before showing any title."""
+        results = self.index.search(query, {
+            'limit': limit,
+            'matchingStrategy': 'last'
+        })
+        return [
+            {"qna_id": hit.get('id'), "question": hit.get('question')}
+            for hit in results['hits']
+        ]
+
     def add_documents(self, documents: list):
         self.index.add_documents(documents)
 

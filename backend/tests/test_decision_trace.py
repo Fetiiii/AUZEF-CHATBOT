@@ -25,7 +25,10 @@ def _selector_result(status=LLMOutcomeStatus.SUCCESS, qna_id=42):
     )
     invocation = LLMInvocationResult(
         status=call_status,
-        text="1" if status is LLMOutcomeStatus.SUCCESS else None,
+        text=(
+            '{"decision":"SELECT","candidate_ref":"qna:42"}'
+            if status is LLMOutcomeStatus.SUCCESS else None
+        ),
         latency_ms=4.2,
         metadata=LLMResponseMetadata(
             requested_model="gpt-4o-mini", input_tokens=10, output_tokens=1
@@ -39,9 +42,12 @@ def _selector_result(status=LLMOutcomeStatus.SUCCESS, qna_id=42):
             else LLMParseStatus.NOT_APPLICABLE
         ),
         answer="curated" if status is LLMOutcomeStatus.SUCCESS else None,
-        selected_index=0 if status is LLMOutcomeStatus.SUCCESS else None,
+        decision="SELECT" if status is LLMOutcomeStatus.SUCCESS else None,
+        selected_candidate_ref=(
+            f"qna:{qna_id}" if status is LLMOutcomeStatus.SUCCESS else None
+        ),
+        selected_kind="QNA" if status is LLMOutcomeStatus.SUCCESS else None,
         selected_qna_id=qna_id if status is LLMOutcomeStatus.SUCCESS else None,
-        raw_numeric_value=1 if status is LLMOutcomeStatus.SUCCESS else None,
         invocation=invocation,
     )
 
@@ -56,7 +62,8 @@ def test_trace_has_unique_request_correlation_and_config_fingerprint():
     assert snapshot["request"]["conversation_id"] == 7
     assert snapshot["request"]["endpoint"] == "widget_chat"
     assert snapshot["request"]["ai_config_fingerprint"] == configs.fingerprint
-    assert snapshot["request"]["effective_configs"]["selector"]["max_tokens"] == 5
+    assert snapshot["request"]["effective_configs"]["selector"]["max_tokens"] == 32
+    assert snapshot["schema_version"] == 4
 
 
 def test_trace_records_candidates_selection_fallback_and_final_qna():
@@ -65,33 +72,41 @@ def test_trace_records_candidates_selection_fallback_and_final_qna():
         "calendar_candidate_count": 1,
         "qdrant_candidate_count": 2,
         "meili_candidate_count": 1,
-        "context_qdrant_candidate_count": 0,
-        "context_meili_candidate_count": 0,
-        "deduped_candidate_count": 3,
-        "eligible_after_guard_count": 3,
+        "candidate_count_before_eligibility": 3,
+        "candidate_count_after_eligibility": 3,
         "candidate_qna_ids": [42, 99],
+        "selector_candidate_refs": ["calendar:7", "qna:42", "qna:99"],
         "candidate_order": [
-            {"order": 1, "source": "academic_calendar", "qna_id": None},
-            {"order": 2, "source": "qdrant", "qna_id": 42},
+            {"order": 1, "source": "academic_calendar", "candidate_ref": "calendar:7"},
+            {"order": 2, "source": "qdrant", "candidate_ref": "qna:42"},
         ],
     })
-    config = resolve_llm_config_set("openai", environ={}).selector.to_dict()
+    selector = resolve_llm_config_set("openai", environ={}).selector
     trace.record_selector(
         _selector_result(),
-        config=config,
-        candidate_count=3,
+        outcome="selected",
+        config=selector.to_dict(),
+        config_fingerprint=selector.fingerprint,
+        candidate_refs=["calendar:7", "qna:42", "qna:99"],
+        candidate_kinds=["CALENDAR", "QNA", "QNA"],
         candidate_qna_ids=[42, 99],
         purpose="subquestion",
         used_in_final=True,
     )
     trace.record_fallback(
-        reason="selector_semantic_none", selected_source="meilisearch", selected_qna_id=99
+        reason="selector_model_error", selected_source="meilisearch", selected_qna_id=99
     )
     trace.finalize(outcome="answer", source="llm", qna_ids=[42], answer_count=1)
     snapshot = trace.to_dict()
     assert snapshot["retrieval"][0]["candidate_qna_ids"] == [42, 99]
     assert snapshot["selectors"][0]["selected_qna_id"] == 42
-    assert snapshot["fallback"]["fallback_reason"] == "selector_semantic_none"
+    assert snapshot["selectors"][0]["selected_candidate_ref"] == "qna:42"
+    assert snapshot["selectors"][0]["selector_decision"] == "SELECT"
+    assert snapshot["selectors"][0]["candidate_count"] == 3
+    assert snapshot["selectors"][0]["config_fingerprint"] == selector.fingerprint
+    assert snapshot["selectors"][0]["requested_model"] == "gpt-4o-mini"
+    assert "raw_selector_value" not in snapshot["selectors"][0]
+    assert snapshot["fallback"]["fallback_reason"] == "selector_model_error"
     assert snapshot["final"]["final_qna_ids"] == [42]
 
 
@@ -116,13 +131,16 @@ def test_trace_serialization_contains_counts_not_sensitive_raw_text():
 
 def test_parallel_updates_do_not_share_or_drop_selector_events():
     trace = DecisionTrace(endpoint="widget_chat")
-    config = resolve_llm_config_set("openai", environ={}).selector.to_dict()
+    selector = resolve_llm_config_set("openai", environ={}).selector
 
     def add(qna_id):
         trace.record_selector(
             _selector_result(qna_id=qna_id),
-            config=config,
-            candidate_count=1,
+            outcome="selected",
+            config=selector.to_dict(),
+            config_fingerprint=selector.fingerprint,
+            candidate_refs=[f"qna:{qna_id}"],
+            candidate_kinds=["QNA"],
             candidate_qna_ids=[qna_id],
             purpose="subquestion",
             used_in_final=True,
@@ -138,7 +156,7 @@ def test_parallel_updates_do_not_share_or_drop_selector_events():
 
 def test_trace_distinguishes_semantic_none_invalid_model_error_and_timeout():
     trace = DecisionTrace(endpoint="test")
-    config = resolve_llm_config_set("openai", environ={}).selector.to_dict()
+    selector = resolve_llm_config_set("openai", environ={}).selector
     statuses = (
         LLMOutcomeStatus.SEMANTIC_NONE,
         LLMOutcomeStatus.INVALID_OUTPUT,
@@ -148,8 +166,11 @@ def test_trace_distinguishes_semantic_none_invalid_model_error_and_timeout():
     for status in statuses:
         trace.record_selector(
             _selector_result(status=status, qna_id=None),
-            config=config,
-            candidate_count=1,
+            outcome=status.value,
+            config=selector.to_dict(),
+            config_fingerprint=selector.fingerprint,
+            candidate_refs=["qna:1"],
+            candidate_kinds=["QNA"],
             candidate_qna_ids=[1],
             purpose="subquestion",
             used_in_final=False,
@@ -161,6 +182,20 @@ def test_trace_distinguishes_semantic_none_invalid_model_error_and_timeout():
     assert selectors[2]["model_error"] is True
     assert selectors[3]["call_status"] == "timeout"
     assert selectors[3]["timeout"] is True
+    assert [item["selector_status"] for item in selectors] == [
+        "semantic_none", "invalid_output", "model_error", "timeout"
+    ]
+    assert sum(item["semantic_none"] for item in selectors) == 1
+
+
+def test_no_eligible_candidates_is_traced_as_not_called_and_not_semantic_none():
+    trace = DecisionTrace(endpoint="test")
+    trace.record_selector_skipped(purpose="intent_1", outcome="no_eligible_candidates")
+    entry = trace.to_dict()["selectors"][0]
+    assert entry["selector_called"] is False
+    assert entry["selector_status"] == "no_eligible_candidates"
+    assert entry["semantic_none"] is False
+    assert entry["candidate_count"] == 0
 
 
 def test_intent_analyzer_trace_keeps_error_cause_and_never_logs_text():

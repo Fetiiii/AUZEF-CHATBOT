@@ -119,6 +119,12 @@ def pytest_configure(config):
         def healthcheck(self): ...
         def search(self, q, limit=3): return list(self.hits)[:limit]
         def get_suggestions(self, q, limit=3): return list(self.suggestions)[:limit]
+        def get_suggestion_hits(self, q, limit=3):
+            # suggestions: [{"qna_id", "question"}] (or bare titles = no id)
+            return [
+                item if isinstance(item, dict) else {"qna_id": None, "question": item}
+                for item in list(self.suggestions)[:limit]
+            ]
         def add_documents(self, docs): FakeMeili.add_calls.append(len(docs))
         def update_documents(self, docs): ...
         def delete_document(self, doc_id): ...

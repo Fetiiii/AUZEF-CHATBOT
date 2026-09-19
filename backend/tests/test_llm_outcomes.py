@@ -1,6 +1,7 @@
 """Typed LLM outcomes retain V1 public behavior while preserving causes."""
 from types import SimpleNamespace
 
+from services.candidate_eligibility import CandidateKind, SelectorCandidate
 from services.llm_config import resolve_llm_config_set
 import services.llm_provider as llm_provider
 from services.llm_provider import BaseLLMProvider, GeminiProvider, OpenAIProvider
@@ -25,29 +26,32 @@ class ScriptedProvider(BaseLLMProvider):
 
 def _candidates():
     return [
-        {"qna_id": 10, "question": "q1", "answer": "a1"},
-        {"qna_id": 20, "question": "q2", "answer": "a2"},
+        SelectorCandidate("qna:10", CandidateKind.QNA, "q1", "a1", qna_id=10),
+        SelectorCandidate("qna:20", CandidateKind.QNA, "q2", "a2", qna_id=20),
     ]
 
 
-def test_selector_success_retains_index_qna_and_compatibility_answer():
-    provider = ScriptedProvider("[2]")
+def test_selector_success_returns_selected_ref_qna_and_curated_answer():
+    provider = ScriptedProvider('{"decision":"SELECT","candidate_ref":"qna:20"}')
     result = provider.ask_with_result("soru", _candidates())
     assert result.status is LLMOutcomeStatus.SUCCESS
     assert result.parse_status is LLMParseStatus.SUCCESS
-    assert result.selected_index == 1
+    assert result.decision == "SELECT"
+    assert result.selected_candidate_ref == "qna:20"
     assert result.selected_qna_id == 20
     assert result.answer == "a2"
     assert provider.ask("soru", _candidates()) == "a2"
 
 
-def test_semantic_none_and_invalid_output_are_distinct_but_both_compatible_none():
-    semantic = ScriptedProvider("0")
+def test_semantic_none_and_invalid_output_are_distinct():
+    semantic = ScriptedProvider('{"decision":"NONE"}')
     invalid = ScriptedProvider("cevap yok")
-    out_of_range = ScriptedProvider("7")
+    legacy_numeric = ScriptedProvider("2")
+    out_of_set = ScriptedProvider('{"decision":"SELECT","candidate_ref":"qna:7"}')
     assert semantic.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.SEMANTIC_NONE
     assert invalid.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.INVALID_OUTPUT
-    assert out_of_range.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.INVALID_OUTPUT
+    assert legacy_numeric.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.INVALID_OUTPUT
+    assert out_of_set.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.INVALID_OUTPUT
     assert semantic.ask("s", _candidates()) is None
     assert invalid.ask("s", _candidates()) is None
 
@@ -88,7 +92,7 @@ def test_openai_adapter_preserves_metadata_and_omits_unsupported_optional_settin
         model="resolved-model",
         usage=SimpleNamespace(prompt_tokens=12, completion_tokens=1),
         choices=[SimpleNamespace(
-            message=SimpleNamespace(content="1"), finish_reason="stop"
+            message=SimpleNamespace(content='{"decision":"NONE"}'), finish_reason="stop"
         )],
     )
 
@@ -101,7 +105,7 @@ def test_openai_adapter_preserves_metadata_and_omits_unsupported_optional_settin
     )
     result = provider.ask_with_result("soru", _candidates())
     meta = result.invocation.metadata
-    assert result.status is LLMOutcomeStatus.SUCCESS
+    assert result.status is LLMOutcomeStatus.SEMANTIC_NONE
     assert meta.requested_model == "gpt-4o-mini"
     assert meta.actual_model == "resolved-model"
     assert meta.provider_response_id == "provider-response-id"
@@ -109,8 +113,9 @@ def test_openai_adapter_preserves_metadata_and_omits_unsupported_optional_settin
     assert meta.finish_reason == "stop"
     assert "timeout" not in captured
     assert "reasoning_effort" not in captured
+    # Phase 4 uses strict JSON + Pydantic; native response_format is not sent.
     assert "response_format" not in captured
-    assert captured["max_tokens"] == 5 and captured["temperature"] == 0
+    assert captured["max_tokens"] == 32 and captured["temperature"] == 0
 
 
 def test_openai_explicit_timeout_and_retry_are_applied(monkeypatch):
@@ -135,7 +140,10 @@ def test_openai_explicit_timeout_and_retry_are_applied(monkeypatch):
             return SimpleNamespace(
                 id="id", model="model", usage=None,
                 choices=[SimpleNamespace(
-                    message=SimpleNamespace(content="1"), finish_reason="stop"
+                    message=SimpleNamespace(
+                        content='{"decision":"SELECT","candidate_ref":"qna:10"}'
+                    ),
+                    finish_reason="stop",
                 )],
             )
 

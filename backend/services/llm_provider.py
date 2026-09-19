@@ -1,9 +1,8 @@
 import os
-import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import replace
-from typing import Optional
+from typing import Optional, Sequence
 from openai import OpenAI
 from google import genai
 from google.genai import types as genai_types
@@ -16,6 +15,8 @@ from services.llm_config import (
     default_model,
     resolve_llm_config_set,
 )
+from services.candidate_eligibility import SelectorCandidate
+from services.selector import build_selector_prompt, parse_selector_output
 from services.intent_analyzer import (
     build_intent_analyzer_prompt,
     parse_intent_analysis,
@@ -49,82 +50,6 @@ class BaseLLMProvider(ABC):
 
     def effective_config(self, capability: LLMCapability) -> EffectiveLLMConfig:
         return self.configs.for_capability(capability)
-
-    def _build_prompt(self, question: str, context_list: list) -> tuple:
-        candidates = "\n".join([
-            f"[{i+1}] Soru: {item['question']}\n    Cevap: {item['answer']}"
-            for i, item in enumerate(context_list)
-        ])
-        system = (
-            "Sen bir soru-cevap seçici asistansın. "
-            "Sana verilen aday cevaplar arasından kullanıcının sorusuna en uygun olanı seçersin. "
-            "Önceki konuşma verilmişse onu yalnız güncel mesajı anlamlandırmak için kullanırsın; "
-            "güncel mesaj yeni ve açık bir konuysa eski konuyu yok sayarsın. "
-            "Kendi cevabını asla üretmezsin, yalnızca bir sayı yazarsın."
-        )
-        user = (
-            f"Kullanıcı sorusu: {question}\n\n"
-            f"Aday cevaplar:\n{candidates}\n\n"
-            f"Yalnızca en uygun adayın numarasını yaz (1-{len(context_list)}). "
-            f"Hiçbiri uygun değilse 0 yaz. Başka hiçbir şey yazma."
-        )
-        return system, user
-
-    def _parse_selection(self, raw: str, context_list: list) -> Optional[str]:
-        # İlk sayıyı regex ile çek: model "3." veya "[3]" gibi yazarsa da
-        # seçim kaybolmasın. (Eskiden int() ValueError → geçerli seçim çöpe
-        # gidiyor, sistem gereksiz yere eşik yedeğine düşüyordu.)
-        m = re.search(r"\d+", raw or "")
-        if m:
-            idx = int(m.group())
-            if 1 <= idx <= len(context_list):
-                return context_list[idx - 1]['answer']
-        return None
-
-    def _parse_selection_result(
-        self,
-        raw: str,
-        context_list: list,
-        invocation: LLMInvocationResult,
-    ) -> SelectorResult:
-        match = re.search(r"\d+", raw or "")
-        if not match:
-            return SelectorResult(
-                status=LLMOutcomeStatus.INVALID_OUTPUT,
-                parse_status=LLMParseStatus.INVALID_OUTPUT,
-                answer=None,
-                selected_index=None,
-                invocation=invocation,
-            )
-        value = int(match.group())
-        if value == 0:
-            return SelectorResult(
-                status=LLMOutcomeStatus.SEMANTIC_NONE,
-                parse_status=LLMParseStatus.SEMANTIC_NONE,
-                answer=None,
-                selected_index=None,
-                raw_numeric_value=value,
-                invocation=invocation,
-            )
-        if not 1 <= value <= len(context_list):
-            return SelectorResult(
-                status=LLMOutcomeStatus.INVALID_OUTPUT,
-                parse_status=LLMParseStatus.INVALID_OUTPUT,
-                answer=None,
-                selected_index=None,
-                raw_numeric_value=value,
-                invocation=invocation,
-            )
-        candidate = context_list[value - 1]
-        return SelectorResult(
-            status=LLMOutcomeStatus.SUCCESS,
-            parse_status=LLMParseStatus.SUCCESS,
-            answer=candidate["answer"],
-            selected_index=value - 1,
-            selected_qna_id=candidate.get("qna_id"),
-            raw_numeric_value=value,
-            invocation=invocation,
-        )
 
     def analyze_intents(
         self, message: str, previous_user_turns: list[str] | tuple[str, ...] = ()
@@ -165,30 +90,35 @@ class BaseLLMProvider(ABC):
             )
         return IntentAnalyzerResult(analysis=analysis, invocation=invocation)
 
-    def ask(self, question: str, context_list: list) -> Optional[str]:
-        """Aday havuzundan birebir seçim. Tüm sağlayıcılarda aynı: prompt kur,
-        tamamla, dönen numarayı çözümle. Sağlayıcıya özgü olan tek şey
-        ``_complete``tir."""
-        result = self.ask_with_result(question, context_list)
+    def ask(self, question: str, candidates: Sequence[SelectorCandidate]) -> Optional[str]:
+        """Compatibility wrapper: curated answer text of the SELECTed candidate."""
+        result = self.ask_with_result(question, candidates)
         if result.status is LLMOutcomeStatus.TIMEOUT:
             raise TimeoutError("LLM request timed out")
         if result.status is LLMOutcomeStatus.MODEL_ERROR:
             raise RuntimeError("LLM request failed")
         return result.answer
 
-    def ask_with_result(self, question: str, context_list: list) -> SelectorResult:
+    def ask_with_result(
+        self, question: str, candidates: Sequence[SelectorCandidate]
+    ) -> SelectorResult:
+        """Selector V2: resolved intent + eligible candidates -> SELECT/NONE.
+
+        Strict JSON is validated with Pydantic and candidate-set membership;
+        there is no numeric/first-digit parsing."""
+        if not candidates:
+            raise ValueError("selector requires at least one eligible candidate")
         config = self.effective_config(LLMCapability.SELECTOR)
-        system, user = self._build_prompt(question, context_list)
+        system, user = build_selector_prompt(question, candidates)
         invocation = self._invoke(system, user, config)
         if invocation.status is not LLMOutcomeStatus.SUCCESS:
             return SelectorResult(
                 status=invocation.status,
                 parse_status=LLMParseStatus.NOT_APPLICABLE,
                 answer=None,
-                selected_index=None,
                 invocation=invocation,
             )
-        return self._parse_selection_result(invocation.text or "", context_list, invocation)
+        return parse_selector_output(invocation.text, candidates, invocation)
 
     def _invoke(
         self, system: str, user: str, config: EffectiveLLMConfig
@@ -314,7 +244,7 @@ class GeminiProvider(BaseLLMProvider):
 
     def _complete(self, system: str, user: str, max_tokens: int = 5) -> str:
         # max_tokens/temperature diğer sağlayıcılarla tutarlı geçilir; yoksa
-        # Gemini uzun/serbest cevap verip sayı-seçim parse'ını bozabiliyor.
+        # Gemini uzun/serbest cevap verip strict JSON seçim parse'ını bozabiliyor.
         config = replace(
             self.effective_config(LLMCapability.SELECTOR), max_tokens=max_tokens
         )

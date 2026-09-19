@@ -12,12 +12,14 @@ from sqlalchemy.orm import Session
 from core.database import Conversation, ConversationMessage, utcnow
 from core.deps import (
     MAX_MESSAGE_LEN,
-    MEILI_PROVIDER,
     get_db,
     is_maintenance_enabled,
     log_query as _log_query,
 )
-from services.answer_pipeline import answer_question as _answer_question
+from services.answer_pipeline import (
+    answer_question as _answer_question,
+    guard_safe_suggestions,
+)
 from services.decision_trace import DecisionTrace, emit_decision_trace
 from services.intent_analyzer import MAX_PREVIOUS_USER_TURNS
 
@@ -223,9 +225,9 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
         emit_decision_trace(trace)
         return _widget_reply(db, conv, answer, source)
 
-    # Öneriler
+    # Öneriler: cevap DEĞİL; guard/aktiflik kurallarına uyan başlıklar.
     try:
-        suggestions = MEILI_PROVIDER.get_suggestions(q, limit=20)
+        suggestions = guard_safe_suggestions(q, db, limit=20, trace=trace)
         if suggestions:
             background_tasks.add_task(_log_query, "none", "suggest", ip)
             trace.finalize(outcome="suggestions", source="none", qna_ids=[], answer_count=0)
@@ -308,7 +310,7 @@ def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(.
         # Cevap yok → öneriler
         suggestions = []
         try:
-            suggestions = MEILI_PROVIDER.get_suggestions(q, limit=20)
+            suggestions = guard_safe_suggestions(q, db, limit=20, trace=trace)
         except Exception:
             pass
 

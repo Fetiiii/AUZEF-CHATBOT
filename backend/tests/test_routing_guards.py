@@ -128,8 +128,10 @@ def test_selector_pool_drops_expired_guarded_candidate(monkeypatch):
         today=date(2026, 9, 17),
     )
 
-    pool = answer_pipeline._build_candidate_pool("soru", [], routing_policy=policy)
-    assert [candidate["qna_id"] for candidate in pool] == [11]
+    pool = answer_pipeline._build_candidate_pool(
+        "soru", [], routing_policy=policy, active_qna_lookup=lambda ids: set(ids)
+    )
+    assert [candidate.qna_id for candidate in pool] == [11]
 
 
 def test_fallback_skips_active_selector_only_candidate(monkeypatch, db):

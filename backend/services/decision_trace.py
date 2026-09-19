@@ -18,7 +18,9 @@ logger = logging.getLogger("auzef")
 
 @dataclass
 class DecisionTrace:
-    schema_version: int = field(default=3, init=False)
+    # v4: Selector V2 — typed candidate refs, eligibility, SELECT/NONE decision,
+    # NO_ELIGIBLE_CANDIDATES, selection outcome and guard-safe suggestions.
+    schema_version: int = field(default=4, init=False)
     endpoint: str
     conversation_id: Optional[int] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -43,6 +45,18 @@ class DecisionTrace:
         "qdrant_fallback_used": False,
         "selected_qna_id": None,
         "selected_source": None,
+    })
+    selection: dict = field(default_factory=lambda: {
+        "aggregate_outcome": None,
+        "intent_outcomes": [],
+        "error_fallback_allowed": False,
+    })
+    suggestions: dict = field(default_factory=lambda: {
+        "suggestions_evaluated": False,
+        "retrieved_count": 0,
+        "offered_count": 0,
+        "offered_qna_ids": [],
+        "exclusion_reasons": {},
     })
     final: dict = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -126,8 +140,11 @@ class DecisionTrace:
         self,
         result: SelectorResult,
         *,
+        outcome: str,
         config: dict,
-        candidate_count: int,
+        config_fingerprint: str,
+        candidate_refs: list,
+        candidate_kinds: list,
         candidate_qna_ids: list,
         purpose: str,
         used_in_final: bool,
@@ -136,24 +153,37 @@ class DecisionTrace:
         with self._lock:
             self.selectors.append({
                 "purpose": purpose,
+                "selector_called": True,
+                "selector_status": outcome,
+                "selector_decision": result.decision,
                 "used_in_final": used_in_final,
                 "provider": config.get("provider"),
                 "model": config.get("model"),
+                "requested_model": (
+                    invocation.metadata.requested_model if invocation else config.get("model")
+                ),
+                "actual_model": invocation.metadata.actual_model if invocation else None,
                 "effective_config": config,
-                "candidate_count": candidate_count,
-                "candidate_qna_ids": candidate_qna_ids,
+                "config_fingerprint": config_fingerprint,
+                "candidate_count": len(candidate_refs),
+                "candidate_refs": list(candidate_refs),
+                "candidate_kinds": list(candidate_kinds),
+                "candidate_qna_ids": list(candidate_qna_ids),
+                "selected_candidate_ref": result.selected_candidate_ref,
+                "selected_kind": result.selected_kind,
                 "selected_qna_id": result.selected_qna_id,
+                "selected_calendar_id": result.selected_calendar_id,
                 "selected_candidate_source": result.selected_candidate_source,
-                # Safe normalized integer only; raw provider text is never logged.
-                "raw_selector_value": result.raw_numeric_value,
+                # Safe internal code only; raw provider text is never logged.
+                "invalid_reason": result.invalid_reason,
                 "call_status": (
                     invocation.status.value if invocation else result.status.value
                 ),
                 "parse_status": result.parse_status.value,
-                "semantic_none": result.status.value == "semantic_none",
-                "invalid_output": result.status.value == "invalid_output",
-                "model_error": result.status.value == "model_error",
-                "timeout": result.status.value == "timeout",
+                "semantic_none": outcome == "semantic_none",
+                "invalid_output": outcome == "invalid_output",
+                "model_error": outcome == "model_error",
+                "timeout": outcome == "timeout",
                 "latency_ms": invocation.latency_ms if invocation else None,
                 "provider_metadata": (
                     invocation.metadata.to_trace_dict() if invocation else None
@@ -161,6 +191,50 @@ class DecisionTrace:
                 "usage": _usage(invocation),
                 "retry_count": _retry_count(invocation),
             })
+
+    def record_selector_skipped(self, *, purpose: str, outcome: str) -> None:
+        """Selector deliberately not called (zero eligible candidates)."""
+        with self._lock:
+            self.selectors.append(_not_called_entry(purpose, outcome))
+
+    def record_selector_pipeline_error(self, *, purpose: str) -> None:
+        """Unexpected retrieval/eligibility/selector pipeline exception."""
+        with self._lock:
+            entry = _not_called_entry(purpose, "model_error")
+            entry["model_error"] = True
+            entry["pipeline_error"] = True
+            self.selectors.append(entry)
+
+    def record_selection_outcome(
+        self,
+        aggregate_outcome: str,
+        *,
+        fallback_allowed: bool,
+        intent_outcomes: Optional[list] = None,
+    ) -> None:
+        with self._lock:
+            self.selection = {
+                "aggregate_outcome": aggregate_outcome,
+                "intent_outcomes": list(intent_outcomes or []),
+                "error_fallback_allowed": fallback_allowed,
+            }
+
+    def record_suggestions(
+        self,
+        *,
+        retrieved_count: int,
+        offered_qna_ids: list,
+        exclusion_reasons: dict,
+    ) -> None:
+        # Suggestions are non-answers; titles themselves are never logged.
+        with self._lock:
+            self.suggestions = {
+                "suggestions_evaluated": True,
+                "retrieved_count": retrieved_count,
+                "offered_count": len(offered_qna_ids),
+                "offered_qna_ids": list(offered_qna_ids),
+                "exclusion_reasons": dict(exclusion_reasons),
+            }
 
     def record_fallback(
         self,
@@ -228,9 +302,36 @@ class DecisionTrace:
                 "calendar_routes": list(self.calendar_routes),
                 "retrieval": list(self.retrieval),
                 "selectors": list(self.selectors),
+                "selection": dict(self.selection),
                 "fallback": dict(self.fallback),
+                "suggestions": dict(self.suggestions),
                 "final": dict(self.final),
             }
+
+
+def _not_called_entry(purpose: str, outcome: str) -> dict:
+    return {
+        "purpose": purpose,
+        "selector_called": False,
+        "selector_status": outcome,
+        "selector_decision": None,
+        "used_in_final": False,
+        "candidate_count": 0,
+        "candidate_refs": [],
+        "candidate_kinds": [],
+        "candidate_qna_ids": [],
+        "selected_candidate_ref": None,
+        "selected_kind": None,
+        "selected_qna_id": None,
+        "selected_calendar_id": None,
+        "invalid_reason": None,
+        "semantic_none": False,
+        "invalid_output": False,
+        "model_error": False,
+        "timeout": False,
+        "latency_ms": None,
+        "usage": None,
+    }
 
 
 def _usage(invocation) -> Optional[dict]:

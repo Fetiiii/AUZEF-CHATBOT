@@ -1,13 +1,17 @@
-"""Cevap üretim pipeline'ı: Intent Analyzer + LLM selector + V1 fallback.
+"""Cevap üretim pipeline'ı: Intent Analyzer + eligibility + Selector V2.
 
-Tasarım: Takvim artık bir "ön kapı" değil, aday havuzundaki bir kayıttır.
-LLM açıkken current turn 1 veya en fazla 2 resolved intent'e dönüştürülür;
-her intent QnA + takvim adaylarından oluşan tek havuzdan birebir seçtirilir.
-LLM asla son kullanıcı cevabı üretmez.
-LLM kapalı/hatalı/seçim yoksa eşik tabanlı yola (takvim kelime eşleşmesi →
-Meili ≥0.90 → Qdrant >0.75) düşülür.
+LLM açıkken current turn 1 veya en fazla 2 resolved intent'e dönüştürülür.
+Her intent için QnA (Meili + Qdrant) ve gerekiyorsa filtreli Calendar adayları
+tek tipli (typed) aday kümesine çevrilir, objektif eligibility uygulanır ve
+Selector V2 strict ``SELECT``/``NONE`` kararı verir. LLM asla son kullanıcı
+cevabı üretmez; seçilen curated cevap birebir döner.
+
+Semantic ``NONE`` ve ``NO_ELIGIBLE_CANDIDATES`` finaldir: eşik fallback'i
+çalışmaz. Selector ``INVALID_OUTPUT``/``MODEL_ERROR``/``TIMEOUT`` ise Phase 5
+degraded-mode tasarımına kadar mevcut deterministik uyumluluk yedeğine
+(takvim kelime eşleşmesi → Meili ≥0.90 → Qdrant >0.75) açık gerekçeyle düşer.
+LLM kapalıyken aynı deterministik yol değişmeden kullanılır.
 """
-import math
 import os
 import logging
 from dataclasses import dataclass, replace
@@ -22,13 +26,30 @@ from services.calendar_retrieval import (
     retrieve_calendar_candidates,
     skipped_calendar_result,
 )
-from core.deps import get_llm_provider, is_llm_enabled, meili_search_safe, QDRANT_PROVIDER
+from core.database import QnA
+from core.deps import (
+    MEILI_PROVIDER,
+    QDRANT_PROVIDER,
+    get_llm_provider,
+    is_llm_enabled,
+    meili_search_safe,
+)
+from services.candidate_eligibility import (
+    CandidateSetBuild,
+    ExclusionReason,
+    build_candidate_set,
+    normalized_record_id,
+    score_bucket,
+    selector_max_candidates,
+)
 from services.routing_guards import RoutingGuardPolicy
 from services.decision_trace import DecisionTrace
 from services.llm_config import LLMCapability
 from services.llm_types import (
+    SELECTION_ERROR_OUTCOMES,
     LLMOutcomeStatus,
     LLMParseStatus,
+    SelectionOutcome,
     SelectorResult,
 )
 
@@ -36,31 +57,19 @@ logger = logging.getLogger("auzef")
 
 
 @dataclass(frozen=True)
-class CandidatePoolBuild:
-    candidates: list
-    trace_snapshot: dict
-
-
-@dataclass(frozen=True)
 class PoolSelection:
+    outcome: SelectionOutcome
     result: Optional[SelectorResult]
-    reached_llm: bool
-    candidate_count: int
-    candidate_qna_ids: list
+    build: CandidateSetBuild
 
 
 @dataclass(frozen=True)
 class LLMAnswerResult:
     answer: Optional[str]
-    status: LLMOutcomeStatus
+    outcome: SelectionOutcome
     selected_qna_ids: list
     answer_count: int = 0
-
-
-class LLMPipelineError(RuntimeError):
-    def __init__(self, message: str, status: LLMOutcomeStatus):
-        super().__init__(message)
-        self.status = status
+    intent_outcomes: tuple = ()
 
 
 def _previous_user_turns(conversation_context: tuple[dict, ...]) -> tuple[str, ...]:
@@ -70,12 +79,6 @@ def _previous_user_turns(conversation_context: tuple[dict, ...]) -> tuple[str, .
         for item in conversation_context
         if item.get("role") == "user" and item.get("content", "").strip()
     ][-2:])
-
-
-# Birbirine çok yakın retrieval skorları sağlayıcı/float ayrıntıları yüzünden
-# son basamaklarda oynayabilir. Bu skorları aynı kovaya alıp QnA kimliğiyle
-# bağlamak, aynı aday kümesinin prompt'ta aynı sırayı almasını sağlar.
-RETRIEVAL_SCORE_DECIMALS = 5
 
 
 def _normalized_qna_id(value):
@@ -96,14 +99,7 @@ def _stable_id_key(value) -> tuple:
     return (1, str(normalized or ""))
 
 
-def _score_bucket(value) -> float:
-    try:
-        score = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if not math.isfinite(score):
-        return 0.0
-    return round(score, RETRIEVAL_SCORE_DECIMALS)
+_score_bucket = score_bucket
 
 
 def _decorate_hits(hits: list, *, stage: int, provider_priority: int) -> list:
@@ -127,21 +123,6 @@ def _candidate_sort_key(candidate: dict) -> tuple:
         str(candidate.get("answer") or "").casefold(),
     )
 
-
-def _candidate_identity(candidate: dict) -> tuple:
-    qna_id = _normalized_qna_id(candidate.get("qna_id"))
-    if qna_id is not None:
-        return ("qna", qna_id)
-    # Eski/eksik indeks sonuçlarında farklı QnA'ları cevap metnine göre
-    # birleştirmeyiz. Sağlayıcı + teknik id + metin yalnızca güvenli bir
-    # deterministik yedektir; normal sözleşmede qna_id her zaman bulunur.
-    return (
-        "legacy",
-        str(candidate.get("source") or ""),
-        str(candidate.get("id") or ""),
-        str(candidate.get("question") or ""),
-        str(candidate.get("answer") or ""),
-    )
 
 def _threshold(name: str, default: str) -> float:
     """Eşiği ortamdan okur ve 0-1 aralığında olduğunu DOĞRULAR.
@@ -205,125 +186,57 @@ def search_calendar(
     return format_calendar_answer(best.period, best.event, best.start_date, best.end_date)
 
 
+def _active_qna_lookup(db: Session):
+    """Bounded activity check: ids that exist with ``status=1``."""
+    def lookup(qna_ids) -> set[int]:
+        ids = sorted({int(value) for value in qna_ids})
+        if not ids:
+            return set()
+        rows = (
+            db.query(QnA.id)
+            .filter(QnA.id.in_(ids), QnA.status == 1)
+            .all()
+        )
+        return {int(row[0]) for row in rows}
+
+    return lookup
+
+
 def _build_candidate_pool_result(
     query: str,
     calendar_entries: list,
     routing_policy: RoutingGuardPolicy | None = None,
-) -> CandidatePoolBuild:
-    """Bir (alt) soru için LLM seçiciye verilecek aday havuzunu kurar:
-    Qdrant (semantik) + Meili (anahtar kelime) QnA adayları + Calendar V2'nin
-    önceden filtrelediği küçük ve bounded takvim adaylarını birleştirir.
+    *,
+    active_qna_lookup=None,
+    max_candidates: int | None = None,
+) -> CandidateSetBuild:
+    """Bir intent için Selector V2'ye verilecek eligible + bounded aday kümesi.
 
-    QnA'lar cevap metnine göre değil gerçek ``qna_id`` ile tekilleştirilir:
-    aynı kaydın kanonik/alias Qdrant noktaları tek adaya inerken aynı cevabı
-    paylaşan farklı QnA'lar korunur. Sıra retrieval aşaması, sağlayıcı, beş
-    ondalığa yuvarlanmış skor ve QnA kimliğiyle tamamen belirlenir."""
-    pool = []
-    candidate_order = []
-
-    # Takvim adaylarını havuzun BAŞINA koy. "Final ne zaman" gibi bir tarih
-    # sorusunda, aynı konudaki genel/yönlendirici bir QnA ("sınav tarihleri
-    # akademik takvimden yayınlanır") çoğu zaman aramada üst sırada çıkıyor;
-    # somut takvim tarihi listenin sonunda kalırsa LLM konum yanlılığıyla genel
-    # cevabı seçebiliyor. Takvimi öne almak (prompt'taki "somut tarihi tercih et"
-    # kuralıyla birlikte) somut tarihin seçilmesini sağlar.
-    sorted_calendar = sorted(
-        calendar_entries,
-        key=lambda entry: (
-            str(entry.period or "").casefold(),
-            str(entry.event or "").casefold(),
-            str(entry.start_date or ""),
-            str(entry.end_date or ""),
-            _stable_id_key(getattr(entry, "id", None)),
-        ),
-    )
-    seen_calendar = set()
-    for e in sorted_calendar:
-        # period ("Güz"/"Bahar") sorunun hangi döneme ait olduğunu LLM'in ayırt
-        # edebilmesi için soru metnine dahil edilir.
-        calendar_key = (
-            str(e.period or ""),
-            str(e.event or ""),
-            str(e.start_date or ""),
-            str(e.end_date or ""),
-        )
-        if calendar_key in seen_calendar:
-            continue
-        seen_calendar.add(calendar_key)
-        pool.append({
-            "question": f"{e.period} {e.event}".strip() + " ne zaman?",
-            "answer": format_calendar_answer(e.period, e.event, e.start_date, e.end_date),
-        })
-        candidate_order.append({
-            "order": len(pool),
-            "candidate_type": "academic_calendar",
-            "calendar_id": _normalized_qna_id(getattr(e, "id", None)),
-            "qna_id": None,
-            "source": "academic_calendar",
-            "retrieval_stage": "calendar",
-            "score": None,
-        })
-
-    raw = []
+    Retrieval değişmedi: Qdrant (24) + Meili (5) QnA adayları ve Calendar V2'nin
+    önceden filtrelediği en fazla üç takvim kaydı. QnA'lar ``qna_id``, takvim
+    kayıtları ``calendar_id`` ile tekilleştirilir. QnA sırası retrieval aşaması,
+    sağlayıcı, beş ondalığa yuvarlanmış skor ve QnA kimliğiyle belirlenir; bu
+    sıra yalnız determinizm içindir, semantik doğruluk bildirmez ve prompt'a
+    skor/rank/sağlayıcı olarak girmez."""
     qdrant_hits = []
-    meili_hits = []
+    raw = []
     try:
         qdrant_hits = QDRANT_PROVIDER.search(query, limit=24)
-        raw.extend(
-            _decorate_hits(qdrant_hits, stage=0, provider_priority=0)
-        )
+        raw.extend(_decorate_hits(qdrant_hits, stage=0, provider_priority=0))
     except Exception:
         pass
     meili_hits = meili_search_safe(query, limit=5)
     raw.extend(_decorate_hits(meili_hits, stage=0, provider_priority=1))
-
-    seen = set()
-    eligible_after_guard_count = 0
-    guard_rejections = {}
-    for candidate in sorted(raw, key=_candidate_sort_key):
-        if routing_policy is not None:
-            decision = routing_policy.decision(candidate.get("qna_id"))
-            if not decision.selector_allowed:
-                reason = decision.reason or "guard_rejected"
-                guard_rejections[reason] = guard_rejections.get(reason, 0) + 1
-                continue
-        eligible_after_guard_count += 1
-        identity = _candidate_identity(candidate)
-        if identity in seen or not candidate.get("answer"):
-            continue
-        seen.add(identity)
-        pool.append(
-            {
-                "qna_id": _normalized_qna_id(candidate.get("qna_id")),
-                "question": candidate.get("question"),
-                "answer": candidate.get("answer"),
-            }
-        )
-        candidate_order.append({
-            "order": len(pool),
-            "candidate_type": "qna",
-            "qna_id": _normalized_qna_id(candidate.get("qna_id")),
-            "source": candidate.get("source"),
-            "retrieval_stage": (
-                "context" if candidate.get("_stage") == 1 else "current"
-            ),
-            "score": _score_bucket(candidate.get("score")),
-        })
-    qna_ids = [item["qna_id"] for item in candidate_order if item.get("qna_id") is not None]
-    return CandidatePoolBuild(
-        candidates=pool,
-        trace_snapshot={
-            "calendar_candidate_count": len(seen_calendar),
-            "qdrant_candidate_count": len(qdrant_hits),
-            "meili_candidate_count": len(meili_hits),
-            "context_qdrant_candidate_count": 0,
-            "context_meili_candidate_count": 0,
-            "deduped_candidate_count": len(pool),
-            "eligible_after_guard_count": eligible_after_guard_count + len(seen_calendar),
-            "guard_rejections": guard_rejections,
-            "candidate_qna_ids": qna_ids,
-            "candidate_order": candidate_order,
-        },
+    return build_candidate_set(
+        calendar_entries=calendar_entries,
+        qna_hits=sorted(raw, key=_candidate_sort_key),
+        routing_policy=routing_policy,
+        active_qna_lookup=active_qna_lookup,
+        max_candidates=(
+            selector_max_candidates() if max_candidates is None else max_candidates
+        ),
+        qdrant_candidate_count=len(qdrant_hits),
+        meili_candidate_count=len(meili_hits),
     )
 
 
@@ -331,11 +244,27 @@ def _build_candidate_pool(
     query: str,
     calendar_entries: list,
     routing_policy: RoutingGuardPolicy | None = None,
+    *,
+    active_qna_lookup=None,
 ) -> list:
-    """Compatibility wrapper retaining the Phase 0 candidate-list contract."""
-    return _build_candidate_pool_result(
-        query, calendar_entries, routing_policy
-    ).candidates
+    """Compatibility wrapper returning only the eligible typed candidates."""
+    return list(
+        _build_candidate_pool_result(
+            query,
+            calendar_entries,
+            routing_policy,
+            active_qna_lookup=active_qna_lookup,
+        ).candidates
+    )
+
+
+_OUTCOME_BY_STATUS = {
+    LLMOutcomeStatus.SUCCESS: SelectionOutcome.SELECTED,
+    LLMOutcomeStatus.SEMANTIC_NONE: SelectionOutcome.SEMANTIC_NONE,
+    LLMOutcomeStatus.INVALID_OUTPUT: SelectionOutcome.INVALID_OUTPUT,
+    LLMOutcomeStatus.MODEL_ERROR: SelectionOutcome.MODEL_ERROR,
+    LLMOutcomeStatus.TIMEOUT: SelectionOutcome.TIMEOUT,
+}
 
 
 def _select_from_pool(
@@ -345,53 +274,63 @@ def _select_from_pool(
     routing_policy: RoutingGuardPolicy | None = None,
     trace: DecisionTrace | None = None,
     trace_purpose: str = "selector",
+    active_qna_lookup=None,
 ) -> PoolSelection:
-    """Bir (alt) soru için aday havuzunu kurup LLM'e birebir seçtirir.
-    Typed sonucu, aday sayısını ve LLM'e ulaşılıp ulaşılmadığını döner."""
+    """Eligible aday kümesini kurar ve Selector V2'yi en fazla bir kez çağırır.
+
+    Sıfır eligible aday → selector çağrılmaz (``NO_ELIGIBLE_CANDIDATES``).
+    Tek aday bile selector'dan geçer; otomatik bypass yoktur."""
     build = _build_candidate_pool_result(
         query,
         calendar_entries,
         routing_policy,
+        active_qna_lookup=active_qna_lookup,
     )
-    candidates = build.candidates
     if trace is not None:
-        snapshot = {**build.trace_snapshot, "purpose": trace_purpose}
-        trace.record_retrieval(snapshot)
-    if not candidates:
-        return PoolSelection(None, False, 0, [])
-    if hasattr(prov, "ask_with_result"):
-        result = prov.ask_with_result(query, candidates)
-    else:
-        # Compatibility for repository-local/custom V1 provider doubles.
-        answer = prov.ask(query, candidates)
-        selected_index = next(
-            (i for i, item in enumerate(candidates) if item.get("answer") == answer),
-            None,
-        )
-        selected = candidates[selected_index] if selected_index is not None else {}
-        result = SelectorResult(
-            status=(
-                LLMOutcomeStatus.SUCCESS if answer else LLMOutcomeStatus.SEMANTIC_NONE
-            ),
-            parse_status=(
-                LLMParseStatus.SUCCESS if answer else LLMParseStatus.SEMANTIC_NONE
-            ),
-            answer=answer,
-            selected_index=selected_index,
-            selected_qna_id=selected.get("qna_id"),
-        )
-    if result.selected_index is not None:
-        descriptor = build.trace_snapshot["candidate_order"][result.selected_index]
-        result = replace(
-            result,
-            selected_candidate_source=descriptor.get("source"),
-        )
-    return PoolSelection(
-        result=result,
-        reached_llm=True,
-        candidate_count=len(candidates),
-        candidate_qna_ids=build.trace_snapshot["candidate_qna_ids"],
-    )
+        trace.record_retrieval({**build.trace_snapshot, "purpose": trace_purpose})
+    if not build.candidates:
+        return PoolSelection(SelectionOutcome.NO_ELIGIBLE_CANDIDATES, None, build)
+    result = prov.ask_with_result(query, list(build.candidates))
+    if result.status is LLMOutcomeStatus.SUCCESS:
+        # Provider doubles/custom providers must also respect the candidate set.
+        allowed = {candidate.candidate_ref for candidate in build.candidates}
+        if result.selected_candidate_ref not in allowed or not result.answer:
+            result = replace(
+                result,
+                status=LLMOutcomeStatus.INVALID_OUTPUT,
+                parse_status=LLMParseStatus.INVALID_OUTPUT,
+                answer=None,
+                decision=None,
+                selected_candidate_ref=None,
+                selected_kind=None,
+                selected_qna_id=None,
+                selected_calendar_id=None,
+                selected_candidate_source=None,
+                invalid_reason="unknown_candidate_ref",
+            )
+    outcome = _OUTCOME_BY_STATUS.get(result.status, SelectionOutcome.INVALID_OUTPUT)
+    return PoolSelection(outcome, result, build)
+
+
+def _aggregate_outcome(outcomes: list[SelectionOutcome]) -> SelectionOutcome:
+    """No-answer aggregation across intents.
+
+    A semantic decision (NONE / no eligible candidate) in any intent is final
+    and suppresses the error-compatibility fallback, which would otherwise
+    re-answer the raw turn and could override that NONE. Only when every
+    intent failed with a selector error does the compatibility path run.
+    """
+    if not outcomes:
+        return SelectionOutcome.MODEL_ERROR
+    if SelectionOutcome.SEMANTIC_NONE in outcomes:
+        return SelectionOutcome.SEMANTIC_NONE
+    if SelectionOutcome.NO_ELIGIBLE_CANDIDATES in outcomes:
+        return SelectionOutcome.NO_ELIGIBLE_CANDIDATES
+    if SelectionOutcome.INVALID_OUTPUT in outcomes:
+        return SelectionOutcome.INVALID_OUTPUT
+    if SelectionOutcome.TIMEOUT in outcomes:
+        return SelectionOutcome.TIMEOUT
+    return SelectionOutcome.MODEL_ERROR
 
 
 def _llm_answer(
@@ -401,11 +340,11 @@ def _llm_answer(
     routing_policy: RoutingGuardPolicy | None = None,
     trace: DecisionTrace | None = None,
 ) -> LLMAnswerResult:
-    """Analyze the current turn, then select once for each resolved intent.
+    """Analyze the current turn, then run eligibility + Selector V2 per intent.
 
-    Context is consumed only by the analyzer. Retrieval and selector receive the
-    resolved intent, never the full conversation. Existing candidate, selector,
-    composition, and fallback semantics remain unchanged."""
+    Context is consumed only by the analyzer. Retrieval and selector receive
+    the resolved intent, never the conversation. Each intent is independent:
+    one intent's NONE never removes another intent's valid answer."""
     prov = get_llm_provider(db)
     if prov is None:
         raise RuntimeError("LLM sağlayıcısı yok (anahtar DB'de/env'de bulunamadı)")
@@ -424,12 +363,12 @@ def _llm_answer(
             previous_user_context_count=len(previous_user_turns),
         )
 
+    active_lookup = _active_qna_lookup(db)
     answers = []
     selected_qna_ids = []
-    any_success = False  # en az bir alt soruda LLM'e ULAŞILDI mı?
-    observed_non_success = []
-    observed_errors = []
+    outcomes: list[SelectionOutcome] = []
     for position, intent in enumerate(analysis_result.analysis.intents, start=1):
+        purpose = f"intent_{position}"
         if intent.calendar_relevant:
             try:
                 calendar_result = retrieve_calendar_candidates(
@@ -443,10 +382,7 @@ def _llm_answer(
             # Important: no DB/config lookup occurs on the closed route.
             calendar_result = skipped_calendar_result(relevant=False)
         if trace is not None:
-            trace.record_calendar_route(
-                calendar_result.trace_snapshot,
-                purpose=f"intent_{position}",
-            )
+            trace.record_calendar_route(calendar_result.trace_snapshot, purpose=purpose)
         try:
             selection = _select_from_pool(
                 intent.resolved_text,
@@ -454,50 +390,53 @@ def _llm_answer(
                 prov,
                 routing_policy,
                 trace,
-                f"intent_{position}",
+                purpose,
+                active_qna_lookup=active_lookup,
             )
         except Exception:
+            logger.exception("Selector V2 intent hattı hatası")
+            outcomes.append(SelectionOutcome.MODEL_ERROR)
+            if trace is not None:
+                trace.record_selector_pipeline_error(purpose=purpose)
             continue
-        if not selection.reached_llm or selection.result is None:
-            continue
-        result = selection.result
+        outcomes.append(selection.outcome)
         if trace is not None:
-            trace.record_selector(
-                result,
-                config=prov.effective_config(LLMCapability.SELECTOR).to_dict(),
-                candidate_count=selection.candidate_count,
-                candidate_qna_ids=selection.candidate_qna_ids,
-                purpose=f"intent_{position}",
-                used_in_final=result.answer is not None,
-            )
-        if result.status in (LLMOutcomeStatus.MODEL_ERROR, LLMOutcomeStatus.TIMEOUT):
-            observed_errors.append(result.status)
-            continue
-        any_success = True
-        observed_non_success.append(result.status)
-        if result.answer and result.answer not in answers:
+            selector_config = prov.effective_config(LLMCapability.SELECTOR)
+            if selection.result is None:
+                trace.record_selector_skipped(
+                    purpose=purpose, outcome=selection.outcome.value
+                )
+            else:
+                trace.record_selector(
+                    selection.result,
+                    outcome=selection.outcome.value,
+                    config=selector_config.to_dict(),
+                    config_fingerprint=selector_config.fingerprint,
+                    candidate_refs=selection.build.trace_snapshot["selector_candidate_refs"],
+                    candidate_kinds=selection.build.trace_snapshot["selector_candidate_kinds"],
+                    candidate_qna_ids=selection.build.trace_snapshot["candidate_qna_ids"],
+                    purpose=purpose,
+                    used_in_final=selection.outcome is SelectionOutcome.SELECTED,
+                )
+        result = selection.result
+        if (
+            selection.outcome is SelectionOutcome.SELECTED
+            and result.answer
+            and result.answer not in answers
+        ):
             answers.append(result.answer)
             if result.selected_qna_id is not None:
                 selected_qna_ids.append(result.selected_qna_id)
 
     if answers:
         return LLMAnswerResult(
-            "\n\n".join(answers), LLMOutcomeStatus.SUCCESS, selected_qna_ids,
-            answer_count=len(answers),
+            "\n\n".join(answers), SelectionOutcome.SELECTED, selected_qna_ids,
+            answer_count=len(answers), intent_outcomes=tuple(outcomes),
         )
-    if not any_success:
-        status = (
-            LLMOutcomeStatus.TIMEOUT
-            if LLMOutcomeStatus.TIMEOUT in observed_errors
-            else LLMOutcomeStatus.MODEL_ERROR
-        )
-        raise LLMPipelineError("LLM tüm intent'lerde erişilemedi", status)
-    aggregate_status = (
-        LLMOutcomeStatus.SEMANTIC_NONE
-        if LLMOutcomeStatus.SEMANTIC_NONE in observed_non_success
-        else LLMOutcomeStatus.INVALID_OUTPUT
+    return LLMAnswerResult(
+        None, _aggregate_outcome(outcomes), [], answer_count=0,
+        intent_outcomes=tuple(outcomes),
     )
-    return LLMAnswerResult(None, aggregate_status, [], answer_count=0)
 
 
 def _fallback_answer(
@@ -567,10 +506,12 @@ def answer_question(
 ) -> tuple:
     """Bir soruya cevap üretir. (answer, source) döner; cevap yoksa (None, "none").
 
-    - LLM açık ve seçim yaptı        → o cevap (source "llm").
-    - LLM açık ama "uygun yok" dedi   → yüksek-güven eşik hit'ine bak, ama takvim
-      kelime kapısını AÇMA (takvim zaten havuzdaydı, LLM reddetti).
-    - LLM kapalı ya da hata verdi     → tam eski eşik davranışı (takvim kapısı dahil)."""
+    - Selector SELECT                   → seçilen curated cevap (source "llm").
+    - Semantic NONE / eligible aday yok → final cevapsız; eşik/takvim yedeği YOK.
+    - Selector INVALID_OUTPUT           → uyumluluk yedeği, takvim kapısı kapalı.
+    - Selector MODEL_ERROR / TIMEOUT ya da hat hatası → uyumluluk yedeği
+      (takvim kapısı dahil); Phase 5 degraded-mode ile yeniden tasarlanacak.
+    - LLM kapalı                        → değişmemiş deterministik yol."""
     try:
         routing_policy = RoutingGuardPolicy.load(db)
     except Exception:
@@ -585,54 +526,153 @@ def answer_question(
     llm_enabled = is_llm_enabled(db)
     if trace is not None:
         trace.set_llm(enabled=llm_enabled, configs=None)
-    if llm_enabled:
-        try:
-            llm_result = _llm_answer(
-                query, db, conversation_context, routing_policy, trace
-            )
-            if llm_result.answer:
-                if trace is not None:
-                    trace.finalize(
-                        outcome="answer",
-                        source="llm",
-                        qna_ids=llm_result.selected_qna_ids,
-                        answer_count=llm_result.answer_count,
-                    )
-                return llm_result.answer, "llm"
-            # LLM çalıştı ama uygun aday yok → takvim kapısı olmadan eşik yedeği.
-            return _fallback_answer(
-                query,
-                db,
-                use_calendar=False,
-                routing_policy=routing_policy,
-                trace=trace,
-                fallback_reason=(
-                    "selector_semantic_none"
-                    if llm_result.status is LLMOutcomeStatus.SEMANTIC_NONE
-                    else "selector_invalid_output"
-                ),
-            )
-        except Exception as e:
-            logger.error(f"LLM ana yol hatası (yedeğe düşülüyor): {e}")
-            failure_status = (
-                e.status if isinstance(e, LLMPipelineError)
-                else LLMOutcomeStatus.MODEL_ERROR
-            )
+    if not llm_enabled:
+        # LLM kapalı → Phase 0 deterministik yol değişmeden (Phase 5 konusu).
+        return _fallback_answer(
+            query,
+            db,
+            use_calendar=True,
+            routing_policy=routing_policy,
+            trace=trace,
+            fallback_reason="llm_disabled_or_unavailable",
+        )
 
-    # LLM kapalı ya da hata → tam eski davranış.
+    try:
+        llm_result = _llm_answer(
+            query, db, conversation_context, routing_policy, trace
+        )
+    except Exception as e:
+        # Sağlayıcı yok / analyzer hattı çöktü: seçim hiç yapılamadı.
+        logger.error(f"LLM ana yol hatası (yedeğe düşülüyor): {e}")
+        if trace is not None:
+            trace.record_selection_outcome(
+                SelectionOutcome.MODEL_ERROR.value, fallback_allowed=True
+            )
+        return _fallback_answer(
+            query,
+            db,
+            use_calendar=True,
+            routing_policy=routing_policy,
+            trace=trace,
+            fallback_reason="llm_model_error",
+        )
+
+    outcome = llm_result.outcome
+    if trace is not None:
+        trace.record_selection_outcome(
+            outcome.value,
+            fallback_allowed=(
+                llm_result.answer is None and outcome in SELECTION_ERROR_OUTCOMES
+            ),
+            intent_outcomes=[item.value for item in llm_result.intent_outcomes],
+        )
+    if llm_result.answer:
+        if trace is not None:
+            trace.finalize(
+                outcome="answer",
+                source="llm",
+                qna_ids=llm_result.selected_qna_ids,
+                answer_count=llm_result.answer_count,
+            )
+        return llm_result.answer, "llm"
+
+    if outcome not in SELECTION_ERROR_OUTCOMES:
+        # SEMANTIC_NONE / NO_ELIGIBLE_CANDIDATES: final no-answer. Meili,
+        # Qdrant ve Calendar yedekleri bu karardan sonra ÇALIŞMAZ.
+        return None, "none"
+
+    # Selector sistem hatası: Phase 5'e kadar mevcut uyumluluk yedeği. Geçersiz
+    # çıktı Phase 0'daki gibi takvim kapısını açmaz; model hatası/timeout açar.
     return _fallback_answer(
         query,
         db,
-        use_calendar=True,
+        use_calendar=outcome is not SelectionOutcome.INVALID_OUTPUT,
         routing_policy=routing_policy,
         trace=trace,
-        fallback_reason=(
-            (
-                "llm_timeout"
-                if failure_status is LLMOutcomeStatus.TIMEOUT
-                else "llm_model_error"
-            )
-            if llm_enabled
-            else "llm_disabled_or_unavailable"
-        ),
+        fallback_reason={
+            SelectionOutcome.INVALID_OUTPUT: "selector_invalid_output",
+            SelectionOutcome.TIMEOUT: "selector_timeout",
+            SelectionOutcome.MODEL_ERROR: "selector_model_error",
+        }[outcome],
     )
+
+
+def guard_safe_suggestions(
+    query: str,
+    db: Session,
+    *,
+    limit: int = 20,
+    trace: DecisionTrace | None = None,
+) -> list[str]:
+    """Non-answer "did you mean" titles that respect guard/activity rules.
+
+    Suggestions are not answers and never override a selector decision. A
+    title is offered only when its QnA may be surfaced outside the selector:
+    guardless or fallback-allowed (so ``semantic_selector_only``, expired and
+    not-yet-valid guarded QnA are hidden), existing with ``status=1``. Guard
+    store or activity lookup failure yields no suggestions (fail closed)."""
+    try:
+        hits = MEILI_PROVIDER.get_suggestion_hits(query, limit=limit)
+    except Exception:
+        logger.exception("Öneri araması başarısız")
+        hits = []
+    reasons: dict[str, int] = {}
+
+    def exclude(reason: str) -> None:
+        reasons[reason] = reasons.get(reason, 0) + 1
+
+    try:
+        policy = RoutingGuardPolicy.load(db)
+    except Exception:
+        logger.exception("Routing guard deposu okunamadı; öneriler bloke edildi")
+        policy = None
+    candidates = []
+    seen_ids = set()
+    for hit in hits:
+        qna_id = normalized_record_id(hit.get("qna_id"))
+        title = str(hit.get("question") or "").strip()
+        if qna_id is None:
+            exclude(ExclusionReason.MISSING_QNA_ID.value)
+            continue
+        if not title:
+            exclude(ExclusionReason.MISSING_QUESTION.value)
+            continue
+        if qna_id in seen_ids:
+            continue
+        seen_ids.add(qna_id)
+        if policy is None:
+            exclude("guard_store_error")
+            continue
+        try:
+            allowed = policy.decision(qna_id).fallback_allowed
+        except Exception:
+            exclude(ExclusionReason.GUARD_EVALUATION_ERROR.value)
+            continue
+        if not allowed:
+            exclude("guard_fallback_blocked")
+            continue
+        candidates.append((qna_id, title))
+
+    safe: list[str] = []
+    safe_ids: list[int] = []
+    if candidates:
+        try:
+            active = _active_qna_lookup(db)([qna_id for qna_id, _ in candidates])
+        except Exception:
+            logger.exception("QnA aktiflik kontrolü başarısız; öneriler bloke edildi")
+            active = None
+        for qna_id, title in candidates:
+            if active is None:
+                exclude(ExclusionReason.ACTIVITY_LOOKUP_FAILED.value)
+            elif qna_id not in active:
+                exclude(ExclusionReason.INACTIVE_OR_MISSING.value)
+            elif title not in safe:
+                safe.append(title)
+                safe_ids.append(qna_id)
+    if trace is not None:
+        trace.record_suggestions(
+            retrieved_count=len(hits),
+            offered_qna_ids=safe_ids,
+            exclusion_reasons=reasons,
+        )
+    return safe

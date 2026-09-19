@@ -138,9 +138,18 @@ def test_legacy_conversations_without_token_are_fail_closed(client, db):
                        json={"rating": 5, "conversation_token": "herhangi"}).status_code == 403
 
 
-def test_widget_falls_back_to_suggestions_when_no_answer(client):
+def test_widget_falls_back_to_suggestions_when_no_answer(client, db):
+    from core.database import QnA
+
     providers.FakeMeili.hits = []          # eşik altında hiçbir sonuç yok
-    providers.FakeMeili.suggestions = ["kayıt nasıl yapılır", "harç ne kadar"]
+    rows = [QnA(question_text=q, answer_text="a", status=1)
+            for q in ("kayıt nasıl yapılır", "harç ne kadar")]
+    db.add_all(rows)
+    db.commit()
+    # Öneriler guard/aktiflik kontrolü için QnA kimliğiyle gelir.
+    providers.FakeMeili.suggestions = [
+        {"qna_id": row.id, "question": row.question_text} for row in rows
+    ]
     d = _chat(client, "hiçbir şeyle eşleşmeyen soru")
     assert "suggestions" in d and len(d["suggestions"]) == 2
     assert d["conversation_token"]         # önerili cevapta da token verilir

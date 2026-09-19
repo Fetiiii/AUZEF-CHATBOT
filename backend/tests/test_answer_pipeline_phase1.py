@@ -1,11 +1,11 @@
-"""Phase 1 preserves V1 routing while retaining typed decision causes."""
+"""answer_question routing by typed selection outcome (Phase 1 + Phase 4)."""
 from types import SimpleNamespace
 
 import pytest
 
 from services.decision_trace import DecisionTrace
 from services.llm_config import resolve_llm_config_set
-from services.llm_types import LLMOutcomeStatus
+from services.llm_types import SelectionOutcome
 from services.routing_guards import RoutingGuardPolicy
 
 
@@ -26,14 +26,44 @@ def _patch_common(monkeypatch, answer_pipeline, *, enabled=True):
 
 
 @pytest.mark.parametrize(
-    ("status", "expected_reason"),
+    "outcome",
+    [SelectionOutcome.SEMANTIC_NONE, SelectionOutcome.NO_ELIGIBLE_CANDIDATES],
+)
+def test_semantic_none_and_no_eligible_are_final_without_fallback(
+    monkeypatch, db, outcome
+):
+    """Phase 4 intentionally changes the Phase 1 contract: NONE is final."""
+    from services import answer_pipeline
+
+    _patch_common(monkeypatch, answer_pipeline)
+    monkeypatch.setattr(
+        answer_pipeline,
+        "_llm_answer",
+        lambda *_args, **_kwargs: answer_pipeline.LLMAnswerResult(None, outcome, []),
+    )
+    monkeypatch.setattr(
+        answer_pipeline,
+        "_fallback_answer",
+        lambda *_args, **_kwargs: pytest.fail("semantic NONE must not enter fallback"),
+    )
+    trace = DecisionTrace(endpoint="test")
+    assert answer_pipeline.answer_question("soru", db, trace=trace) == (None, "none")
+    snapshot = trace.to_dict()
+    assert snapshot["fallback"]["fallback_entered"] is False
+    assert snapshot["selection"]["aggregate_outcome"] == outcome.value
+    assert snapshot["selection"]["error_fallback_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_reason", "use_calendar"),
     [
-        (LLMOutcomeStatus.SEMANTIC_NONE, "selector_semantic_none"),
-        (LLMOutcomeStatus.INVALID_OUTPUT, "selector_invalid_output"),
+        (SelectionOutcome.INVALID_OUTPUT, "selector_invalid_output", False),
+        (SelectionOutcome.MODEL_ERROR, "selector_model_error", True),
+        (SelectionOutcome.TIMEOUT, "selector_timeout", True),
     ],
 )
-def test_none_like_results_keep_phase0_no_calendar_fallback(
-    monkeypatch, db, status, expected_reason
+def test_selector_errors_use_explicit_compatibility_fallback(
+    monkeypatch, db, outcome, expected_reason, use_calendar
 ):
     from services import answer_pipeline
 
@@ -41,7 +71,7 @@ def test_none_like_results_keep_phase0_no_calendar_fallback(
     monkeypatch.setattr(
         answer_pipeline,
         "_llm_answer",
-        lambda *_args, **_kwargs: answer_pipeline.LLMAnswerResult(None, status, []),
+        lambda *_args, **_kwargs: answer_pipeline.LLMAnswerResult(None, outcome, []),
     )
     captured = {}
 
@@ -54,26 +84,18 @@ def test_none_like_results_keep_phase0_no_calendar_fallback(
     assert answer_pipeline.answer_question("soru", db, trace=trace) == (
         "fallback", "meilisearch"
     )
-    assert captured["use_calendar"] is False
+    assert captured["use_calendar"] is use_calendar
     assert captured["fallback_reason"] == expected_reason
+    assert trace.to_dict()["selection"]["error_fallback_allowed"] is True
 
 
-@pytest.mark.parametrize(
-    ("status", "expected_reason"),
-    [
-        (LLMOutcomeStatus.MODEL_ERROR, "llm_model_error"),
-        (LLMOutcomeStatus.TIMEOUT, "llm_timeout"),
-    ],
-)
-def test_model_failures_keep_phase0_full_fallback(
-    monkeypatch, db, status, expected_reason
-):
+def test_unexpected_llm_pipeline_exception_keeps_phase0_full_fallback(monkeypatch, db):
     from services import answer_pipeline
 
     _patch_common(monkeypatch, answer_pipeline)
 
     def fail(*_args, **_kwargs):
-        raise answer_pipeline.LLMPipelineError("failed", status)
+        raise RuntimeError("provider missing")
 
     monkeypatch.setattr(answer_pipeline, "_llm_answer", fail)
     captured = {}
@@ -87,7 +109,7 @@ def test_model_failures_keep_phase0_full_fallback(
         "fallback", "academic_calendar"
     )
     assert captured["use_calendar"] is True
-    assert captured["fallback_reason"] == expected_reason
+    assert captured["fallback_reason"] == "llm_model_error"
 
 
 def test_llm_off_keeps_phase0_full_fallback(monkeypatch, db):
@@ -114,7 +136,7 @@ def test_llm_success_preserves_curated_answer_source_and_qna_trace(monkeypatch, 
         answer_pipeline,
         "_llm_answer",
         lambda *_args, **_kwargs: answer_pipeline.LLMAnswerResult(
-            "curated answer", LLMOutcomeStatus.SUCCESS, [73], answer_count=1
+            "curated answer", SelectionOutcome.SELECTED, [73], answer_count=1
         ),
     )
     trace = DecisionTrace(endpoint="test")

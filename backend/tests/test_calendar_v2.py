@@ -6,6 +6,7 @@ import json
 from sqlalchemy import inspect
 
 from core.database import AcademicCalendar, SystemConfig, admin_engine
+from services.calendar_utils import format_calendar_answer
 from services.calendar_retrieval import (
     CURRENT_TERM_CONFIG_KEY,
     CURRENT_YEAR_CONFIG_KEY,
@@ -255,10 +256,12 @@ class _Provider:
         return SelectorResult(
             status=LLMOutcomeStatus.SUCCESS,
             parse_status=LLMParseStatus.SUCCESS,
-            answer=selected["answer"],
-            selected_index=0,
-            selected_qna_id=selected.get("qna_id"),
-            raw_numeric_value=1,
+            answer=selected.answer_text,
+            decision="SELECT",
+            selected_candidate_ref=selected.candidate_ref,
+            selected_kind=selected.kind.value,
+            selected_qna_id=selected.qna_id,
+            selected_calendar_id=selected.calendar_id,
         )
 
 
@@ -272,47 +275,19 @@ def _intent(text, calendar):
     )
 
 
-def _qna_build(query, calendar_entries, _policy=None):
-    from services.answer_pipeline import CandidatePoolBuild
+def _qna_build(query, calendar_entries, policy=None, **_kwargs):
+    from services.candidate_eligibility import build_candidate_set
 
-    candidates = [
-        {
-            "question": f"{row.period} {row.event} ne zaman?",
-            "answer": f"calendar:{row.event}",
-        }
-        for row in calendar_entries
-    ]
-    order = [
-        {
-            "order": index,
-            "candidate_type": "academic_calendar",
-            "calendar_id": row.id,
-            "qna_id": None,
-            "source": "academic_calendar",
-        }
-        for index, row in enumerate(calendar_entries, start=1)
-    ]
-    candidates.append({"qna_id": 99, "question": query, "answer": "qna-answer"})
-    order.append({
-        "order": len(order) + 1,
-        "candidate_type": "qna",
-        "qna_id": 99,
-        "source": "qdrant_vector",
-    })
-    return CandidatePoolBuild(
-        candidates=candidates,
-        trace_snapshot={
-            "calendar_candidate_count": len(calendar_entries),
-            "qdrant_candidate_count": 1,
-            "meili_candidate_count": 0,
-            "context_qdrant_candidate_count": 0,
-            "context_meili_candidate_count": 0,
-            "deduped_candidate_count": len(candidates),
-            "eligible_after_guard_count": len(candidates),
-            "guard_rejections": {},
-            "candidate_qna_ids": [99],
-            "candidate_order": order,
-        },
+    return build_candidate_set(
+        calendar_entries=calendar_entries,
+        qna_hits=[{
+            "qna_id": 99, "question": query, "answer": "qna-answer",
+            "score": 1.0, "source": "qdrant",
+        }],
+        routing_policy=policy,
+        active_qna_lookup=lambda ids: set(ids),
+        max_candidates=32,
+        qdrant_candidate_count=1,
     )
 
 
@@ -331,7 +306,7 @@ def test_calendar_false_skips_retrieval_and_qna_still_runs(db, monkeypatch):
     trace = DecisionTrace(endpoint="test")
     result = answer_pipeline._llm_answer("Kayıt nasıl yapılır?", db, trace=trace)
     assert result.answer == "qna-answer"
-    assert provider.selector_candidates[0][0]["qna_id"] == 99
+    assert provider.selector_candidates[0][0].qna_id == 99
     route = trace.to_dict()["calendar_routes"][0]
     assert route["calendar_route_opened"] is False
     assert route["calendar_candidates_returned"] == 0
@@ -350,8 +325,11 @@ def test_calendar_true_coexists_with_qna_and_is_traced(db, monkeypatch):
     monkeypatch.setattr(answer_pipeline, "_build_candidate_pool_result", _qna_build)
     trace = DecisionTrace(endpoint="test")
     result = answer_pipeline._llm_answer("Kayıt yenileme ne zaman?", db, trace=trace)
-    assert result.answer == "calendar:Kayıt Yenileme"
-    assert any(candidate.get("qna_id") == 99 for candidate in provider.selector_candidates[0])
+    # Calendar SELECT returns the deterministic stored-row answer.
+    assert result.answer == format_calendar_answer(
+        row.period, row.event, row.start_date, row.end_date
+    )
+    assert any(candidate.qna_id == 99 for candidate in provider.selector_candidates[0])
     route = trace.to_dict()["calendar_routes"][0]
     assert route["calendar_route_opened"] is True
     assert route["calendar_candidate_ids"] == [row.id]
