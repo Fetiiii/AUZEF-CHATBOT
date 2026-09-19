@@ -1064,6 +1064,278 @@ def cmd_semantic_apply_rescore(args) -> None:
            "holdout_status": holdout, "passing": passing})
 
 
+def _holdout_inputs(args):
+    """Verified frozen inputs for the semantic HOLDOUT (offline)."""
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2 import semantic_gold as sg
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.prompt_contract import (
+        load_committed_manifest, load_prompt, prompt_manifest, serializer_contract_fingerprint,
+    )
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    manifest, snapshots = load_snapshot(Path(args.snapshot))
+    cm, cases = load_challenge(Path(args.challenge), manifest)
+    split = px.load_split(challenge_ids={c["case_id"] for c in cases})
+    expected = {"snapshot": (manifest["snapshot_fingerprint"], args.expected_snapshot_fp),
+                "challenge": (cm["challenge_fingerprint"], args.expected_challenge_fp),
+                "split": (split["split_fingerprint"], args.expected_split_fp)}
+    wrong = [k for k, (have, want) in expected.items() if have != want]
+    if wrong:
+        raise SystemExit(f"frozen identity mismatch: {wrong}")
+    gold_manifest, gold_cases = sh.load_semantic_gold(Path(args.semantic_gold), args.expected_gold_fp)
+    if gold_manifest["parent_snapshot_fingerprint"] != manifest["snapshot_fingerprint"]:
+        raise SystemExit("semantic gold belongs to another snapshot")
+    if prompt_manifest() != load_committed_manifest():
+        raise SystemExit("prompt manifest drift: a prompt or the serializer changed")
+    prompt = load_prompt(sh.SELECTED_PROMPT_ID)
+    if prompt.fingerprint != args.expected_prompt_fp or prompt.fingerprint != sh.SELECTED_PROMPT_FINGERPRINT:
+        raise SystemExit(f"STOP: variant_a_v1 fingerprint {prompt.fingerprint} != expected")
+    sem = sg.semantic_snapshots(snapshots, gold_cases)
+    stage_a = Path(args.stage_a_run)
+    production = load_results(stage_a / RESULTS_FILE).by_case
+    return {"manifest": manifest, "snapshots": snapshots, "cm": cm, "cases": cases, "split": split,
+            "gold_manifest": gold_manifest, "sem": sem, "prompt": prompt, "production": production,
+            "membership": {c["case_id"]: c["membership"] for c in cases},
+            "serializer_fp": serializer_contract_fingerprint(),
+            "stage_a_results_sha256": _file_sha256(stage_a / RESULTS_FILE),
+            "gold_fp": gold_manifest["semantic_gold_fingerprint"]}
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.new("sha256", Path(path).read_bytes()).hexdigest()
+
+
+def cmd_semantic_holdout_prep(args) -> None:
+    """Offline: freeze the production/first-candidate semantic HOLDOUT baseline,
+    the promotion gate and the 42-call HOLDOUT plan (no variant output exists)."""
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2.providers import selector_config
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.tokens import estimate
+
+    with no_live_calls():
+        ctx = _holdout_inputs(args)
+        out = Path(args.out)
+        if (out / "runs").exists():
+            raise SystemExit("variant HOLDOUT outputs already exist: the baseline must precede them")
+        identity = {"snapshot_fingerprint": ctx["manifest"]["snapshot_fingerprint"],
+                    "challenge_fingerprint": ctx["cm"]["challenge_fingerprint"],
+                    "split_fingerprint": ctx["split"]["split_fingerprint"],
+                    "semantic_gold_fingerprint": ctx["gold_fp"],
+                    "review_lock_fingerprint": ctx["gold_manifest"]["review_lock_fingerprint"],
+                    "stage_a_run_id": Path(args.stage_a_run).name,
+                    "stage_a_results_sha256": ctx["stage_a_results_sha256"],
+                    "serializer_contract_fingerprint": ctx["serializer_fp"],
+                    "selected_prompt_fingerprint": ctx["prompt"].fingerprint}
+        baseline = sh.build_prelive_baseline(snapshots=ctx["snapshots"], sem=ctx["sem"],
+                                             split=ctx["split"], production=ctx["production"],
+                                             membership=ctx["membership"], identity=identity)
+        baseline["frozen_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        existing = out / sh.BASELINE_FILE
+        if existing.exists():
+            prior = sh.verify_baseline(existing)
+            if prior["baseline_fingerprint"] != baseline["baseline_fingerprint"]:
+                raise SystemExit("a different frozen baseline already exists (immutable)")
+            baseline = prior
+        else:
+            _dump(baseline, existing)
+        rescore = json.loads(Path(args.rescore).read_text(encoding="utf-8"))
+        gate_report = sh.semantic_gate_report(rescore, ctx["prompt"], ctx["split"]["split_fingerprint"],
+                                              ctx["gold_fp"])
+        if not gate_report["gate"]["passed"]:
+            raise SystemExit("variant_a_v1 did not pass the semantic DEV gate: no HOLDOUT")
+        _dump(gate_report, out / sh.SEMANTIC_GATE_FILE)
+        by_id = {s.case.case_id: s for s in ctx["snapshots"]}
+        holdout_snaps = [by_id[i] for i in ctx["split"]["holdout"]]
+        config = selector_config(provider="openrouter", model="openai/gpt-4o-mini",
+                                 temperature=0.0, max_tokens=32)
+        est = estimate(holdout_snaps, max_tokens=config.max_tokens, primary_only=True,
+                       system_prompt=ctx["prompt"].text)
+        dev_run = load_results(Path(args.dev_run) / RESULTS_FILE).by_case
+        dev_ids = ctx["split"]["dev"]
+        dev_est = estimate([by_id[i] for i in dev_ids], max_tokens=config.max_tokens,
+                           primary_only=True, system_prompt=ctx["prompt"].text)
+        actual_dev = sum(dev_run[i].input_tokens or 0 for i in dev_ids if i in dev_run)
+        factor = round(actual_dev / dev_est["input_tokens"]["total"], 4)
+        estimate_block = {"input_tokens_approx": est["input_tokens"]["total"],
+                          "input_tokens_calibrated": round(est["input_tokens"]["total"] * factor),
+                          "calibration_factor": factor,
+                          "calibration_source": "variant_a_v1 DEV actual OpenRouter input / estimate",
+                          "output_tokens_upper_bound": est["output_tokens_upper_bound_total"],
+                          "planned_calls": est["calls_per_config"]}
+        if est["calls_per_config"] != sh.HOLDOUT_SIZE:
+            raise SystemExit(f"{est['calls_per_config']} callable HOLDOUT cases, expected {sh.HOLDOUT_SIZE}")
+        plan = sh.build_holdout_plan(
+            config=config, prompt=ctx["prompt"], split=ctx["split"], baseline=baseline,
+            snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+            challenge_fp=ctx["cm"]["challenge_fingerprint"], serializer_fp=ctx["serializer_fp"],
+            gold_fp=ctx["gold_fp"], estimate_block=estimate_block,
+            human_selection="variant_a_v1 selected for HOLDOUT by the human after the semantic "
+                            "DEV comparison; variant_b_v1 is not run on HOLDOUT")
+        plan_path = out / sh.PLAN_FILE
+        if plan_path.exists():
+            prior = json.loads(plan_path.read_text(encoding="utf-8"))
+            if prior.get("plan_fingerprint") != plan["plan_fingerprint"]:
+                raise SystemExit("a different HOLDOUT plan already exists")
+        else:
+            _dump(plan, plan_path)
+    _dump({"baseline_fingerprint": baseline["baseline_fingerprint"],
+           "plan_fingerprint": plan["plan_fingerprint"],
+           "holdout_total": baseline["holdout_total"],
+           "semantic_evaluable": baseline["semantic_evaluable_count"],
+           "excluded": baseline["excluded"], "production": baseline["production"],
+           "first_candidate": {k: baseline["first_candidate"][k] for k in ("exact", "denominator")},
+           "slices_production": baseline["production_slices"],
+           "critical_production": baseline["critical_cases_production"],
+           "estimate": estimate_block})
+
+
+def cmd_semantic_holdout_run(args) -> None:
+    """Variant A on the 42 HOLDOUT cases: live only under the approved HOLDOUT plan."""
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2.providers import (
+        FAKE_PROVIDER, FakeSelectorProvider, LiveSelectorBackend, selector_config,
+    )
+    from benchmarks.selector_v2.runner import RunIdentity, ResultStore, run_benchmark
+
+    check_live_gate(live=args.live, confirmed=args.confirm_live_provider_calls,
+                    provider=args.provider, model=args.model)
+    with no_live_calls():
+        ctx = _holdout_inputs(args)
+        out = Path(args.out)
+        baseline = sh.verify_baseline(Path(args.baseline_dir) / sh.BASELINE_FILE)
+        if baseline["identity"]["semantic_gold_fingerprint"] != ctx["gold_fp"] or \
+                baseline["holdout_case_ids"] != ctx["split"]["holdout"]:
+            raise SystemExit("frozen baseline belongs to other inputs")
+        split, prompt = ctx["split"], ctx["prompt"]
+        holdout = set(split["holdout"])
+        if args.live:
+            config = selector_config(provider=args.provider, model=args.model,
+                                     temperature=args.temperature, max_tokens=args.max_tokens)
+            plan_path = Path(args.baseline_dir) / sh.PLAN_FILE
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            sh.validate_holdout_plan(plan, args.approve_plan_fingerprint, config=config, prompt=prompt,
+                                     split=split, baseline=baseline,
+                                     snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+                                     serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"])
+            px.holdout_guard(prompt=prompt, selected_winner=args.selected_variant,
+                             gate_report_path=Path(args.baseline_dir) / sh.SEMANTIC_GATE_FILE,
+                             split_fp=split["split_fingerprint"], live=True, plan_path=plan_path,
+                             approved_fp=args.approve_plan_fingerprint)
+            inner = LiveSelectorBackend(config, prompt=prompt)
+            mode = "LIVE"
+        else:
+            config = selector_config(provider=FAKE_PROVIDER, model=f"fake-{args.fake_policy}",
+                                     max_tokens=args.max_tokens)
+            inner = FakeSelectorProvider(args.fake_policy, config, prompt=prompt)
+            mode = f"DRY_RUN_FAKE:{args.fake_policy}"
+        identity = RunIdentity(
+            selector_contract_fingerprint=ctx["serializer_fp"], config=config,
+            snapshot_fingerprint=ctx["manifest"]["snapshot_fingerprint"], run_mode=mode,
+            prompt_fingerprint=prompt.fingerprint, split_fingerprint=split["split_fingerprint"])
+        already = ResultStore(out / "runs" / identity.run_id, identity).load().by_case
+        if set(already) - holdout:
+            raise SystemExit("run directory holds non-HOLDOUT results")
+        # Budget over the whole run (resume included): at most 42 logical calls in total.
+        backend = sh.BudgetedBackend(inner, sh.MAX_LOGICAL_CALLS - len(already), holdout)
+
+    def execute():
+        return run_benchmark(ctx["snapshots"], backend, identity, out, concurrency=1,
+                             max_cases=sh.MAX_LOGICAL_CALLS, retry_errors=False,
+                             primary_only=True, case_ids=holdout)
+
+    if args.live:
+        with no_live_calls([LIVE_PROVIDERS[config.provider]], block_sdks=False):
+            summary = execute()
+    else:
+        with no_live_calls():
+            summary = execute()
+    accounting = {"run_id": identity.run_id, "run_mode": mode,
+                  "logical_calls_this_invocation": backend.calls,
+                  "previously_completed": len(already),
+                  "logical_calls_total": backend.calls + len(already),
+                  "refused_by_budget_guard": backend.refused,
+                  "max_logical_calls": sh.MAX_LOGICAL_CALLS,
+                  "production_calls": 0, "variant_b_calls": 0, "stage_b_calls": 0,
+                  "summary": summary.__dict__}
+    if accounting["logical_calls_total"] > sh.MAX_LOGICAL_CALLS or backend.refused:
+        accounting["status"] = "FAIL_CALL_BUDGET"
+    _dump(accounting, Path(summary.run_dir) / "call-accounting.json")
+    _dump(accounting)
+
+
+def cmd_semantic_holdout_eval(args) -> None:
+    """Offline: re-verify the frozen baseline, score Variant A on Semantic Gold, apply the gate."""
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2.contract import sha256_text
+    from benchmarks.selector_v2.runner import RESULTS_FILE, RUN_MANIFEST, load_results
+
+    with no_live_calls():
+        ctx = _holdout_inputs(args)
+        out = Path(args.out)
+        baseline = sh.verify_baseline(out / sh.BASELINE_FILE)
+        plan = json.loads((out / sh.PLAN_FILE).read_text(encoding="utf-8"))
+        run_dir = Path(args.run_dir)
+        run_identity = json.loads((run_dir / RUN_MANIFEST).read_text(encoding="utf-8"))
+        checks = {"prompt": run_identity.get("prompt_fingerprint") == sh.SELECTED_PROMPT_FINGERPRINT,
+                  "split": run_identity.get("split_fingerprint") == ctx["split"]["split_fingerprint"],
+                  "snapshot": run_identity.get("snapshot_fingerprint") == ctx["manifest"]["snapshot_fingerprint"],
+                  "config": run_identity.get("config_fingerprint") == plan["config_fingerprint"]
+                  or str(run_identity.get("run_mode", "")).startswith("DRY_RUN")}
+        if not all(checks.values()):
+            raise SystemExit(f"run identity mismatch: {checks}")
+        loaded = load_results(run_dir / RESULTS_FILE)
+        changes = sh.load_changes(Path(args.semantic_gold))
+        metrics = sh.evaluate_holdout(baseline=baseline, snapshots=ctx["snapshots"], sem=ctx["sem"],
+                                      production=ctx["production"], variant=loaded.by_case,
+                                      membership=ctx["membership"], changes=changes)
+        accounting = json.loads((run_dir / "call-accounting.json").read_text(encoding="utf-8"))
+        scored = metrics.pop("scored_rows")
+        raw = (run_dir / RESULTS_FILE).read_text(encoding="utf-8")
+        files = {
+            "responses.jsonl": raw,
+            "scored-results.jsonl": "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                            for r in scored),
+            "metrics.json": json.dumps({**metrics, "result_integrity": {
+                "unique_cases": len(loaded.by_case), "superseded": loaded.superseded,
+                "corrupt_lines": loaded.corrupt_lines}, "call_accounting": accounting},
+                ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n",
+            "critical-cases.json": json.dumps(metrics["critical_cases"], ensure_ascii=False,
+                                              indent=2, sort_keys=True) + "\n",
+        }
+        for name, text in files.items():
+            (out / name).write_text(text, encoding="utf-8")
+        gate = metrics["promotion_gate"]
+        manifest = {
+            "phase": "7B semantic HOLDOUT — variant_a_v1",
+            "baseline_fingerprint": baseline["baseline_fingerprint"],
+            "baseline_reverified_after_scoring": True,
+            "baseline_frozen_at": baseline["frozen_at"],
+            "plan_fingerprint": plan["plan_fingerprint"],
+            "run_id": run_identity["run_id"], "run_mode": run_identity["run_mode"],
+            "run_identity_checks": checks,
+            "semantic_gold_fingerprint": ctx["gold_fp"],
+            "prompt_fingerprint": ctx["prompt"].fingerprint,
+            "split_fingerprint": ctx["split"]["split_fingerprint"],
+            "promotion_gate_version": sh.PROMOTION_GATE["version"],
+            "promotion_gate_passed": gate["passed"],
+            "outcome": ("VARIANT_A_HOLDOUT = PASS; SELECTOR_PROMPT_CANDIDATE = variant_a_v1"
+                        if gate["passed"] else "VARIANT_A_HOLDOUT = FAIL"),
+            "artifact_sha256": {name: sha256_text(text) for name, text in files.items()},
+            "responses_source": str(run_dir / RESULTS_FILE),
+        }
+        _dump(manifest, out / "manifest.json")
+    _dump({"outcome": manifest["outcome"], "checks": gate["checks"],
+           "production": metrics["production"]["exact"], "variant_a": metrics["variant_a"]["exact"],
+           "paired": metrics["paired_vs_production"]})
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -1337,6 +1609,38 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(name, required=True)
     p.add_argument("--run", action="append", required=True, help="name=run_dir")
     p.set_defaults(func=cmd_semantic_apply_rescore)
+
+    def holdout_args(p):
+        for name in ("--snapshot", "--challenge", "--stage-a-run", "--semantic-gold", "--out",
+                     "--expected-snapshot-fp", "--expected-challenge-fp", "--expected-split-fp",
+                     "--expected-gold-fp", "--expected-prompt-fp"):
+            p.add_argument(name, required=True)
+
+    p = sub.add_parser("semantic-holdout-prep",
+                       help="freeze semantic HOLDOUT baseline + promotion gate + 42-call plan")
+    holdout_args(p)
+    p.add_argument("--rescore", required=True, help="semantic-rescore.json (DEV semantic gate)")
+    p.add_argument("--dev-run", required=True, help="variant_a_v1 DEV run dir (token calibration)")
+    p.set_defaults(func=cmd_semantic_holdout_prep)
+
+    p = sub.add_parser("semantic-holdout-run", help="variant_a_v1 on HOLDOUT (gated, 42 calls max)")
+    holdout_args(p)
+    p.add_argument("--baseline-dir", required=True)
+    p.add_argument("--selected-variant", required=True)
+    p.add_argument("--live", action="store_true")
+    p.add_argument(CONFIRM_FLAG, dest="confirm_live_provider_calls", action="store_true")
+    p.add_argument("--provider")
+    p.add_argument("--model")
+    p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument("--max-tokens", type=int, default=32)
+    p.add_argument("--approve-plan-fingerprint")
+    p.add_argument("--fake-policy", default="oracle")
+    p.set_defaults(func=cmd_semantic_holdout_run)
+
+    p = sub.add_parser("semantic-holdout-eval", help="score variant_a_v1 HOLDOUT on Semantic Gold")
+    holdout_args(p)
+    p.add_argument("--run-dir", required=True)
+    p.set_defaults(func=cmd_semantic_holdout_eval)
 
     p = sub.add_parser("postmortem", help="deterministic Stage A failure analysis (no LLM)")
     p.add_argument("--snapshot", required=True)

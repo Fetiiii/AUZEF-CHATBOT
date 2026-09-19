@@ -63,8 +63,8 @@ STATUS: PASS
 Phase 7B-Semantic Rescore
 STATUS: PASS
 
-Phase 7B-Prompt HOLDOUT Live
-STATUS: WAITING_FOR_HUMAN_VARIANT_SELECTION
+Phase 7B-Prompt HOLDOUT Live (variant_a_v1, Semantic Gold V1)
+STATUS: FAIL (promotion gate: critical 471/472; run valid, 42/42 calls)
 
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
@@ -642,3 +642,31 @@ Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_FOLLOWUP_REPORT.md`](PHASE_7
 
 Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_RESULT.md`](PHASE_7B_SEMANTIC_ADJUDICATION_RESULT.md),
 [`PHASE_7B_SEMANTIC_RESCORE_REPORT.md`](PHASE_7B_SEMANTIC_RESCORE_REPORT.md).
+
+## Phase 7B-Variant A Semantic HOLDOUT record
+
+- [x] **Human selection:** variant_a_v1 for HOLDOUT; B not run.
+- [x] **Calls:** exactly 42 OpenRouter calls (`openai/gpt-4o-mini`, config
+      `af9eb2d0…`, prompt `1aed5688…`). Production, B and Stage B made 0.
+- [x] **Frozen before the call** (baseline `0d318f16…`):
+      - production and first-candidate semantic HOLDOUT baselines, both 24/38;
+      - the 38 evaluable ids (4 excluded, 0 expected NONE);
+      - the promotion gate.
+      It was re-verified after scoring.
+- [x] **Guard:** HOLDOUT plan `7b9b21bc…` with OpenRouter, variant_a_v1,
+      HOLDOUT, 42 calls, and the baseline and Gold fingerprints bound.
+      `BudgetedBackend` refused 0 calls.
+- [x] **Result:** Variant A 30/38 vs production 24/38.
+      - Paired: 24 both correct / 0 only production / 6 only A / 8 both
+        wrong; net +6, p = 0.031.
+      - False NONE: 2 vs 10.
+      - General/specific regressions: 0.
+      - Errors: 0.
+- [ ] **Critical 471/472:** both wrong. Variant A selected "Merkezi yatay
+      geçiş…" although the user did not state "merkezi".
+      → **VARIANT_A_HOLDOUT = FAIL**. The prompt was not changed and there
+      was no re-run on HOLDOUT.
+- [x] **Isolation:** production prompt, config, registry, KB and alias table
+      unchanged. Tests: new 6/6, full suite 523/523.
+
+Detailed evidence: [`PHASE_7B_VARIANT_A_HOLDOUT_REPORT.md`](PHASE_7B_VARIANT_A_HOLDOUT_REPORT.md).
