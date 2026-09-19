@@ -27,6 +27,38 @@ from services.llm_provider import BaseLLMProvider, _bind_configs
 from services.llm_types import SelectorResult
 
 FAKE_PROVIDER = "fake"
+# Request parameters a benchmark run may drop for a model whose catalog entry
+# does not support them (declared in the run identity; never production).
+OMITTABLE_REQUEST_PARAMS = frozenset({"temperature"})
+
+
+class ParamOmittingClient:
+    """OpenAI-compatible client proxy that removes declared request params."""
+
+    def __init__(self, inner, omit: Sequence[str]):
+        self._inner = inner
+        self.omit = tuple(omit)
+        self.sent_param_keys: list[list[str]] = []
+        self.chat = _Chat(self._create)
+
+    def _create(self, **kwargs):
+        for key in self.omit:
+            kwargs.pop(key, None)
+        self.sent_param_keys.append(sorted(kwargs))
+        return self._inner.chat.completions.create(**kwargs)
+
+    def with_options(self, **options):
+        return ParamOmittingClient(self._inner.with_options(**options), self.omit)
+
+
+class _Chat:
+    def __init__(self, create):
+        self.completions = _Completions(create)
+
+
+class _Completions:
+    def __init__(self, create):
+        self.create = create
 
 Policy = Callable[[CaseSnapshot, Sequence[SelectorCandidate]], str]
 
@@ -142,7 +174,8 @@ class LiveSelectorBackend:
     circuit breaker and DecisionTrace are never touched.
     """
 
-    def __init__(self, config: EffectiveLLMConfig, client_factory=None, prompt=None):
+    def __init__(self, config: EffectiveLLMConfig, client_factory=None, prompt=None,
+                 omit_request_params: Sequence[str] = ()):
         try:
             # Preflight: an untransmittable reasoning level fails before any request.
             reasoning_request_fields(config.provider, config.reasoning_effort)
@@ -157,6 +190,11 @@ class LiveSelectorBackend:
         client = (client_factory or factories[config.provider])(model=config.model)
         self.provider = _bind_configs(client, config_set_for(config))
         self.prompt = prompt or load_prompt(PRODUCTION)
+        self.omit_request_params = tuple(sorted(omit_request_params))
+        if self.omit_request_params:
+            if set(self.omit_request_params) - OMITTABLE_REQUEST_PARAMS:
+                raise SystemExit(f"live run refused: cannot omit {self.omit_request_params}")
+            self.provider.client = ParamOmittingClient(self.provider.client, self.omit_request_params)
 
     def select(self, snapshot: CaseSnapshot, candidates: Sequence[SelectorCandidate]) -> SelectorResult:
         return select_with_prompt(self.provider, self.prompt, snapshot.case.intent_text, candidates)

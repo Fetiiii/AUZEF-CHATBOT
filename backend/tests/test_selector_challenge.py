@@ -241,6 +241,12 @@ def test_reasoning_transport_openrouter_and_openai(monkeypatch, effort):
     assert "extra_body" not in completions.calls[0]
 
 
+def test_openrouter_reasoning_none_is_sent_explicitly(monkeypatch):
+    bound, completions = _openai_compatible("openrouter", "none", monkeypatch)
+    bound.ask_with_result("soru", _candidates())
+    assert completions.calls[0]["extra_body"] == {"reasoning": {"effort": "none"}}
+
+
 def test_no_reasoning_payload_is_unchanged(monkeypatch):
     for provider in ("openrouter", "openai"):
         bound, completions = _openai_compatible(provider, None, monkeypatch)
@@ -261,7 +267,7 @@ def test_unsupported_reasoning_fails_before_any_request(monkeypatch):
     with pytest.raises(ReasoningTransportError):
         gemini._invoke("s", "u", config)
     assert calls == []
-    bound, completions = _openai_compatible("openrouter", "none", monkeypatch)
+    bound, completions = _openai_compatible("openai", "none", monkeypatch)
     with pytest.raises(ReasoningTransportError):
         bound.ask_with_result("soru", _candidates())
     assert completions.calls == []
@@ -288,7 +294,10 @@ def test_registry_rejects_untransmittable_reasoning_assignment():
 
     validate_assignment(LLMCapability.SELECTOR, model("openrouter"),
                         CapabilityParams(max_tokens=32, reasoning_effort="low"))
-    for provider, effort in (("gemini", "low"), ("openrouter", "none")):
+    # openrouter can now send "none" explicitly; openai/gemini still cannot
+    validate_assignment(LLMCapability.SELECTOR, model("openrouter"),
+                        CapabilityParams(max_tokens=32, reasoning_effort="none"))
+    for provider, effort in (("gemini", "low"), ("openai", "none")):
         with pytest.raises(AIConfigError) as exc:
             validate_assignment(LLMCapability.SELECTOR, model(provider),
                                 CapabilityParams(max_tokens=32, reasoning_effort=effort))

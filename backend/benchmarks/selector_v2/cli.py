@@ -1939,6 +1939,203 @@ def cmd_variant_c_eval(args) -> None:
                                                   metrics["known_regressions"].items()}})
 
 
+def _model_exp_inputs(args):
+    """Variant C inputs + saved runs (production, A, B, C/4o-mini) + capability plan."""
+    from benchmarks.selector_v2 import model_capability as mc
+    from benchmarks.selector_v2 import model_experiment as me
+    from benchmarks.selector_v2 import variant_c as vc
+    from benchmarks.selector_v2.providers import selector_config
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+
+    ctx = _variant_c_inputs(args)
+    c_dir = Path(args.c_dir)
+    (c_dev,) = [d for d in (c_dir / "runs").iterdir() if d.is_dir()]
+    (c_diag,) = [d for d in (c_dir / "diagnostics" / "runs").iterdir() if d.is_dir()]
+    c4o = {**load_results(c_dev / RESULTS_FILE).by_case, **load_results(c_diag / RESULTS_FILE).by_case}
+    runs = {**ctx["runs"], "variant_c_v1_4o_mini": c4o}
+    cap_path = Path(args.capability)
+    cap = json.loads(cap_path.read_text(encoding="utf-8"))
+    request = mc.request_plan(cap["parity"])
+    if request["verdict"] == mc.STOP:
+        raise SystemExit(f"STOP_BEFORE_LIVE: still blocked {request['still_blocked']}")
+    config = selector_config(provider=me.PROVIDER, model=me.MODEL, temperature=0.0, max_tokens=32,
+                             reasoning_effort=me.REASONING)
+    return {**ctx, "runs": runs, "c_baseline": vc.verify_baseline(c_dir / vc.BASELINE_FILE),
+            "capability": cap, "capability_sha256": vc.file_sha256(cap_path), "request": request,
+            "config": config}
+
+
+def cmd_model_exp_prep(args) -> None:
+    from benchmarks.selector_v2 import model_experiment as me
+    from benchmarks.selector_v2 import variant_c as vc
+
+    with no_live_calls():
+        ctx = _model_exp_inputs(args)
+        out = Path(args.out)
+        if (out / "runs").exists():
+            raise SystemExit("model-experiment outputs already exist: the baseline must precede them")
+        identity = {"snapshot_fingerprint": ctx["manifest"]["snapshot_fingerprint"],
+                    "split_fingerprint": ctx["split"]["split_fingerprint"],
+                    "semantic_gold_fingerprint": ctx["gold_fp"],
+                    "variant_c_prompt_fingerprint": ctx["prompt"].fingerprint,
+                    "variant_c_baseline_fingerprint": ctx["c_baseline"]["baseline_fingerprint"],
+                    "capability_validation_sha256": ctx["capability_sha256"],
+                    "request_plan": ctx["request"]}
+        baseline = me.build_baseline(snapshots=ctx["snapshots"], sem=ctx["sem"], split=ctx["split"],
+                                     runs=ctx["runs"], c_baseline=ctx["c_baseline"], identity=identity)
+        baseline["frozen_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        path = out / "prelive-baselines.json"
+        if path.exists():
+            prior = me.verify_baseline(path)
+            if prior["baseline_fingerprint"] != baseline["baseline_fingerprint"]:
+                raise SystemExit("a different model-experiment baseline exists")
+            baseline = prior
+        else:
+            _dump(baseline, path)
+        plan = me.build_plan(config=ctx["config"], omitted=ctx["request"]["omitted_request_params"],
+                             prompt=ctx["prompt"], split=ctx["split"], baseline=baseline,
+                             snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+                             serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"],
+                             capability_sha256=ctx["capability_sha256"])
+        _dump(plan, out / "m1-plan.json")
+    _dump({"baseline_fingerprint": baseline["baseline_fingerprint"], "plan_fingerprint": plan["plan_fingerprint"],
+           "config_fingerprint": plan["config_fingerprint"], "omitted": plan["omitted_request_params"],
+           "m1": len(plan["stages"]["m1"]["dev"]) + 2, "m2": len(plan["stages"]["m2"]["dev"]),
+           "stated_slice": len(baseline["stated_slice_ids"]),
+           "reference": {n: (r["exact"], r["unstated_qualifier_assumed_slice"], r["false_none"])
+                         for n, r in baseline["runs"].items()}})
+
+
+def cmd_model_exp_run(args) -> None:
+    from benchmarks.selector_v2 import model_experiment as me
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2.providers import FAKE_PROVIDER, FakeSelectorProvider, LiveSelectorBackend, selector_config
+    from benchmarks.selector_v2.runner import ResultStore, RunIdentity, load_results, run_benchmark
+
+    check_live_gate(live=args.live, confirmed=args.confirm_live_provider_calls,
+                    provider=args.provider, model=args.model)
+    with no_live_calls():
+        ctx = _model_exp_inputs(args)
+        out = Path(args.out)
+        baseline = me.verify_baseline(out / "prelive-baselines.json")
+        case_ids = me.stage_ids(baseline, args.stage, args.scope)
+        if args.stage == "m2":
+            gate = json.loads((out / "m1-gate.json").read_text(encoding="utf-8"))
+            if not gate["gate"]["passed"] or gate["baseline_fingerprint"] != baseline["baseline_fingerprint"]:
+                raise SystemExit("M2 refused: the M1 gate did not pass")
+        omitted = tuple(ctx["request"]["omitted_request_params"])
+        if args.live:
+            config = ctx["config"]
+            if (args.provider, args.model) != (config.provider, config.model):
+                raise SystemExit("provider/model differ from the experiment config")
+            plan = json.loads((out / "m1-plan.json").read_text(encoding="utf-8"))
+            me.validate_plan(plan, args.approve_plan_fingerprint, config=config, omitted=omitted,
+                             prompt=ctx["prompt"], split=ctx["split"], baseline=baseline,
+                             snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+                             serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"])
+            inner, mode = LiveSelectorBackend(config, prompt=ctx["prompt"], omit_request_params=omitted), "LIVE"
+        else:
+            config = selector_config(provider=FAKE_PROVIDER, model=f"fake-{args.fake_policy}", max_tokens=32)
+            inner, mode = FakeSelectorProvider(args.fake_policy, config, prompt=ctx["prompt"]), \
+                f"DRY_RUN_FAKE:{args.fake_policy}"
+        identity = RunIdentity(selector_contract_fingerprint=ctx["serializer_fp"], config=config,
+                               snapshot_fingerprint=ctx["manifest"]["snapshot_fingerprint"], run_mode=mode,
+                               prompt_fingerprint=ctx["prompt"].fingerprint,
+                               split_fingerprint=ctx["split"]["split_fingerprint"],
+                               omitted_request_params=omitted if args.live else ())
+        root = out / ("diagnostics" if args.scope == "diagnostic" else "")
+        dev_done = sum(len(load_results(d / "results.jsonl").by_case) for d in (out / "runs").glob("*")
+                       if d.is_dir()) if (out / "runs").exists() else 0
+        diag_done = sum(len(load_results(d / "results.jsonl").by_case) for d in (out / "diagnostics/runs").glob("*")
+                        if d.is_dir()) if (out / "diagnostics/runs").exists() else 0
+        already = ResultStore(root / "runs" / identity.run_id, identity).load().by_case
+        todo = [i for i in case_ids if i not in already]
+        if dev_done + diag_done + len(todo) > me.MAX_CALLS:
+            raise SystemExit("total call budget (97) would be exceeded")
+        backend = sh.BudgetedBackend(me.FailFastBackend(inner), len(todo), set(todo))
+
+    def execute():
+        return run_benchmark(ctx["snapshots"], backend, identity, root, concurrency=1,
+                             max_cases=len(todo), retry_errors=False, primary_only=True, case_ids=set(todo))
+
+    if args.live:
+        with no_live_calls([LIVE_PROVIDERS[config.provider]], block_sdks=False):
+            summary = execute()
+    else:
+        with no_live_calls():
+            summary = execute()
+    sent_keys = getattr(getattr(inner, "provider", None), "client", None)
+    accounting = {"stage": args.stage, "scope": args.scope, "run_id": identity.run_id, "run_mode": mode,
+                  "logical_calls": backend.calls, "refused_by_budget_guard": backend.refused,
+                  "fail_fast_tripped_on": backend.backend.tripped,
+                  "request_param_keys_sent": sorted({tuple(k) for k in getattr(sent_keys, "sent_param_keys", [])}),
+                  "omitted_request_params": list(omitted) if args.live else [],
+                  "summary": summary.__dict__}
+    path = Path(summary.run_dir) / "call-accounting.jsonl"
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(accounting, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+    _dump(accounting)
+
+
+def cmd_model_exp_eval(args) -> None:
+    from benchmarks.selector_v2 import model_experiment as me
+    from benchmarks.selector_v2.contract import sha256_text
+    from benchmarks.selector_v2.runner import RESULTS_FILE, RUN_MANIFEST, load_results
+
+    with no_live_calls():
+        ctx = _model_exp_inputs(args)
+        out = Path(args.out)
+        baseline = me.verify_baseline(out / "prelive-baselines.json")
+        plan = json.loads((out / "m1-plan.json").read_text(encoding="utf-8"))
+        loaded, raw, accounts = {}, {}, {}
+        for scope, root in (("dev", out / "runs"), ("diagnostic", out / "diagnostics" / "runs")):
+            (run_dir,) = [d for d in root.iterdir() if d.is_dir()]
+            ident = json.loads((run_dir / RUN_MANIFEST).read_text(encoding="utf-8"))
+            if ident["run_mode"] == "LIVE" and (ident["config_fingerprint"] != plan["config_fingerprint"]
+                                               or ident["prompt_fingerprint"] != plan["prompt_fingerprint"]):
+                raise SystemExit(f"{scope}: run identity mismatch")
+            loaded[scope] = load_results(run_dir / RESULTS_FILE)
+            raw[scope] = (run_dir / RESULTS_FILE).read_text(encoding="utf-8")
+            accounts[scope] = [json.loads(l) for l in (run_dir / "call-accounting.jsonl").read_text(
+                encoding="utf-8").splitlines() if l.strip()]
+        dev, diag = loaded["dev"].by_case, loaded["diagnostic"].by_case
+        integrity = {s: {"unique": len(l.by_case), "superseded": l.superseded, "corrupt": l.corrupt_lines}
+                     for s, l in loaded.items()}
+        if args.stage == "m1":
+            m = me.evaluate_m1(baseline=baseline, sem=ctx["sem"], dev=dev, diagnostics=diag)
+            m.update({"integrity": integrity, "call_accounting": accounts})
+            files = {"m1-responses.jsonl": raw["dev"] + raw["diagnostic"],
+                     "m1-metrics.json": json.dumps(m, ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n",
+                     "m1-gate.json": json.dumps({"baseline_fingerprint": baseline["baseline_fingerprint"],
+                                                 "plan_fingerprint": plan["plan_fingerprint"],
+                                                 "gate_definition": me.M1_GATE, "gate": m["gate"]},
+                                                indent=2, sort_keys=True) + "\n"}
+            result = {"gate": m["gate"], "unstated": m["unstated_qualifier_assumed"], "ids": m["unstated_ids"],
+                      "known": {c: (k["selected"], k["correct"]) for c, k in m["known_regressions"].items()},
+                      "specific_regressions": m["specific_regressions"], "ops": m["operational"],
+                      "slice_exact": m["slice_exact"], "integrity": integrity}
+        else:
+            m = me.evaluate_full(baseline=baseline, sem=ctx["sem"], dev=dev, diagnostics=diag)
+            scored = m.pop("scored_rows")
+            m.update({"integrity": integrity, "call_accounting": accounts})
+            files = {"all-dev-responses.jsonl": raw["dev"],
+                     "semantic-scores.jsonl": "".join(json.dumps(r, sort_keys=True) + "\n" for r in scored),
+                     "paired-comparisons.json": json.dumps(m["paired"], indent=2, sort_keys=True) + "\n",
+                     "qualifier-analysis.json": json.dumps({n: {k: r[k] for k in (
+                         "unstated_qualifier_assumed_dev", "unstated_qualifier_assumed_slice", "unstated_ids_dev",
+                         "compliance_dev", "compliance_slice")} for n, r in m["runs"].items()},
+                         indent=2, sort_keys=True) + "\n",
+                     "known-regressions.json": json.dumps(m["known_regressions"], ensure_ascii=False, indent=2,
+                                                          sort_keys=True) + "\n",
+                     "metrics.json": json.dumps(m, ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n"}
+            result = {"gate": m["gate"], "exact": {n: r["exact"] for n, r in m["runs"].items()},
+                      "paired": m["paired"], "integrity": integrity}
+        for name, text in files.items():
+            (out / name).write_text(text, encoding="utf-8")
+        result["artifact_sha256"] = {n: sha256_text(t) for n, t in files.items()}
+    _dump(result)
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -2282,6 +2479,32 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("variant-c-eval", help="score Variant C DEV + diagnostics and apply the gate")
     variant_c_args(p)
     p.set_defaults(func=cmd_variant_c_eval)
+
+    def model_exp_args(p):
+        variant_c_args(p)
+        p.add_argument("--c-dir", required=True, help="variant-c-dev dir (saved C/4o-mini runs + baseline)")
+        p.add_argument("--capability", required=True, help="capability-validation JSON")
+
+    p = sub.add_parser("model-exp-prep", help="freeze model-experiment baselines, gates and plan")
+    model_exp_args(p)
+    p.set_defaults(func=cmd_model_exp_prep)
+
+    p = sub.add_parser("model-exp-run", help="variant_c_v1 x new model, stage m1|m2 (gated)")
+    model_exp_args(p)
+    p.add_argument("--stage", required=True, choices=["m1", "m2"])
+    p.add_argument("--scope", required=True, choices=["dev", "diagnostic"])
+    p.add_argument("--live", action="store_true")
+    p.add_argument(CONFIRM_FLAG, dest="confirm_live_provider_calls", action="store_true")
+    p.add_argument("--provider")
+    p.add_argument("--model")
+    p.add_argument("--approve-plan-fingerprint")
+    p.add_argument("--fake-policy", default="oracle")
+    p.set_defaults(func=cmd_model_exp_run)
+
+    p = sub.add_parser("model-exp-eval", help="score model experiment stage m1 or full DEV")
+    model_exp_args(p)
+    p.add_argument("--stage", required=True, choices=["m1", "full"])
+    p.set_defaults(func=cmd_model_exp_eval)
 
     p = sub.add_parser("semantic-holdout-eval", help="score variant_a_v1 HOLDOUT on Semantic Gold")
     holdout_args(p)

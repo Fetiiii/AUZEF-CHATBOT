@@ -76,7 +76,7 @@ Phase 7B-Variant C DEV (qualifier contract)
 STATUS: FAIL (qualifier-improvement and 471/472 checks); FINAL VALIDATION BLOCKED
 
 Phase 7B-Model Capability Experiment (variant_c_v1 × openai/gpt-5.6-luna)
-STATUS: STOP_BEFORE_LIVE (config parity: temperature 0 / reasoning none not transmittable; 0 calls)
+STATUS: M1 SCREEN FAIL (38 calls; qualifier 3 > 2, specific regressions 320/422; 471/472 correct); M2 NOT RUN; FINAL VALIDATION BLOCKED
 
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
@@ -769,3 +769,14 @@ Detailed evidence: [`PHASE_7B_VARIANT_C_DEV_REPORT.md`](PHASE_7B_VARIANT_C_DEV_R
       DEFERRED_ORDER_BIAS_WEAK.
 
 Detailed evidence: [`PHASE_7B_MODEL_CAPABILITY_EXPERIMENT.md`](PHASE_7B_MODEL_CAPABILITY_EXPERIMENT.md).
+- [x] **After the user's decision:**
+      - OpenRouter reasoning `none` is supported: production transport plus
+        registry validation, with unset still sending no field.
+      - `temperature` is omitted, benchmark-only and declared.
+      - Capability validation v2: PARITY_WITH_DECLARED_OMISSION.
+- [ ] **M1** (38 calls, gpt-5.6-luna, variant_c_v1): **FAIL**.
+      - Slice unstated qualifier: 3 (412, 466, 473) against the ≤ 2 bar.
+      - Explicit-specific regressions: 320 and 422.
+      - 471 and 472 are now correct (qna:129).
+      - Operational: 0 errors.
+      - M2 was not run; final validation stays BLOCKED.

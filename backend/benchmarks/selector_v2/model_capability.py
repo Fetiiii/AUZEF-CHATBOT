@@ -60,13 +60,14 @@ def parity_check(*, model_meta: Mapping, endpoints: Sequence[Mapping], frozen: M
     else:
         checks["reasoning"] = {"frozen": want, "adapter_transport_values": transport,
                                "ok": want in transport and reasons_capable}
-    token_fields = {"max_tokens" in p for p in endpoint_params}
+    # OpenRouter's `max_tokens` is mapped to a provider's max_completion_tokens.
+    token_ok = all(("max_tokens" in p) or ("max_completion_tokens" in p) for p in endpoint_params)
     checks["max_tokens"] = {
         "frozen": frozen["max_tokens"],
         "endpoints_listing_max_tokens": sum("max_tokens" in p for p in endpoint_params),
         "endpoints_listing_only_max_completion_tokens": sum(
             "max_completion_tokens" in p and "max_tokens" not in p for p in endpoint_params),
-        "ok": token_fields == {True} and (not reasons_capable or checks["reasoning"]["ok"]),
+        "ok": token_ok and (not reasons_capable or checks["reasoning"]["ok"]),
         "risk": ("with provider-default reasoning, reasoning tokens count against a 32-token cap and "
                  "may leave no visible JSON" if reasons_capable else None),
     }
@@ -83,3 +84,15 @@ def parity_check(*, model_meta: Mapping, endpoints: Sequence[Mapping], frozen: M
                       for e in endpoints],
         "policy": "no alternative config is tried; a parity gap stops the experiment before any call",
     }
+
+
+def request_plan(parity: Mapping, *, omit_on_user_decision: Sequence[str] = ("temperature",)) -> dict:
+    """Declared deviations: params the model cannot take are OMITTED (never
+    substituted). Anything else still blocked keeps STOP_BEFORE_LIVE."""
+    blocked = set(parity["blocked_parameters"])
+    omit = sorted(blocked & set(omit_on_user_decision))
+    rest = sorted(blocked - set(omit))
+    return {"omitted_request_params": omit, "still_blocked": rest,
+            "verdict": STOP if rest else ("PARITY_WITH_DECLARED_OMISSION" if omit else READY),
+            "note": "temperature is not sent; sampling uses the provider default for this model "
+                    "(a declared second difference from the gpt-4o-mini run)" if omit else None}

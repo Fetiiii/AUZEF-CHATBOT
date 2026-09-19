@@ -54,6 +54,9 @@ class RunIdentity:
     # (e.g. the Stage A production run) unchanged.
     prompt_fingerprint: Optional[str] = None
     split_fingerprint: Optional[str] = None
+    # Request params dropped for a model that does not support them (model
+    # experiment). Empty keeps pre-existing run ids unchanged.
+    omitted_request_params: tuple = ()
 
     def to_dict(self) -> dict:
         identity = {
@@ -68,6 +71,8 @@ class RunIdentity:
             identity["prompt_fingerprint"] = self.prompt_fingerprint
         if self.split_fingerprint is not None:
             identity["split_fingerprint"] = self.split_fingerprint
+        if self.omitted_request_params:
+            identity["omitted_request_params"] = sorted(self.omitted_request_params)
         return identity
 
     @property

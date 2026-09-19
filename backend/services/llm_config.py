@@ -37,7 +37,9 @@ class ReasoningTransportError(ValueError):
 # has no 1:1 low/medium/high mapping, so it is intentionally unsupported.
 REASONING_TRANSPORT = {
     "openai": frozenset({"low", "medium", "high"}),
-    "openrouter": frozenset({"low", "medium", "high"}),
+    # "none" is sent explicitly as reasoning.effort="none" (OpenRouter
+    # unified reasoning); unset (None) still sends no reasoning field.
+    "openrouter": frozenset({"none", "low", "medium", "high"}),
 }
 
 
