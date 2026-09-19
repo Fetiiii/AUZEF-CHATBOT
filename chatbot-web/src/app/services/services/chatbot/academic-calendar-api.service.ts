@@ -8,6 +8,9 @@ export interface AcademicCalendarItem {
   event: string;
   start_date: string;
   end_date: string;
+  academic_year: string | null;
+  term: 'GUZ' | 'BAHAR' | 'GENERAL' | null;
+  aliases: string[];
   updated_by: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -18,6 +21,9 @@ export interface AcademicCalendarCreateRequest {
   event: string;
   start_date: string;
   end_date: string;
+  academic_year?: string | null;
+  term?: 'GUZ' | 'BAHAR' | 'GENERAL' | null;
+  aliases?: string[];
 }
 
 export interface AcademicCalendarUpdateRequest {
@@ -25,6 +31,9 @@ export interface AcademicCalendarUpdateRequest {
   event?: string;
   start_date?: string;
   end_date?: string;
+  academic_year?: string | null;
+  term?: 'GUZ' | 'BAHAR' | 'GENERAL' | null;
+  aliases?: string[];
 }
 
 export interface AcademicCalendarBulkUpdateItem {
@@ -33,6 +42,9 @@ export interface AcademicCalendarBulkUpdateItem {
   event?: string;
   start_date?: string;
   end_date?: string;
+  academic_year?: string | null;
+  term?: 'GUZ' | 'BAHAR' | 'GENERAL' | null;
+  aliases?: string[];
 }
 
 @Injectable({ providedIn: 'root' })

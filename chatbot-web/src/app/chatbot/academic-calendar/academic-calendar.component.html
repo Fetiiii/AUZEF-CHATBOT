@@ -148,7 +148,7 @@
     <div class="p-4 flex flex-wrap items-center gap-4">
       <div class="flex flex-col gap-1 flex-1 min-w-[240px]">
         <p class="text-xs text-slate-500 dark:text-slate-400">
-          Beklenen sütunlar: <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded text-[11px]">Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi</code>
+          Beklenen sütunlar: <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded text-[11px]">Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi,Akademik_Yil,Term,Aliases</code>
         </p>
         <input
           type="file"
@@ -228,6 +228,32 @@
           class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800
                  text-sm text-slate-800 dark:text-slate-100 px-3
                  focus:outline-none focus:ring-2 focus:ring-brand-800/50 placeholder:text-slate-400"/>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Akademik Yıl</label>
+        <input
+          [(ngModel)]="newAcademicYear"
+          type="text"
+          placeholder="ör: 2026-2027"
+          class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-sm text-slate-800 dark:text-slate-100 px-3 focus:outline-none focus:ring-2 focus:ring-brand-800/50 placeholder:text-slate-400"/>
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Term</label>
+        <select
+          [(ngModel)]="newTerm"
+          class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-sm text-slate-800 dark:text-slate-100 px-3 focus:outline-none focus:ring-2 focus:ring-brand-800/50">
+          <option value="GUZ">GUZ</option>
+          <option value="BAHAR">BAHAR</option>
+          <option value="GENERAL">GENERAL</option>
+        </select>
+      </div>
+      <div class="flex flex-col gap-1 md:col-span-2">
+        <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Aliaslar (| ile ayırın)</label>
+        <input
+          [(ngModel)]="newAliases"
+          type="text"
+          placeholder="ör: bütünleme | büt"
+          class="w-full h-9 rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 text-sm text-slate-800 dark:text-slate-100 px-3 focus:outline-none focus:ring-2 focus:ring-brand-800/50 placeholder:text-slate-400"/>
       </div>
       <div class="md:col-span-2 lg:col-span-4 flex justify-end">
         <button

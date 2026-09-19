@@ -269,6 +269,12 @@ class AcademicCalendar(Base):
     event = Column(Text, nullable=False)               # Ara Sınav (Vize), Bütünleme, etc.
     start_date = Column(String(50), nullable=False)    # 08.11.2025
     end_date = Column(String(50), nullable=False)      # 09.11.2025
+    # Phase 3 Calendar V2 fields are nullable for non-destructive deployment.
+    # A NULL academic_year marks a legacy row in the configured current-year
+    # dataset; operators can review/backfill it through the existing CRUD.
+    academic_year = Column(String(9), nullable=True)   # 2026-2027
+    term = Column(String(16), nullable=True)           # GUZ | BAHAR | GENERAL
+    aliases = Column(Text, nullable=False, default="[]", server_default="[]")
     updated_by = Column(String(255), nullable=True)    # son düzenleyen kullanıcının e-postası (denetim izi)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -358,6 +364,11 @@ ADMIN_DDL = (
     # İçerik değişikliklerinin denetim izi.
     "ALTER TABLE qna ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
+    # Calendar V2: no guessed year/term backfill.  Existing rows remain visible
+    # as legacy current-dataset rows until reviewed in the Calendar CRUD.
+    "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS academic_year VARCHAR(9)",
+    "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS term VARCHAR(16)",
+    "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS aliases TEXT NOT NULL DEFAULT '[]'",
 )
 
 CHAT_DDL = (

@@ -112,6 +112,11 @@ def _run(monkeypatch, analysis, *, context=(), trace=None, same_answer=False):
         "_build_candidate_pool_result",
         _candidate_builder(retrieval_queries, same_answer=same_answer),
     )
+    monkeypatch.setattr(
+        answer_pipeline,
+        "retrieve_calendar_candidates",
+        lambda _query, _db: answer_pipeline.skipped_calendar_result(relevant=True),
+    )
     result = answer_pipeline._llm_answer(
         "current turn",
         EmptyCalendarDB(),
@@ -202,7 +207,7 @@ def test_trace_uses_v2_intent_analyzer_schema_without_raw_text(monkeypatch):
     _provider, _queries, _result = _run(monkeypatch, analysis, trace=trace)
     snapshot = trace.to_dict()
     analyzer = snapshot["intent_analyzer"]
-    assert snapshot["schema_version"] == 2
+    assert snapshot["schema_version"] == 3
     assert "splitter" not in snapshot
     assert analyzer["provider"] == "openai"
     assert analyzer["requested_model"] == "gpt-4o-mini"

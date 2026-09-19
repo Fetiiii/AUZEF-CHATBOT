@@ -60,6 +60,7 @@ def test_is_date_query():
     from services.answer_pipeline import is_date_query
     assert is_date_query("final sınavı ne zaman")
     assert is_date_query("bütünleme tarihi")
+    assert not is_date_query("kayıt yenileme nasıl yapılır")
     assert not is_date_query("şifremi unuttum")
 
 

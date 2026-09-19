@@ -16,7 +16,7 @@ Phase 2 — Intent Analyzer
 STATUS: PASS
 
 Phase 3 — Calendar V2
-STATUS: NOT_STARTED
+STATUS: PASS
 
 Phase 4 — Candidate Eligibility + Selector V2
 STATUS: NOT_STARTED
@@ -83,3 +83,29 @@ Detailed evidence: [`PHASE_1_REPORT.md`](PHASE_1_REPORT.md).
 - [x] Targeted tests pass and the full suite has no new regression.
 
 Detailed evidence: [`PHASE_2_REPORT.md`](PHASE_2_REPORT.md).
+
+## Phase 3 acceptance record
+
+- [x] `calendar_relevant=false` performs no Calendar retrieval/config DB query
+      and injects zero Calendar candidates.
+- [x] `calendar_relevant=true` retains QnA retrieval and adds only deterministic,
+      meaningful, current-year Calendar matches.
+- [x] Unconditional all-row injection is removed; default limit is two with a
+      hard maximum of three.
+- [x] Historical year fails closed; explicit term filters, implicit current term
+      ranks, and GENERAL is supported.
+- [x] Canonical event and record-owned aliases match without an LLM or random
+      nearest-event fallback.
+- [x] Current year/term use checked SystemConfig values with env fallback and no
+      source-code calendar-state guess.
+- [x] New fields remain compatible and maintainable through CRUD, CSV, and the
+      admin grid; upgrade/downgrade is tested.
+- [x] LLM-off adds no analyzer/LLM call and preserves Calendar → Meili → Qdrant.
+- [x] Trace V3 records route, eligibility, IDs, no-match reason, rejection, and
+      latency without raw user text.
+- [x] Selector V2, semantic-NONE redesign, degraded mode, and Phase 4 work were
+      not started.
+- [x] Targeted/frontend checks pass; no new backend-suite failure exists, and
+      the seven known layout cases pass with repository-root mounting.
+
+Detailed evidence: [`PHASE_3_REPORT.md`](PHASE_3_REPORT.md).

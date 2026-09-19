@@ -18,7 +18,7 @@ logger = logging.getLogger("auzef")
 
 @dataclass
 class DecisionTrace:
-    schema_version: int = field(default=2, init=False)
+    schema_version: int = field(default=3, init=False)
     endpoint: str
     conversation_id: Optional[int] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -32,6 +32,7 @@ class DecisionTrace:
     ai_config_fingerprint: Optional[str] = None
     effective_configs: dict = field(default_factory=dict)
     intent_analyzer: Optional[dict] = None
+    calendar_routes: list[dict] = field(default_factory=list)
     retrieval: list[dict] = field(default_factory=list)
     selectors: list[dict] = field(default_factory=list)
     fallback: dict = field(default_factory=lambda: {
@@ -114,6 +115,12 @@ class DecisionTrace:
     def record_retrieval(self, snapshot: dict) -> None:
         with self._lock:
             self.retrieval.append(snapshot)
+
+    def record_calendar_route(self, snapshot: dict, *, purpose: str) -> None:
+        # The snapshot contains only config/status/counts and curated Calendar
+        # identifiers; resolved user text and aliases are deliberately absent.
+        with self._lock:
+            self.calendar_routes.append({**snapshot, "purpose": purpose})
 
     def record_selector(
         self,
@@ -218,6 +225,7 @@ class DecisionTrace:
                 },
                 "context": self.context,
                 "intent_analyzer": self.intent_analyzer,
+                "calendar_routes": list(self.calendar_routes),
                 "retrieval": list(self.retrieval),
                 "selectors": list(self.selectors),
                 "fallback": dict(self.fallback),

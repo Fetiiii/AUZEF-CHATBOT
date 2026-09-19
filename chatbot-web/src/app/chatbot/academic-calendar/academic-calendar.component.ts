@@ -72,6 +72,32 @@ export class AcademicCalendarComponent implements OnInit {
       cellStyle: { 'white-space': 'normal', 'line-height': '1.5' },
     },
     {
+      field: 'academic_year',
+      headerName: 'Akademik Yıl',
+      width: 140,
+      editable: true,
+      sortable: true,
+      filter: true,
+    },
+    {
+      field: 'term',
+      headerName: 'Term',
+      width: 120,
+      editable: true,
+      cellEditor: 'agSelectCellEditor',
+      cellEditorParams: { values: ['GUZ', 'BAHAR', 'GENERAL'] },
+      sortable: true,
+      filter: true,
+    },
+    {
+      field: 'aliases',
+      headerName: 'Aliaslar (|)',
+      flex: 1,
+      editable: true,
+      valueFormatter: (p) => Array.isArray(p.value) ? p.value.join(' | ') : (p.value || ''),
+      valueParser: (p) => String(p.newValue || '').split('|').map((v) => v.trim()).filter(Boolean),
+    },
+    {
       field: 'start_date',
       headerName: 'Başlangıç Tarihi',
       width: 155,
@@ -144,6 +170,9 @@ export class AcademicCalendarComponent implements OnInit {
   newEvent = '';
   newStartDate = '';
   newEndDate = '';
+  newAcademicYear = '';
+  newTerm: 'GUZ' | 'BAHAR' | 'GENERAL' = 'GENERAL';
+  newAliases = '';
 
   constructor(
     private calendarApi: AcademicCalendarApiService,
@@ -240,6 +269,9 @@ export class AcademicCalendarComponent implements OnInit {
       event: this.newEvent.trim(),
       start_date: this.newStartDate.trim(),
       end_date: this.newEndDate.trim() || this.newStartDate.trim(),
+      academic_year: this.newAcademicYear.trim() || undefined,
+      term: this.newTerm,
+      aliases: this.newAliases.split('|').map((v) => v.trim()).filter(Boolean),
     }).subscribe({
       next: (item) => {
         this.rowData = [...this.rowData, item];
@@ -247,6 +279,9 @@ export class AcademicCalendarComponent implements OnInit {
         this.newEvent = '';
         this.newStartDate = '';
         this.newEndDate = '';
+        this.newAcademicYear = '';
+        this.newTerm = 'GENERAL';
+        this.newAliases = '';
         this.addingRow.set(false);
         this.showToast('Yeni kayıt eklendi.', 'success');
         this.cdr.markForCheck();

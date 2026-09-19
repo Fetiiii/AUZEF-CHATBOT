@@ -29,6 +29,14 @@ from admin.auth import (
     current_user as _current_user,
     hash_password,
 )
+from services.calendar_retrieval import (
+    CURRENT_TERM_CONFIG_KEY,
+    CURRENT_YEAR_CONFIG_KEY,
+    CalendarTerm,
+    normalize_academic_year,
+    parse_calendar_term,
+    resolve_calendar_runtime_config,
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -218,6 +226,61 @@ def update_llm_settings(body: LLMSettingsRequest, db: Session = Depends(get_db))
         _set_config(db, OPENROUTER_KEY_CONFIG, key)  # "" → sil, .env'e dön
     db.commit()
     return get_llm_settings(db)
+
+
+# ─────────────────────────────────────────────
+#  Academic Calendar V2 current dataset policy
+# ─────────────────────────────────────────────
+
+class CalendarSettingsRequest(BaseModel):
+    current_academic_year: Optional[str] = Field(default=None, max_length=9)
+    current_term: Optional[str] = Field(default=None, max_length=16)
+
+
+@router.get("/calendar")
+def get_calendar_settings(db: Session = Depends(get_db)):
+    effective = resolve_calendar_runtime_config(db)
+    return {
+        "current_academic_year": effective.current_academic_year,
+        "current_term": effective.current_term.value if effective.current_term else None,
+        "academic_year_source": effective.year_source,
+        "term_source": effective.term_source,
+        "supported_terms": [term.value for term in CalendarTerm],
+    }
+
+
+@router.put("/calendar")
+def update_calendar_settings(
+    body: CalendarSettingsRequest,
+    db: Session = Depends(get_db),
+):
+    if body.current_academic_year is not None:
+        raw_year = body.current_academic_year.strip()
+        if raw_year and normalize_academic_year(raw_year) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Akademik yıl YYYY-YYYY biçiminde ve ardışık olmalıdır.",
+            )
+        _set_config(
+            db,
+            CURRENT_YEAR_CONFIG_KEY,
+            normalize_academic_year(raw_year) if raw_year else None,
+        )
+    if body.current_term is not None:
+        raw_term = body.current_term.strip()
+        parsed_term = parse_calendar_term(raw_term) if raw_term else None
+        if raw_term and parsed_term is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Dönem GUZ, BAHAR veya GENERAL olmalıdır.",
+            )
+        _set_config(
+            db,
+            CURRENT_TERM_CONFIG_KEY,
+            parsed_term.value if parsed_term else None,
+        )
+    db.commit()
+    return get_calendar_settings(db)
 
 
 # ─────────────────────────────────────────────

@@ -37,8 +37,11 @@ def test_calendar_export_comma_delimited(make_user, login, db):
     assert r.status_code == 200
     assert r.text.startswith("﻿")
     rows = list(csv.reader(io.StringIO(r.text.lstrip("﻿")), delimiter=","))
-    assert rows[0] == ["Donem", "Etkinlik", "Baslangic_Tarihi", "Bitis_Tarihi"]
-    assert ["Güz", "Vize", "01.11.2025", "05.11.2025"] in rows[1:]
+    assert rows[0] == [
+        "Donem", "Etkinlik", "Baslangic_Tarihi", "Bitis_Tarihi",
+        "Akademik_Yil", "Term", "Aliases",
+    ]
+    assert ["Güz", "Vize", "01.11.2025", "05.11.2025", "", "", ""] in rows[1:]
 
 
 def test_conversations_export_streams_and_neutralizes_formula(make_user, login, db):

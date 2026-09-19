@@ -15,8 +15,13 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from core.database import AcademicCalendar
-from services.calendar_utils import format_calendar_answer, match_calendar_entry
+from services.calendar_utils import format_calendar_answer
+from services.calendar_retrieval import (
+    failed_calendar_result,
+    normalize_calendar_text,
+    retrieve_calendar_candidates,
+    skipped_calendar_result,
+)
 from core.deps import get_llm_provider, is_llm_enabled, meili_search_safe, QDRANT_PROVIDER
 from services.routing_guards import RoutingGuardPolicy
 from services.decision_trace import DecisionTrace
@@ -165,49 +170,39 @@ QDRANT_THERESHOLD = _threshold("QDRANT_THERESHOLD", "0.75")
 
 
 def is_date_query(query: str) -> bool:
-    """Kullanıcı sorusunun tarih/takvim ile ilgili olup olmadığını belirler."""
-    q = query.lower()
+    """Conservative deterministic Calendar gate for the LLM-off path."""
+    q = normalize_calendar_text(query)
     date_patterns = ["ne zaman", "hangi tarih", "hangi gün", "tarihi ne", "tarihleri ne",
                      "kaçında", "kaçınca", "ayın kaçı", "ne vakit"]
-    if any(p in q for p in date_patterns):
+    normalized_patterns = [normalize_calendar_text(pattern) for pattern in date_patterns]
+    if any(pattern in q for pattern in normalized_patterns):
         return True
-    event_keywords = ["büt", "bütünleme", "vize", "final", "ara sınav", "bitirme sınavı",
-                      "telafi", "kayıt yenileme", "ders seçim", "ders ekle", "ekle-sil",
-                      "muafiyet", "mezuniyet", "üç ders sınavı", "ikinci üniversite kayıt",
-                      "eğitim öğretim başlangıcı", "akademik takvim"]
-    if any(ew in q for ew in event_keywords):
-        return True
-    return False
+    return bool(set(q.split()) & {"tarih", "tarihi", "tarihler", "tarihleri"})
 
 
-def search_calendar(query: str, db: Session, use_llm: bool) -> Optional[str]:
-    """Akademik takvim tablosundan tarih sorusuna cevap arar."""
-    entries = db.query(AcademicCalendar).all()
-    if not entries:
+def search_calendar(
+    query: str,
+    db: Session,
+    use_llm: bool,
+    trace: DecisionTrace | None = None,
+) -> Optional[str]:
+    """Compatibility boundary backed by deterministic Calendar V2 retrieval.
+
+    ``use_llm`` remains in the public signature for callers/tests, but Calendar
+    V2 never starts a Calendar-specific LLM call.
+    """
+    del use_llm
+    try:
+        result = retrieve_calendar_candidates(query, db, limit=1)
+    except Exception:
+        logger.exception("Calendar V2 retrieval hatası")
+        result = failed_calendar_result()
+    if trace is not None:
+        trace.record_calendar_route(result.trace_snapshot, purpose="fallback")
+    if not result.candidates:
         return None
-
-    prov = get_llm_provider(db) if use_llm else None
-    if prov is not None:
-        candidates = [
-            {
-                "question": f"{e.event} ne zaman?",
-                "answer": format_calendar_answer(e.period, e.event, e.start_date, e.end_date),
-            }
-            for e in entries
-        ]
-        try:
-            answer = prov.ask(query, candidates)
-            if answer:
-                return answer
-        except Exception as e:
-            logger.error(f"Takvim LLM hatası: {e}")
-
-    # Yedek: kelime örtüşmesine göre en uygun kaydı seç (LLM'siz de doğru çalışır)
-    best = match_calendar_entry(query, entries)
-    if best:
-        return format_calendar_answer(best.period, best.event, best.start_date, best.end_date)
-
-    return None
+    best = result.candidates[0]
+    return format_calendar_answer(best.period, best.event, best.start_date, best.end_date)
 
 
 def _build_candidate_pool_result(
@@ -216,10 +211,8 @@ def _build_candidate_pool_result(
     routing_policy: RoutingGuardPolicy | None = None,
 ) -> CandidatePoolBuild:
     """Bir (alt) soru için LLM seçiciye verilecek aday havuzunu kurar:
-    Qdrant (semantik) + Meili (anahtar kelime) QnA adayları + TÜM takvim
-    kayıtları. Takvim kayıtları, kelime örtüşmesinin kaçırdığı ("güz dönemi
-    başlangıcı" gibi) soruları LLM semantik olarak yakalayabilsin diye
-    tümüyle eklenir (yalnızca 19 kayıt).
+    Qdrant (semantik) + Meili (anahtar kelime) QnA adayları + Calendar V2'nin
+    önceden filtrelediği küçük ve bounded takvim adaylarını birleştirir.
 
     QnA'lar cevap metnine göre değil gerçek ``qna_id`` ile tekilleştirilir:
     aynı kaydın kanonik/alias Qdrant noktaları tek adaya inerken aynı cevabı
@@ -413,7 +406,6 @@ def _llm_answer(
     Context is consumed only by the analyzer. Retrieval and selector receive the
     resolved intent, never the full conversation. Existing candidate, selector,
     composition, and fallback semantics remain unchanged."""
-    calendar_entries = db.query(AcademicCalendar).all()
     prov = get_llm_provider(db)
     if prov is None:
         raise RuntimeError("LLM sağlayıcısı yok (anahtar DB'de/env'de bulunamadı)")
@@ -438,10 +430,27 @@ def _llm_answer(
     observed_non_success = []
     observed_errors = []
     for position, intent in enumerate(analysis_result.analysis.intents, start=1):
+        if intent.calendar_relevant:
+            try:
+                calendar_result = retrieve_calendar_candidates(
+                    intent.resolved_text,
+                    db,
+                )
+            except Exception:
+                logger.exception("Calendar V2 intent retrieval hatası")
+                calendar_result = failed_calendar_result()
+        else:
+            # Important: no DB/config lookup occurs on the closed route.
+            calendar_result = skipped_calendar_result(relevant=False)
+        if trace is not None:
+            trace.record_calendar_route(
+                calendar_result.trace_snapshot,
+                purpose=f"intent_{position}",
+            )
         try:
             selection = _select_from_pool(
                 intent.resolved_text,
-                calendar_entries,
+                list(calendar_result.candidates),
                 prov,
                 routing_policy,
                 trace,
@@ -507,7 +516,7 @@ def _fallback_answer(
     kapı yeniden AÇILMAMALI (yoksa "vize sınavına nasıl çalışmalıyım" gibi
     sorular tekrar yanlışlıkla bir tarihe düşer)."""
     if use_calendar and is_date_query(query):
-        cal = search_calendar(query, db, use_llm=False)
+        cal = search_calendar(query, db, use_llm=False, trace=trace)
         if cal:
             if trace is not None:
                 trace.record_fallback(
