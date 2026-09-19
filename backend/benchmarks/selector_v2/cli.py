@@ -637,6 +637,54 @@ def cmd_prompt_dev_eval(args) -> None:
     _dump({"gate": report["gate"], "exact": variant["exact"], "value": variant["selector_value"]})
 
 
+def cmd_prompt_dev_compare(args) -> None:
+    """Production (Stage A reuse) vs variant runs on DEV: paired stats, diffs, gates."""
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2.runner import RESULTS_FILE, RUN_MANIFEST, load_results
+
+    with no_live_calls():
+        manifest, snapshots, cm, cases, split, membership, slices, side, baseline = _dev_context(args)
+        dev = split["dev"]
+        runs, reports, identities = {"production": baseline}, {}, {}
+        for item in args.run:
+            name, _, path = item.partition("=")
+            run_dir = Path(path)
+            identity = json.loads((run_dir / RUN_MANIFEST).read_text(encoding="utf-8"))
+            if identity.get("split_fingerprint") != split["split_fingerprint"]:
+                raise SystemExit(f"{name}: run belongs to another split")
+            loaded = load_results(run_dir / RESULTS_FILE)
+            runs[name] = loaded.by_case
+            identities[name] = {**identity, "superseded": loaded.superseded,
+                                "corrupt_lines": loaded.corrupt_lines,
+                                "unique_cases": len(loaded.by_case)}
+        for name, results in runs.items():
+            reports[name] = px.dev_report(snapshots, dev, results, membership, slices,
+                                          label=name, split_side=side)
+        prod = reports["production"]
+        gates = {n: px.selection_gate(r, prod) for n, r in reports.items() if n != "production"}
+        deltas = {n: {"exact": r["exact"]["correct"] - prod["exact"]["correct"],
+                      "corruption": r["selector_value"]["corruption_count"]
+                      - prod["selector_value"]["corruption_count"],
+                      "false_none": r["false_none"] - prod["false_none"],
+                      "net_corrections": r["selector_value"]["net_corrections"]
+                      - prod["selector_value"]["net_corrections"]}
+                  for n, r in reports.items() if n != "production"}
+        comparison = px.compare_runs(snapshots, dev, runs)
+        fc = px.first_candidate_results(snapshots, dev)
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        summary = {"identities": identities, "reports": reports, "deltas_vs_production": deltas,
+                   "gates": gates, "paired": comparison["paired"],
+                   "diff_counts": comparison["diff_counts"],
+                   "first_candidate_dev": px._acc(dev, fc),
+                   "passing_variants": sorted(n for n, g in gates.items() if g["passed"]),
+                   "winner": None, "cost": "NOT_CALCULATED — no explicit pricing inputs"}
+        _dump(summary, out / "dev-comparison.json")
+        _dump(comparison["diffs"], out / "case-diffs.json")
+    _dump({"deltas": deltas, "gates": {n: g["passed"] for n, g in gates.items()},
+           "paired": comparison["paired"], "diff_counts": comparison["diff_counts"]})
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -867,6 +915,12 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("--snapshot", "--challenge", "--stage-a-run", "--postmortem", "--run-dir"):
         p.add_argument(name, required=True)
     p.set_defaults(func=cmd_prompt_dev_eval)
+
+    p = sub.add_parser("prompt-dev-compare", help="production vs variant DEV comparison")
+    for name in ("--snapshot", "--challenge", "--stage-a-run", "--postmortem", "--out"):
+        p.add_argument(name, required=True)
+    p.add_argument("--run", action="append", required=True, help="name=run_dir (repeatable)")
+    p.set_defaults(func=cmd_prompt_dev_compare)
 
     p = sub.add_parser("postmortem", help="deterministic Stage A failure analysis (no LLM)")
     p.add_argument("--snapshot", required=True)

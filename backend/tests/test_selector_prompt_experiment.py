@@ -348,3 +348,48 @@ def test_variant_run_leaves_breaker_trace_and_config_untouched(tmp_path, monkeyp
     assert {k for call in captured for k in call} == {"model", "messages", "max_tokens", "temperature"}
     assert LLM_CIRCUIT_BREAKER._states == {}
     assert (db.query(AIConfigVersion).count(), db.query(AICapabilityConfig).count()) == before
+
+
+# ── DEV comparison (Phase 7B prompt DEV live evaluation) ────────────────────
+
+def _fake_run(ids, correct, none=()):
+    def outcome(i):
+        if i in none:
+            return "FALSE_NONE"
+        return "CORRECT_SELECT" if correct[i] else "WRONG_SELECT"
+
+    return {i: SimpleNamespace(correct=correct[i], decision="NONE" if i in none else "SELECT",
+                               selected_candidate_ref=None if i in none else "qna:1",
+                               outcome=SimpleNamespace(value=outcome(i)), input_tokens=100,
+                               output_tokens=10, latency_ms=5.0) for i in ids}
+
+
+def test_compare_runs_paired_matrices_and_diffs():
+    snaps, _cases, split = _world()
+    ids = split["dev"][:6]
+    prod = _fake_run(ids, {i: k < 2 for k, i in enumerate(ids)}, none={ids[4]})
+    a = _fake_run(ids, {i: k < 4 for k, i in enumerate(ids)})
+    b = _fake_run(ids, {i: k in (1, 5) for k, i in enumerate(ids)})
+    out = px.compare_runs(snaps, ids, {"production": prod, "variant_a_v1": a, "variant_b_v1": b})
+    pa = out["paired"]["production vs variant_a_v1"]
+    assert (pa["both_correct"], pa["only_a_correct"], pa["only_b_correct"], pa["both_wrong"]) == (2, 0, 2, 2)
+    counts = out["diff_counts"]
+    assert counts["production-wrong -> variant_a_v1-correct"] == 2
+    assert counts["production-correct -> variant_b_v1-wrong"] == 1
+    assert counts["NONE changes production -> variant_a_v1"] == 1
+    assert counts["variant_a_v1-only-correct"] == 3 and counts["variant_b_v1-only-correct"] == 1
+    assert out["winner"] is None
+
+
+def test_dev_report_validity_usage_and_slices():
+    snaps, cases, split = _world()
+    ids = split["dev"]
+    membership = {c["case_id"]: c["membership"] for c in cases}
+    run = _fake_run(ids, dict.fromkeys(ids, True), none={ids[0]})
+    run[ids[0]].correct = False
+    report = px.dev_report(snaps, ids, run, membership, {}, label="x", split_side={})
+    assert report["validity"]["valid_none"] == report["none_output"] == report["false_none"] == 1
+    assert report["validity"]["valid_select"] == len(ids) - 1
+    assert report["usage"]["usage_coverage"] == f"{len(ids)}/{len(ids)}"
+    assert report["usage"]["input_tokens"]["sum"] == 100 * len(ids)
+    assert "kb_overlap_flagged" in report and "multi_acceptable" in report

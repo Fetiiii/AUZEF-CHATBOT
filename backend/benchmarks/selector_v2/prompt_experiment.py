@@ -91,7 +91,15 @@ def dev_report(snapshots: Sequence[CaseSnapshot], ids: Sequence[str],
     specific = [i for i in ids if "gs_expected:specific" in tags[i]]
     near = [i for i in ids if "near_qna" in tags[i]]
     easy = [i for i in ids if "easy_control" in membership.get(i, [])]
+    kb = [i for i in ids if "kb_overlap_flagged" in tags[i]]
+    multi = [i for i in ids if by_id[i].case.multi_acceptable]
     idset = set(ids)
+    outcomes: dict[str, int] = {}
+    for i in ids:
+        if i in results:
+            key = results[i].outcome.value
+            outcomes[key] = outcomes.get(key, 0) + 1
+    usage = _usage([results[i] for i in ids if i in results])
     return {
         "label": label,
         "cases": len(ids),
@@ -101,6 +109,19 @@ def dev_report(snapshots: Sequence[CaseSnapshot], ids: Sequence[str],
         "false_none": sum(1 for i in ids if i in results and results[i].outcome.value == "FALSE_NONE"),
         "invalid_or_error": sum(1 for i in ids if i in results and results[i].outcome.value in
                                 ("INVALID_OUTPUT", "MODEL_ERROR", "TIMEOUT")),
+        "none_output": outcomes.get("FALSE_NONE", 0) + outcomes.get("CORRECT_NONE", 0),
+        "validity": {
+            "valid_select": sum(outcomes.get(k, 0) for k in
+                                ("CORRECT_SELECT", "WRONG_SELECT", "FALSE_SELECT")),
+            "valid_none": outcomes.get("FALSE_NONE", 0) + outcomes.get("CORRECT_NONE", 0),
+            "INVALID_OUTPUT": outcomes.get("INVALID_OUTPUT", 0),
+            "MODEL_ERROR": outcomes.get("MODEL_ERROR", 0),
+            "TIMEOUT": outcomes.get("TIMEOUT", 0),
+        },
+        "outcomes": outcomes,
+        "usage": usage,
+        "kb_overlap_flagged": _acc(kb, correct),
+        "multi_acceptable": _acc(multi, correct),
         "general_expected": _acc(general, correct),
         "specific_expected": _acc(specific, correct),
         "near_qna": _acc(near, correct),
@@ -120,6 +141,58 @@ def dev_report(snapshots: Sequence[CaseSnapshot], ids: Sequence[str],
             "benchmark score is unchanged by taxonomy; slices are diagnostic only",
         ],
     }
+
+
+def _usage(rows) -> dict:
+    from benchmarks.selector_v2.snapshot import describe
+
+    def values(attr):
+        return [getattr(r, attr) for r in rows if getattr(r, attr, None) is not None]
+
+    return {"input_tokens": describe(values("input_tokens")),
+            "output_tokens": describe(values("output_tokens")),
+            "latency_ms": describe(values("latency_ms")),
+            "usage_coverage": f"{len(values('input_tokens'))}/{len(rows)}"}
+
+
+def compare_runs(snapshots: Sequence[CaseSnapshot], ids: Sequence[str],
+                 runs: Mapping[str, Mapping[str, BenchmarkResult]]) -> dict:
+    """Paired matrices + human-review case diffs between named runs."""
+    from benchmarks.selector_v2.challenge import paired_bool
+
+    by_id = {s.case.case_id: s for s in snapshots}
+    names = list(runs)
+    correct = {n: {i: runs[n][i].correct for i in ids if i in runs[n]} for n in names}
+    paired = {f"{a} vs {b}": paired_bool(correct[a], correct[b], ids)
+              for k, a in enumerate(names) for b in names[k + 1:]}
+
+    def row(i):
+        texts = {c.candidate_ref: c.canonical_text for c in by_id[i].candidates}
+        out = {"case_id": i, "expected": {r: texts.get(r) for r in by_id[i].case.acceptable_candidate_refs},
+               "first_candidate": sorted(by_id[i].candidates, key=lambda c: c.order)[0].candidate_ref}
+        for n in names:
+            r = runs[n].get(i)
+            ref = r.selected_candidate_ref if r else None
+            out[n] = {"decision": r.decision if r else None, "selected": ref,
+                      "selected_text": texts.get(ref), "outcome": r.outcome.value if r else None}
+        return out
+
+    base = names[0]
+    diffs = {}
+    for n in names[1:]:
+        diffs[f"{base}-correct -> {n}-wrong"] = [row(i) for i in ids
+                                                 if correct[base].get(i) and correct[n].get(i) is False]
+        diffs[f"{base}-wrong -> {n}-correct"] = [row(i) for i in ids
+                                                 if correct[base].get(i) is False and correct[n].get(i)]
+        diffs[f"NONE changes {base} -> {n}"] = [
+            row(i) for i in ids if i in runs[base] and i in runs[n]
+            and (runs[base][i].decision == "NONE") != (runs[n][i].decision == "NONE")]
+    if len(names) >= 3:
+        a, b = names[1], names[2]
+        diffs[f"{a}-only-correct"] = [row(i) for i in ids if correct[a].get(i) and correct[b].get(i) is False]
+        diffs[f"{b}-only-correct"] = [row(i) for i in ids if correct[b].get(i) and correct[a].get(i) is False]
+    return {"paired": paired, "diffs": diffs,
+            "diff_counts": {k: len(v) for k, v in diffs.items()}, "winner": None}
 
 
 def first_candidate_results(snapshots: Sequence[CaseSnapshot], ids: Sequence[str]) -> dict:

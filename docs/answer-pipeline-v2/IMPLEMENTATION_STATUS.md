@@ -43,10 +43,10 @@ Phase 7B-Prompt Prep — Selector Prompt Experiment Harness
 STATUS: PASS
 
 Phase 7B-Prompt DEV Live
-STATUS: BLOCKED_PENDING_EXPLICIT_APPROVAL
+STATUS: PASS
 
 Phase 7B-Prompt HOLDOUT Live
-STATUS: NOT_STARTED
+STATUS: BLOCKED_NO_DEV_VARIANT_PASSED_GATE
 
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
@@ -476,3 +476,41 @@ Detailed evidence: [`PHASE_7B_POSTMORTEM_REPORT.md`](PHASE_7B_POSTMORTEM_REPORT.
       Phase 7C not started.
 
 Detailed evidence: [`PHASE_7B_PROMPT_PREP_REPORT.md`](PHASE_7B_PROMPT_PREP_REPORT.md).
+
+## Phase 7B-Prompt DEV Live acceptance record
+
+- [x] **Scope as approved.** The user explicitly approved exactly 190
+      OpenRouter calls, and 190 were made: variant_a_v1 95 and
+      variant_b_v1 95.
+      - **Provider:** OpenRouter only; no direct OpenAI or Gemini call.
+      - **Config:** `openai/gpt-4o-mini`, no reasoning, temperature 0,
+        max_tokens 32.
+      - **Not run:** production prompt, HOLDOUT, Stage B, alternative
+        model and reasoning (0 calls each).
+- [x] **Verified before the run:** plan `c8847848…`, snapshot, challenge,
+      split, contract, serializer and prompt fingerprints.
+- [x] **Frozen after the run.** Prompts were not modified after the
+      results.
+- [x] **Isolation.** Production config/version/audit rows, the breaker and
+      telemetry were unchanged.
+- [x] **Result files.** A and B namespaces are separate, with 95 unique
+      results each. Resume executed 0 cases with 0 calls.
+- [x] **DEV results:**
+
+      | | Exact | Rescue | Corruption | Net | False NONE |
+      |---|---:|---:|---:|---:|---:|
+      | Production | 34 | 6/13 | 54/82 | −48 | 29 |
+      | A | 54 | 6/13 | 34/82 | −28 | 5 |
+      | B | 45 | 6/13 | 43/82 | −37 | 18 |
+
+      Paired McNemar p: prod-vs-A 1.9e−6, prod-vs-B 0.0034, A-vs-B 0.0117.
+- [x] **Slices and usage reported:** general/specific (no
+      production-correct case broken by A or B), near-QnA, KB-overlap,
+      multi-acceptable, easy control, taxonomy slices, and actual tokens and
+      latency. No dollar figure without prices.
+- [x] **Gate outcome.** Both variants FAIL_GATE on net corrections ≥ 0. No
+      automatic winner; HOLDOUT is BLOCKED_NO_DEV_VARIANT_PASSED_GATE.
+- [x] **Artifacts and tests.** Case-level diffs and a prompt review queue
+      exist. Tests 17/17; full suite 481/481. Phase 7C not started.
+
+Detailed evidence: [`PHASE_7B_PROMPT_DEV_REPORT.md`](PHASE_7B_PROMPT_DEV_REPORT.md).
