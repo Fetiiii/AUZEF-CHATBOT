@@ -20,6 +20,11 @@ ADMIN_TABLE_NAMES = {
     "admin_sessions",
     "admin_login_attempts",
     "academic_calendar",
+    # Phase 6 managed AI config (admin-owned; no secrets).
+    "ai_model_registry",
+    "ai_config_version",
+    "ai_capability_config",
+    "ai_config_audit",
 }
 
 CHAT_TABLE_NAMES = {
@@ -217,6 +222,19 @@ def test_all_owned_models_persist_to_their_physical_database():
         ))
         db.commit()
         assert db.query(QnARoutingGuard).count() == 1
+
+        # Phase 6 managed AI config tables are admin-owned.
+        from core.database import (
+            AICapabilityConfig, AIConfigAudit, AIConfigVersion, AIModelRegistry,
+        )
+        model = AIModelRegistry(display_name="routing", provider="openai",
+                                model_identifier="routing-model")
+        version = AIConfigVersion(snapshot="{}", change_type="BOOTSTRAP")
+        db.add_all([model, version, AIConfigAudit(event_type="ROUTING_TEST")])
+        db.flush()
+        db.add(AICapabilityConfig(capability="selector", model_registry_id=model.id,
+                                  max_tokens=32, config_version_id=version.id))
+        db.commit()
 
         # Aynı request/session bağlamında admin okuması ve chat yazması.
         assert db.query(SystemConfig).filter_by(key="ROUTING_TEST").one().value == "admin"

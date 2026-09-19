@@ -63,7 +63,7 @@ def test_trace_has_unique_request_correlation_and_config_fingerprint():
     assert snapshot["request"]["endpoint"] == "widget_chat"
     assert snapshot["request"]["ai_config_fingerprint"] == configs.fingerprint
     assert snapshot["request"]["effective_configs"]["selector"]["max_tokens"] == 32
-    assert snapshot["schema_version"] == 5
+    assert snapshot["schema_version"] == 6
 
 
 def test_trace_records_candidates_selection_fallback_and_final_qna():

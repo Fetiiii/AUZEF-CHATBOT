@@ -201,6 +201,21 @@ class CircuitBreaker:
         with self._lock:
             self._states.clear()
 
+    def on_config_activated(self, active_keys: set, previous_keys: set) -> None:
+        """A new AI config version became active on this node.
+
+        Newly activated keys start CLOSED (an explicit admin activation or
+        rollback must not inherit an old OPEN state); keys of unchanged
+        capabilities keep their state; keys no longer active are dropped so
+        the registry cannot grow without bound.
+        """
+        with self._lock:
+            for key in set(active_keys) - set(previous_keys):
+                self._states.pop(key, None)
+            for key in list(self._states):
+                if key not in active_keys:
+                    del self._states[key]
+
 
 LLM_CIRCUIT_BREAKER = CircuitBreaker()
 

@@ -192,8 +192,11 @@ def clean_tables():
     # Process-local LLM circuit breaker / admin-mode tracker must not leak
     # state between tests.
     from services.circuit_breaker import LLM_ADMIN_MODE_TRACKER, LLM_CIRCUIT_BREAKER
+    from services.llm_runtime import AI_CONFIG_CACHE
     LLM_CIRCUIT_BREAKER.reset_all()
     LLM_ADMIN_MODE_TRACKER.reset()
+    # Managed AI config cache is process-global too (tables are truncated).
+    AI_CONFIG_CACHE.reset()
     yield
 
 

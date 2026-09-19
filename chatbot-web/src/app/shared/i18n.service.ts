@@ -67,6 +67,7 @@ const TR: Dict = {
   'nav.chatbot.conversations': 'Konuşmalar',
   'nav.chatbot.view-data': 'İzleme Paneli',
   'nav.chatbot.settings': 'Ayarlar',
+  'nav.chatbot.ai-config': 'AI Model Yapılandırması',
   'nav.chatbot.chat': 'Chatbot',
 
   // GENERAL SIGN- IN CARD
@@ -307,6 +308,7 @@ const EN: Dict = {
   'nav.chatbot.conversations': 'Conversations',
   'nav.chatbot.view-data': 'Monitoring',
   'nav.chatbot.settings': 'Settings',
+  'nav.chatbot.ai-config': 'AI Model Configuration',
   'nav.chatbot.chat': 'Chatbot',
 
 

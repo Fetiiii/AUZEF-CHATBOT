@@ -78,6 +78,22 @@
                     </span>
                 </a>
 
+                <!-- AI Model Yapılandırması (en az admin; değiştirme super admin) -->
+                <a *ngIf="canSeeAdmin()" routerLink="/chatbot/ai-config" routerLinkActive="active-sb" class="sidebar-item"
+                    [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"
+                    [attr.title]="collapsed ? i18n.t('nav.chatbot.ai-config') : null">
+                    <span class="icon-box">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <rect x="4" y="4" width="16" height="16" rx="2"/>
+                            <rect x="9" y="9" width="6" height="6"/>
+                            <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                    <span class="min-w-0" *ngIf="!collapsed">
+                        <div class="truncate font-medium">{{ i18n.t('nav.chatbot.ai-config') }}</div>
+                    </span>
+                </a>
+
                 <!-- Ayarlar (yalnızca super admin) -->
                 <a *ngIf="canSeeSuper()" routerLink="/chatbot/settings" routerLinkActive="active-sb" class="sidebar-item"
                     [class.justify-center]="collapsed" [class.px-0]="collapsed" [class.gap-0]="collapsed"

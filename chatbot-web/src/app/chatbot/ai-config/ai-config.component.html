@@ -1,0 +1,203 @@
+<!-- ────────────────────────────────────────────────────── -->
+<!-- AI Model Yapılandırması — okuma: admin, değiştirme: super admin -->
+<!-- ────────────────────────────────────────────────────── -->
+
+@if (toastMessage()) {
+  <div class="fixed top-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium"
+    [class]="toastType() === 'success'
+      ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/60 dark:border-emerald-700 dark:text-emerald-200'
+      : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-950/60 dark:border-red-700 dark:text-red-200'">
+    {{ toastMessage() }}
+  </div>
+}
+
+<div class="p-4 md:p-6 space-y-6 max-w-6xl">
+
+  <div>
+    <h1 class="text-lg font-bold text-slate-800 dark:text-slate-100">AI Model Yapılandırması</h1>
+    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+      Intent Analyzer ve Selector için registry'deki izinli modeller · Değişiklikler versiyonlanır, denetlenir ve geri alınabilir
+      @if (!canManage()) { · <span class="font-semibold">Salt okunur</span> (değiştirmek için super admin gerekir) }
+    </p>
+  </div>
+
+  @if (config(); as view) {
+    <section class="rounded-xl border bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-700 shadow-sm px-5 py-3 text-xs flex flex-wrap gap-x-6 gap-y-1 text-slate-600 dark:text-slate-300">
+      <span>Aktif versiyon: <b>{{ view.version ? 'v' + view.version : '—' }}</b></span>
+      <span>Durum: <b [class.text-red-600]="view.status === 'CONFIG_INVALID'">{{ view.status }}</b></span>
+      <span>LLM: <b>{{ view.llm_enabled ? 'AÇIK' : 'KAPALI (degraded mode)' }}</b> <span class="text-slate-400">(Ayarlar sayfasından)</span></span>
+      <span>Tüm sunuculara yayılma: ≤ {{ view.propagation_seconds }} sn</span>
+      @if (view.error) { <span class="text-red-600">{{ view.error }}</span> }
+      @if (view.status === 'NOT_CONFIGURED') {
+        <span class="text-amber-700">Henüz bootstrap edilmedi: runtime env varsayılanlarını kullanıyor (init_system db).</span>
+      }
+    </section>
+
+    <!-- ══ CAPABILITY CONFIG ══════════════════════════════ -->
+    @if (view.status === 'OK') {
+      <div class="grid gap-4 md:grid-cols-2">
+        @for (cap of capabilities; track cap.key) {
+          <section class="rounded-xl border bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-700 shadow-sm">
+            <div class="px-5 py-3 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between">
+              <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">
+                {{ cap.label }}
+                @if (view.capabilities[cap.key].provider_key_configured === false) {
+                  <span class="ml-2 text-[10px] font-semibold text-red-600">Provider API anahtarı yok — LLM çağrısı yapılamaz</span>
+                }
+              </h2>
+              <span class="text-[10px] font-mono text-slate-400" title="config fingerprint">
+                {{ view.capabilities[cap.key].config_fingerprint?.slice(0, 12) }}
+              </span>
+            </div>
+            <div class="px-5 py-4 grid grid-cols-2 gap-3 text-xs">
+              <label class="col-span-2 flex flex-col gap-1">
+                <span class="text-slate-500">Model (yalnız registry'deki uygun modeller)</span>
+                <select class="rounded-md border-gray-300 dark:bg-slate-800 text-xs" [disabled]="!canManage()"
+                  [(ngModel)]="drafts[cap.key].model_registry_id" (ngModelChange)="onModelChange(cap.key)">
+                  @for (m of options(cap.key); track m.id) {
+                    <option [ngValue]="m.id">{{ m.display_name }} — {{ m.provider }}/{{ m.model_identifier }} ({{ m.qualification_status }})</option>
+                  }
+                </select>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-slate-500">Reasoning</span>
+                <select class="rounded-md border-gray-300 dark:bg-slate-800 text-xs"
+                  [disabled]="!canManage() || !reasoningEnabled(cap.key)" [(ngModel)]="drafts[cap.key].reasoning_effort">
+                  <option [ngValue]="null">{{ reasoningEnabled(cap.key) ? 'Varsayılan' : 'Model desteklemiyor' }}</option>
+                  @for (e of reasoningOptions(cap.key); track e) { <option [ngValue]="e">{{ e }}</option> }
+                </select>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-slate-500">Temperature ({{ view.bounds.temperature[0] }}–{{ view.bounds.temperature[1] }})</span>
+                <input type="number" step="0.1" [min]="view.bounds.temperature[0]" [max]="view.bounds.temperature[1]"
+                  class="rounded-md border-gray-300 dark:bg-slate-800 text-xs" [disabled]="!canManage()"
+                  [(ngModel)]="drafts[cap.key].temperature" />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-slate-500">Max tokens ({{ view.capabilities[cap.key].max_tokens_range[0] }}–{{ view.capabilities[cap.key].max_tokens_range[1] }})</span>
+                <input type="number" class="rounded-md border-gray-300 dark:bg-slate-800 text-xs" [disabled]="!canManage()"
+                  [(ngModel)]="drafts[cap.key].max_tokens" />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-slate-500">Timeout sn (boş = provider varsayılanı)</span>
+                <input type="number" class="rounded-md border-gray-300 dark:bg-slate-800 text-xs" [disabled]="!canManage()"
+                  [(ngModel)]="drafts[cap.key].timeout_seconds" />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-slate-500">Retry (boş = provider varsayılanı)</span>
+                <input type="number" class="rounded-md border-gray-300 dark:bg-slate-800 text-xs" [disabled]="!canManage()"
+                  [(ngModel)]="drafts[cap.key].max_retries" />
+              </label>
+              @if (canManage()) {
+                <div class="col-span-2 flex justify-end">
+                  <button type="button" (click)="save(cap.key)" [disabled]="saving() !== null"
+                    class="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-xs font-semibold disabled:opacity-60">
+                    {{ saving() === cap.key ? 'Kaydediliyor…' : 'Kaydet' }}
+                  </button>
+                </div>
+              }
+            </div>
+          </section>
+        }
+      </div>
+    }
+  } @else if (loading()) {
+    <p class="text-xs text-slate-400">Yükleniyor…</p>
+  }
+
+  <!-- ══ MODEL REGISTRY ═══════════════════════════════════ -->
+  <section class="rounded-xl border bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-700 shadow-sm">
+    <div class="px-5 py-3 border-b border-gray-100 dark:border-slate-800">
+      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Model Registry</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="text-left text-slate-500">
+          <tr>
+            <th class="px-4 py-2">Ad</th><th class="px-4 py-2">Provider</th><th class="px-4 py-2">Model ID</th>
+            <th class="px-4 py-2">Durum</th><th class="px-4 py-2">Capability</th><th class="px-4 py-2">Structured</th>
+            <th class="px-4 py-2">Reasoning</th><th class="px-4 py-2">Qualification</th>
+            @if (canManage()) { <th class="px-4 py-2"></th> }
+          </tr>
+        </thead>
+        <tbody>
+          @for (m of models(); track m.id) {
+            <tr class="border-t border-gray-100 dark:border-slate-800">
+              <td class="px-4 py-2">{{ m.display_name }}</td>
+              <td class="px-4 py-2">{{ m.provider }}</td>
+              <td class="px-4 py-2 font-mono">{{ m.model_identifier }}</td>
+              <td class="px-4 py-2">{{ m.enabled ? 'Etkin' : 'Devre dışı' }}</td>
+              <td class="px-4 py-2">{{ m.allowed_capabilities.join(', ') }}</td>
+              <td class="px-4 py-2">{{ m.supports_structured_output ? 'Evet' : 'Hayır' }}</td>
+              <td class="px-4 py-2">{{ m.supports_reasoning_effort ? m.allowed_reasoning_efforts.join('/') : '—' }}</td>
+              <td class="px-4 py-2" [title]="m.qualification_reference || ''">{{ m.qualification_status }}</td>
+              @if (canManage()) {
+                <td class="px-4 py-2 whitespace-nowrap space-x-2">
+                  <button type="button" class="underline" (click)="toggleModel(m)">{{ m.enabled ? 'Devre dışı' : 'Etkinleştir' }}</button>
+                  @if (m.qualification_status === 'UNTESTED' || m.qualification_status === 'BLOCKED') {
+                    <button type="button" class="underline" (click)="qualify(m)">Qualify</button>
+                  }
+                  @if (m.qualification_status !== 'BLOCKED') {
+                    <button type="button" class="underline text-red-600" (click)="block(m)">Block</button>
+                  }
+                </td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    @if (canManage()) {
+      <div class="px-5 py-4 border-t border-gray-100 dark:border-slate-800 grid gap-2 md:grid-cols-6 text-xs items-end">
+        <label class="flex flex-col gap-1 md:col-span-2"><span class="text-slate-500">Görünen ad</span>
+          <input class="rounded-md border-gray-300 dark:bg-slate-800 text-xs" [(ngModel)]="newModel.display_name" /></label>
+        <label class="flex flex-col gap-1"><span class="text-slate-500">Provider</span>
+          <select class="rounded-md border-gray-300 dark:bg-slate-800 text-xs" [(ngModel)]="newModel.provider">
+            <option value="openrouter">openrouter</option><option value="openai">openai</option><option value="gemini">gemini</option>
+          </select></label>
+        <label class="flex flex-col gap-1 md:col-span-2"><span class="text-slate-500">Model ID (yeni kayıt, UNTESTED başlar)</span>
+          <input class="rounded-md border-gray-300 dark:bg-slate-800 text-xs font-mono" [(ngModel)]="newModel.model_identifier" /></label>
+        <button type="button" (click)="createModel()" [disabled]="!newModel.display_name.trim() || !newModel.model_identifier.trim() || (!newModel.selector && !newModel.intent_analyzer)"
+          class="px-3 py-1.5 rounded-md bg-slate-700 text-white font-semibold disabled:opacity-60">Registry'ye ekle</button>
+        <div class="md:col-span-6 flex gap-4 text-slate-600 dark:text-slate-300">
+          <label><input type="checkbox" [(ngModel)]="newModel.intent_analyzer" /> intent_analyzer</label>
+          <label><input type="checkbox" [(ngModel)]="newModel.selector" /> selector</label>
+          <label><input type="checkbox" [(ngModel)]="newModel.supports_structured_output" /> strict JSON sözleşmesini destekler</label>
+        </div>
+      </div>
+    }
+  </section>
+
+  <!-- ══ HISTORY ═══════════════════════════════════════════ -->
+  <section class="rounded-xl border bg-white dark:bg-slate-900 border-gray-200 dark:border-slate-700 shadow-sm">
+    <div class="px-5 py-3 border-b border-gray-100 dark:border-slate-800">
+      <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Versiyon Geçmişi</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="text-left text-slate-500">
+          <tr><th class="px-4 py-2">Versiyon</th><th class="px-4 py-2">Zaman</th><th class="px-4 py-2">Kişi</th>
+            <th class="px-4 py-2">Tür</th><th class="px-4 py-2">Özet</th>@if (canManage()) { <th class="px-4 py-2"></th> }</tr>
+        </thead>
+        <tbody>
+          @for (row of history(); track row.version) {
+            <tr class="border-t border-gray-100 dark:border-slate-800">
+              <td class="px-4 py-2 font-semibold">v{{ row.version }}@if (row.version === config()?.version) { <span class="text-emerald-600"> (aktif)</span> }</td>
+              <td class="px-4 py-2">{{ row.created_at | date: 'dd.MM.yyyy HH:mm' }}</td>
+              <td class="px-4 py-2">{{ row.created_by || '—' }}</td>
+              <td class="px-4 py-2">{{ row.change_type }}@if (row.source_version) { ← v{{ row.source_version }} }</td>
+              <td class="px-4 py-2">{{ summary(row) }}</td>
+              @if (canManage()) {
+                <td class="px-4 py-2">
+                  @if (row.version !== config()?.version) {
+                    <button type="button" class="underline" [disabled]="saving() !== null" (click)="rollback(row)">Geri al</button>
+                  }
+                </td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>

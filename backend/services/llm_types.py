@@ -100,12 +100,15 @@ class ExecutionMode(str, Enum):
     configured provider; no LLM call at all. REQUEST_DEGRADED: a request-level
     LLM error/invalid output sent (part of) the request to the deterministic
     path. CIRCUIT_DEGRADED: an OPEN capability circuit skipped the LLM call.
+    CONFIG_DEGRADED: admin LLM is ON but the managed AI config is invalid or
+    unavailable (Phase 6); no model is guessed and no LLM call is made.
     """
 
     NORMAL_LLM = "NORMAL_LLM"
     ADMIN_DEGRADED = "ADMIN_DEGRADED"
     REQUEST_DEGRADED = "REQUEST_DEGRADED"
     CIRCUIT_DEGRADED = "CIRCUIT_DEGRADED"
+    CONFIG_DEGRADED = "CONFIG_DEGRADED"
 
 
 CandidateRefText = Annotated[str, Field(min_length=1, max_length=64)]

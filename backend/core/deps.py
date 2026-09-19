@@ -13,7 +13,15 @@ from sqlalchemy.orm import Session
 
 from core.database import SessionLocal, SystemConfig, QueryLog, utcnow
 from services.providers import MeiliSearchProvider, QdrantProvider
-from services.llm_provider import LLMFactory, OpenRouterProvider
+from services.llm_config import LLMCapability
+from services.llm_provider import (
+    GeminiProvider,
+    LLMFactory,
+    ManagedLLMProvider,
+    OpenAIProvider,
+    OpenRouterProvider,
+)
+from services.llm_runtime import AI_CONFIG_CACHE, ConfigStatus
 
 logger = logging.getLogger("auzef")
 
@@ -104,16 +112,8 @@ LLM_PROVIDER = _create_llm_provider()
 _dyn_llm = {"provider": None, "key": None}
 
 
-def get_llm_provider(db: Session):
-    """Etkin LLM sağlayıcısını döner (yoksa None).
-
-    LLM_PROVIDER=openrouter iken anahtar önceliği: DB (ayarlar sayfası) → .env.
-    Anahtar değiştiyse istemci yeniden kurulur (ucuz). Diğer sağlayıcılarda
-    (openai/gemini) boot'ta kurulan statik sağlayıcı kullanılır."""
-    name = (os.getenv("LLM_PROVIDER") or "").strip().lower()
-    if name != "openrouter":
-        return LLM_PROVIDER
-
+def _openrouter_client(db: Session):
+    """OpenRouter client; key precedence DB (settings page) → .env (unchanged)."""
     row = db.query(SystemConfig).filter(SystemConfig.key == OPENROUTER_KEY_CONFIG).first()
     key = (row.value if row else None) or os.getenv("OPENROUTER_API_KEY") or None
     if not key:
@@ -129,13 +129,106 @@ def get_llm_provider(db: Session):
     return _dyn_llm["provider"]
 
 
+# Env-keyed provider clients (OpenAI/Gemini) are built lazily once per process.
+_static_clients: dict = {}
+_PROVIDER_KEY_ENV = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY"}
+
+
+def provider_key_configured(name: str, db: Session) -> bool:
+    """Whether the provider has a usable API key (value never exposed).
+
+    Same precedence as the clients: OpenRouter DB (settings page) → .env;
+    OpenAI/Gemini from env only. Registry/config never store keys."""
+    if name == "openrouter":
+        row = db.query(SystemConfig).filter(SystemConfig.key == OPENROUTER_KEY_CONFIG).first()
+        return bool((row.value if row else None) or os.getenv("OPENROUTER_API_KEY"))
+    env_name = _PROVIDER_KEY_ENV.get(name)
+    return bool(env_name and os.getenv(env_name))
+
+
+def _static_client(name: str):
+    if not provider_key_configured(name, None):
+        return None
+    if name not in _static_clients:
+        env_name = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+        if env_name == name and LLM_PROVIDER is not None:
+            _static_clients[name] = LLM_PROVIDER
+        else:
+            try:
+                _static_clients[name] = (
+                    OpenAIProvider() if name == "openai" else GeminiProvider()
+                )
+            except Exception as e:
+                logger.error(f"LLM sağlayıcı istemcisi kurulamadı ({name!r}): {e}")
+                _static_clients[name] = None
+    return _static_clients[name]
+
+
+def _provider_client(name: str, db: Session):
+    return _openrouter_client(db) if name == "openrouter" else _static_client(name)
+
+
+def _legacy_env_provider(db: Session):
+    """Pre-Phase-6 path, used only while no managed config version exists."""
+    name = (os.getenv("LLM_PROVIDER") or "").strip().lower()
+    if name != "openrouter":
+        return LLM_PROVIDER
+    return _openrouter_client(db)
+
+
+def get_llm_provider(db: Session):
+    """Etkin LLM sağlayıcısını döner (yoksa None).
+
+    Öncelik: DB'deki aktif, doğrulanmış AI config versiyonu (model registry
+    ataması; capability başına ayrı provider/model) → hiç versiyon yoksa
+    eski env/varsayılan yol. Geçersiz/erişilemeyen config'te None döner:
+    tahmini model çağrısı yapılmaz, istek degraded yola düşer. API anahtarları
+    registry'de değil, mevcut yerlerinde kalır (OpenRouter: DB → .env)."""
+    runtime = AI_CONFIG_CACHE.get(db)
+    if runtime.status is ConfigStatus.NOT_CONFIGURED:
+        return _legacy_env_provider(db)
+    if runtime.status is not ConfigStatus.OK:
+        return None
+    clients = {}
+    for capability in (LLMCapability.INTENT_ANALYZER, LLMCapability.SELECTOR):
+        client = _provider_client(runtime.configs.for_capability(capability).provider, db)
+        if client is None:
+            return None
+        clients[capability] = client
+    return ManagedLLMProvider(runtime.configs, clients, runtime=runtime)
+
+
+def _admin_llm_flag(db: Session) -> bool:
+    config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
+    return config.value.lower() == "true" if config else False
+
+
+def llm_config_problem(db: Session) -> Optional[str]:
+    """Typed reason when admin LLM is ON but the managed config is unusable."""
+    if not _admin_llm_flag(db):
+        return None
+    runtime = AI_CONFIG_CACHE.get(db)
+    if runtime.status is ConfigStatus.CONFIG_INVALID:
+        return "config_invalid"
+    if runtime.status is ConfigStatus.CONFIG_UNAVAILABLE:
+        return "config_unavailable"
+    if runtime.status is ConfigStatus.OK:
+        for capability in (LLMCapability.INTENT_ANALYZER, LLMCapability.SELECTOR):
+            if not provider_key_configured(
+                runtime.configs.for_capability(capability).provider, db
+            ):
+                # Assigned provider has no API key: typed, observable config
+                # failure instead of a misleading "admin OFF" label.
+                return "provider_key_missing"
+    return None
+
+
 def is_llm_enabled(db: Session) -> bool:
     # Kullanılabilir sağlayıcı yoksa (anahtar ne DB'de ne .env'de) LLM yolu
     # denenmez bile; DB'deki LLM_ENABLED açık olsa dahi eşik yedeğiyle devam.
     if get_llm_provider(db) is None:
         return False
-    config = db.query(SystemConfig).filter(SystemConfig.key == "LLM_ENABLED").first()
-    return config.value.lower() == "true" if config else False
+    return _admin_llm_flag(db)
 
 
 # ── DB oturumu (FastAPI dependency) ──────────────────────────────────────────

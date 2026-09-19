@@ -1,3 +1,4 @@
+import copy
 import os
 import time
 from abc import ABC, abstractmethod
@@ -366,6 +367,47 @@ def _enum_value(value) -> Optional[str]:
     if value is None:
         return None
     return str(getattr(value, "value", value))
+
+
+class ManagedLLMProvider:
+    """Registry-managed LLM runtime (Phase 6).
+
+    Each capability is routed to its own provider client (Intent Analyzer and
+    Selector may use different providers/models) and every call uses the
+    DB-managed effective config, never the client's boot-time env config.
+    ``runtime`` carries non-secret provenance (version, source, registry ids).
+    """
+
+    def __init__(self, configs: EffectiveLLMConfigSet, clients: dict, runtime=None):
+        self.configs = configs
+        self.runtime = runtime
+        self._clients = {
+            capability: _bind_configs(client, configs)
+            for capability, client in clients.items()
+        }
+
+    def effective_config(self, capability: LLMCapability) -> EffectiveLLMConfig:
+        return self.configs.for_capability(capability)
+
+    def analyze_intents_with_result(
+        self, message: str, previous_user_turns: list[str] | tuple[str, ...] = ()
+    ) -> IntentAnalyzerResult:
+        return self._clients[LLMCapability.INTENT_ANALYZER].analyze_intents_with_result(
+            message, previous_user_turns
+        )
+
+    def ask_with_result(self, question: str, candidates) -> SelectorResult:
+        return self._clients[LLMCapability.SELECTOR].ask_with_result(question, candidates)
+
+    def ask(self, question: str, candidates) -> Optional[str]:
+        return self._clients[LLMCapability.SELECTOR].ask(question, candidates)
+
+
+def _bind_configs(client: BaseLLMProvider, configs: EffectiveLLMConfigSet) -> BaseLLMProvider:
+    """Shallow per-request copy sharing the SDK client, with managed configs."""
+    bound = copy.copy(client)
+    bound._configs = configs
+    return bound
 
 
 class LLMFactory:

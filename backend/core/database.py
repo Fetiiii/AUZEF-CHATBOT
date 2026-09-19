@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timezone
-from sqlalchemy import Column, BigInteger, Integer, Text, SmallInteger, Date, DateTime, ForeignKey, String, func, text
+from sqlalchemy import Column, BigInteger, Integer, Text, SmallInteger, Date, DateTime, Float, ForeignKey, String, UniqueConstraint, func, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker, relationship
 from sqlalchemy import create_engine
@@ -279,6 +279,81 @@ class AcademicCalendar(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
+class AIModelRegistry(Base):
+    """Allowlisted LLM model definitions (Phase 6). Never stores API secrets.
+
+    Rows are soft-disabled, never hard-deleted, so config history can keep
+    referencing them."""
+    __tablename__ = "ai_model_registry"
+    __table_args__ = (
+        UniqueConstraint("provider", "model_identifier", name="uq_ai_model_provider_identifier"),
+    )
+    id = Column(BigInteger, primary_key=True, index=True)
+    display_name = Column(String(120), nullable=False)
+    provider = Column(String(20), nullable=False)             # openai | openrouter | gemini
+    model_identifier = Column(String(200), nullable=False)
+    enabled = Column(SmallInteger, nullable=False, default=1, server_default="1")
+    allowed_capabilities = Column(Text, nullable=False, default="[]", server_default="[]")  # JSON list
+    supports_structured_output = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    supports_reasoning_effort = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    allowed_reasoning_efforts = Column(Text, nullable=False, default="[]", server_default="[]")  # JSON list
+    # UNTESTED | QUALIFIED | LEGACY_APPROVED | BLOCKED
+    qualification_status = Column(String(30), nullable=False, default="UNTESTED", server_default="UNTESTED")
+    qualified_at = Column(DateTime, nullable=True)
+    qualified_by = Column(String(255), nullable=True)
+    qualification_reference = Column(String(255), nullable=True)
+    created_by = Column(String(255), nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class AIConfigVersion(Base):
+    """Immutable AI capability-config snapshots; the highest id is active."""
+    __tablename__ = "ai_config_version"
+    id = Column(BigInteger, primary_key=True, index=True)
+    snapshot = Column(Text, nullable=False)                    # JSON, secret-free
+    change_type = Column(String(30), nullable=False)          # BOOTSTRAP | UPDATE | ROLLBACK
+    previous_version_id = Column(BigInteger, nullable=True)
+    source_version_id = Column(BigInteger, nullable=True)     # ROLLBACK source snapshot
+    summary = Column(String(500), nullable=True)
+    created_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class AICapabilityConfig(Base):
+    """Current persistent assignment per capability (mirrors the active version)."""
+    __tablename__ = "ai_capability_config"
+    capability = Column(String(40), primary_key=True)         # intent_analyzer | selector
+    model_registry_id = Column(
+        BigInteger, ForeignKey("ai_model_registry.id", ondelete="RESTRICT"), nullable=False
+    )
+    temperature = Column(Float, nullable=False, default=0.0, server_default="0")
+    max_tokens = Column(Integer, nullable=False)
+    reasoning_effort = Column(String(20), nullable=True)
+    timeout_seconds = Column(Float, nullable=True)
+    max_retries = Column(Integer, nullable=True)
+    structured_output_enabled = Column(SmallInteger, nullable=False, default=0, server_default="0")
+    config_version_id = Column(BigInteger, ForeignKey("ai_config_version.id"), nullable=False)
+    updated_by = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class AIConfigAudit(Base):
+    """Append-only AI registry/config audit trail (UPDATE/DELETE blocked in DB)."""
+    __tablename__ = "ai_config_audit"
+    id = Column(BigInteger, primary_key=True, index=True)
+    event_type = Column(String(40), nullable=False)
+    actor = Column(String(255), nullable=True)
+    capability = Column(String(40), nullable=True)
+    model_registry_id = Column(BigInteger, nullable=True)
+    old_value = Column(Text, nullable=True)                   # JSON, secret-free
+    new_value = Column(Text, nullable=True)                   # JSON, secret-free
+    old_version_id = Column(BigInteger, nullable=True)
+    new_version_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+
+
 ADMIN_MODELS = (
     QnA,
     QnAQuery,
@@ -290,6 +365,10 @@ ADMIN_MODELS = (
     AdminSession,
     AdminLoginAttempt,
     AcademicCalendar,
+    AIModelRegistry,
+    AIConfigVersion,
+    AICapabilityConfig,
+    AIConfigAudit,
 )
 
 CHAT_MODELS = (
@@ -351,6 +430,22 @@ QNA_SEARCH_VIEW_SQL = """
     GROUP BY q.id;
 """
 
+AI_APPEND_ONLY_DDL = (
+    """
+    CREATE OR REPLACE FUNCTION ai_append_only_guard() RETURNS trigger AS $$
+    BEGIN
+        RAISE EXCEPTION '% is append-only', TG_TABLE_NAME;
+    END;
+    $$ LANGUAGE plpgsql
+    """,
+    "DROP TRIGGER IF EXISTS ai_config_version_append_only ON ai_config_version",
+    "CREATE TRIGGER ai_config_version_append_only BEFORE UPDATE OR DELETE "
+    "ON ai_config_version FOR EACH ROW EXECUTE FUNCTION ai_append_only_guard()",
+    "DROP TRIGGER IF EXISTS ai_config_audit_append_only ON ai_config_audit",
+    "CREATE TRIGGER ai_config_audit_append_only BEFORE UPDATE OR DELETE "
+    "ON ai_config_audit FOR EACH ROW EXECUTE FUNCTION ai_append_only_guard()",
+)
+
 # Var olan (create_all'un dokunmadığı) tablolara da DDL uygula. Alembic henüz
 # kullanılmadığı için ifadeler mevcut entrypoint davranışıyla uyumlu ve
 # idempotent tutulur. Her liste yalnız kendi DB ownership alanındaki tablolara
@@ -369,6 +464,8 @@ ADMIN_DDL = (
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS academic_year VARCHAR(9)",
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS term VARCHAR(16)",
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS aliases TEXT NOT NULL DEFAULT '[]'",
+    # Phase 6: AI config history and audit are append-only at the DB level.
+    *AI_APPEND_ONLY_DDL,
 )
 
 CHAT_DDL = (

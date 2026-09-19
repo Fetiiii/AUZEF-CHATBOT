@@ -28,6 +28,7 @@ from routers.qna import router as qna_router
 from routers.stats import router as stats_router
 from routers.calendar import router as calendar_router
 from routers.solution_center import router as solution_center_router
+from routers.ai_config import router as ai_config_router
 from integrations.solution_center.exceptions import SolutionCenterException
 
 logging.basicConfig(level=logging.INFO)
@@ -54,6 +55,7 @@ app.include_router(qna_router)
 app.include_router(stats_router)
 app.include_router(calendar_router)
 app.include_router(solution_center_router)
+app.include_router(ai_config_router)
 app.add_middleware(AdminAuthMiddleware)
 
 

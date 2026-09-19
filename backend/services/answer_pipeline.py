@@ -37,6 +37,7 @@ from core.deps import (
     QDRANT_PROVIDER,
     get_llm_provider,
     is_llm_enabled,
+    llm_config_problem,
     meili_search_safe,
 )
 from services.candidate_eligibility import (
@@ -533,7 +534,11 @@ def _llm_answer(
     if prov is None:
         raise RuntimeError("LLM sağlayıcısı yok (anahtar DB'de/env'de bulunamadı)")
     if trace is not None:
-        trace.set_llm(enabled=True, configs=getattr(prov, "configs", None))
+        trace.set_llm(
+            enabled=True,
+            configs=getattr(prov, "configs", None),
+            runtime=getattr(prov, "runtime", None),
+        )
 
     previous_user_turns = _previous_user_turns(conversation_context)
     analyzer_config, permit = _capability_permit(prov, LLMCapability.INTENT_ANALYZER)
@@ -896,10 +901,20 @@ def answer_question(
     if trace is not None:
         trace.set_llm(enabled=llm_enabled, configs=None)
     if not llm_enabled:
+        try:
+            config_problem = llm_config_problem(db)
+        except Exception:
+            logger.exception("AI config durumu okunamadı")
+            config_problem = "config_unavailable"
+        # Admin ON but managed config invalid/unavailable: a typed config
+        # failure (never semantic NONE, never a guessed model).
         result = _degraded_request(
             query, db, routing_policy, trace,
-            mode=ExecutionMode.ADMIN_DEGRADED,
-            reason="llm_disabled_or_unavailable",
+            mode=(
+                ExecutionMode.CONFIG_DEGRADED if config_problem
+                else ExecutionMode.ADMIN_DEGRADED
+            ),
+            reason=config_problem or "llm_disabled_or_unavailable",
         )
     else:
         try:

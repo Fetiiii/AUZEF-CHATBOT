@@ -13,6 +13,7 @@ from core.database import (
     init_admin_db,
     init_chat_db,
 )
+from services.ai_registry import bootstrap_ai_registry
 
 
 DEFAULT_SYSTEM_CONFIG = {
@@ -21,7 +22,11 @@ DEFAULT_SYSTEM_CONFIG = {
 
 
 def seed_default_config() -> None:
-    """Eksik başlangıç ayarlarını ekle; mevcut operatör değerlerini koru."""
+    """Eksik başlangıç ayarlarını ekle; mevcut operatör değerlerini koru.
+
+    AI model registry'si de burada idempotent olarak bootstrap edilir: Phase 0
+    varsayılan modelleri (LEGACY_APPROVED) ve — henüz versiyon yoksa — env'in
+    bugünkü effective config'iyle birebir aynı ilk config versiyonu."""
     db = SessionLocal()
     try:
         for key, default_value in DEFAULT_SYSTEM_CONFIG.items():
@@ -31,6 +36,8 @@ def seed_default_config() -> None:
                 print(f"⚙️ '{key}' ayarı '{default_value}' olarak set edildi.")
             else:
                 print(f"ℹ️ '{key}' zaten var: {row.value}")
+        result = bootstrap_ai_registry(db)
+        print(f"🤖 AI model registry bootstrap: {result}")
         db.commit()
     except Exception:
         db.rollback()

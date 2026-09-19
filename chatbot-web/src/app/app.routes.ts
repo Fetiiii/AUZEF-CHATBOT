@@ -67,6 +67,17 @@ export const routes: Routes = [
       },
 
       {
+        path: 'ai-config',
+        loadComponent: () =>
+          import('./chatbot/ai-config/ai-config.component').then(
+            (m) => m.AIConfigComponent
+          ),
+        // Okuma admin; yazma kontrolleri yalnız super_admin'e görünür ve
+        // backend'de ayrıca zorlanır.
+        data: { title: 'nav.chatbot.ai-config', minRole: 'admin' }
+      },
+
+      {
         path: 'settings',
         loadComponent: () =>
           import('./chatbot/settings/settings.component').then(

@@ -212,8 +212,10 @@ _PUBLIC_RE = re.compile(r"^/api/conversations/\d+/talep$")  # widget talep yanı
 #   editor      → içerik (QnA, akademik takvim, import/export)
 #   admin       → + konuşmalar, istatistikler
 #   super_admin → + ayarlar (kullanıcılar, LLM, API anahtarı)
+#   AI config   → okuma admin (view), yazma handler'da super_admin (manage)
 _ROLE_RULES = [
     (re.compile(r"^/api/settings"), "super_admin"),
+    (re.compile(r"^/api/ai-config"), "admin"),
     (re.compile(r"^/api/(conversations|stats)"), "admin"),
     (re.compile(r"^/api/(qna|academic-calendar)"), "editor"),
 ]

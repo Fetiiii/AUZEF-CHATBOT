@@ -25,7 +25,7 @@ Phase 5 — Degraded Mode
 STATUS: PASS
 
 Phase 6 — Model Registry + Admin Control
-STATUS: NOT_STARTED
+STATUS: PASS
 
 Phase 7 — Necessity Experiments
 STATUS: NOT_STARTED
@@ -170,3 +170,28 @@ Detailed evidence: [`PHASE_4_REPORT.md`](PHASE_4_REPORT.md).
 - [x] Phase 6 not started.
 
 Detailed evidence: [`PHASE_5_REPORT.md`](PHASE_5_REPORT.md).
+
+## Phase 6 acceptance record
+
+- [x] DB-backed model registry (typed provider, UNIQUE provider+model,
+      allowed capabilities, enabled, structured-output and reasoning support,
+      qualification state) — soft-disable only, no secrets.
+- [x] Persistent, independently assignable Intent Analyzer / Selector configs
+      with backend-authoritative bounds; arbitrary model strings impossible.
+- [x] Idempotent bootstrap reproduces the Phase 5 effective config and
+      fingerprint exactly (LEGACY_APPROVED); new models start UNTESTED.
+- [x] DB primary source with env compatibility only before bootstrap;
+      invalid/unavailable config → CONFIG_DEGRADED, bounded stale cache.
+- [x] No-redeploy runtime reload; multi-node propagation ≤ 5 s (version poll).
+- [x] Atomic versioned writes, optimistic concurrency (409), append-only audit,
+      rollback as a new version with current-registry re-validation.
+- [x] Reads admin / writes super_admin, enforced in middleware + handlers.
+- [x] Angular admin page (eligible-only dropdown, capability-aware reasoning,
+      history + rollback); production build PASS.
+- [x] Trace v6 config version/source/registry provenance; breaker isolation
+      and activation reset.
+- [x] Phase 2–5 suites pass; full suite no new failure (repository-root
+      392/392); no live provider call; production model unchanged.
+- [x] Phase 7 not started.
+
+Detailed evidence: [`PHASE_6_REPORT.md`](PHASE_6_REPORT.md).

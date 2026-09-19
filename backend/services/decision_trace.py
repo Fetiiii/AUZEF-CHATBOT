@@ -22,7 +22,9 @@ class DecisionTrace:
     # NO_ELIGIBLE_CANDIDATES and guard-safe suggestions.
     # v5: degraded mode — execution mode, per-intent resolution, per-run
     # degraded provenance and capability circuit-breaker state.
-    schema_version: int = field(default=5, init=False)
+    # v6: managed AI config provenance — config version/source/status and
+    # per-capability registry model id + qualification.
+    schema_version: int = field(default=6, init=False)
     endpoint: str
     conversation_id: Optional[int] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -35,6 +37,13 @@ class DecisionTrace:
     context: dict = field(default_factory=dict)
     ai_config_fingerprint: Optional[str] = None
     effective_configs: dict = field(default_factory=dict)
+    ai_config: dict = field(default_factory=lambda: {
+        "ai_config_status": None,
+        "ai_config_source": None,
+        "ai_config_version": None,
+        "ai_config_error": None,
+        "ai_capabilities": {},
+    })
     intent_analyzer: Optional[dict] = None
     calendar_routes: list[dict] = field(default_factory=list)
     retrieval: list[dict] = field(default_factory=list)
@@ -76,12 +85,29 @@ class DecisionTrace:
                 ),
             }
 
-    def set_llm(self, *, enabled: bool, configs: Optional[EffectiveLLMConfigSet]) -> None:
+    def set_llm(
+        self,
+        *,
+        enabled: bool,
+        configs: Optional[EffectiveLLMConfigSet],
+        runtime=None,
+    ) -> None:
         with self._lock:
             self.llm_enabled = enabled
             if configs is not None:
                 self.effective_configs = configs.to_dict()
                 self.ai_config_fingerprint = configs.fingerprint
+                # Providers without managed runtime provenance are the
+                # pre-Phase-6 env/default path.
+                self.ai_config = (
+                    runtime.trace_dict() if runtime is not None else {
+                        "ai_config_status": "NOT_CONFIGURED",
+                        "ai_config_source": "ENV_BOOTSTRAP",
+                        "ai_config_version": None,
+                        "ai_config_error": None,
+                        "ai_capabilities": {},
+                    }
+                )
 
     def record_intent_analyzer(
         self,
@@ -307,6 +333,7 @@ class DecisionTrace:
                     "git_version": self.git_version,
                     "ai_config_fingerprint": self.ai_config_fingerprint,
                     "effective_configs": self.effective_configs,
+                    **self.ai_config,
                 },
                 "context": self.context,
                 "intent_analyzer": self.intent_analyzer,
