@@ -21,6 +21,13 @@
       "prompt_fingerprint": "44893b6bb069da5b2849413b3d903fa3ff8dbfd1e1e7ea8242d1302135e093c9",
       "prompt_id": "variant_b_v1",
       "source": "benchmarks/selector_v2/prompts/variant_b_v1.md"
+    },
+    "variant_c_v1": {
+      "benchmark_only": true,
+      "chars": 2697,
+      "prompt_fingerprint": "fc1811443061737b090b388f0b52bb03f68af99a965f2956c4833663847eb9a9",
+      "prompt_id": "variant_c_v1",
+      "source": "benchmarks/selector_v2/prompts/variant_c_v1.md"
     }
   },
   "serializer_contract_fingerprint": "d50fbee416ca98783e499454fe840c1fdc2ff41b5fb7445cbac20f6a72c7f5a9"

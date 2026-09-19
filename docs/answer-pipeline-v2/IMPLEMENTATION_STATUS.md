@@ -69,6 +69,12 @@ STATUS: FAIL (promotion gate: critical 471/472; run valid, 42/42 calls)
 Phase 7B-Qualifier Failure Postmortem + Order-Bias Prep
 STATUS: PASS (offline; 471/472 blind review NOT_STARTED; order experiment prepared, not run)
 
+Phase 7B-Qualifier Re-adjudication (471/472) + Semantic Gold V1.1
+STATUS: PASS (KEEP_CURRENT x2; recorded reviewer is an LLM)
+
+Phase 7B-Variant C DEV (qualifier contract)
+STATUS: FAIL (qualifier-improvement and 471/472 checks); FINAL VALIDATION BLOCKED
+
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
 
@@ -711,3 +717,32 @@ Detailed evidence: [`PHASE_7B_VARIANT_A_HOLDOUT_REPORT.md`](PHASE_7B_VARIANT_A_H
 
 Detailed evidence: [`PHASE_7B_QUALIFIER_FAILURE_POSTMORTEM.md`](PHASE_7B_QUALIFIER_FAILURE_POSTMORTEM.md),
 [`PHASE_7B_FINAL_VALIDATION_STRATEGY.md`](PHASE_7B_FINAL_VALIDATION_STRATEGY.md).
+
+## Phase 7B-Variant C DEV record
+
+- [x] **471/472 review locked** (`a68fb258…`; input sha256 `83143689…`).
+      - Labels mapped: I → qna:129 and D → qna:129.
+      - Both are KEEP_CURRENT.
+      - Semantic Gold V1.1 (`1d22cac8…`) is a child of V1 with no case
+        changes.
+      - The recorded reviewer is "ChatGPT GPT-5.6 Sol". The same value is on
+        all 106 V1 lock rows.
+- [x] **Historical Variant A HOLDOUT = FAIL is unchanged** (tree sha256
+      verified).
+- [x] **variant_c_v1** (`fc181144…`): a generic qualifier-contract prompt.
+      A and B are fixed. The only difference from A is the system prompt.
+- [x] **Before the run:** baseline `392d9a59…` and plan `58116ee6…` were
+      fixed.
+      - 97 logical OpenRouter calls: 95 DEV plus 2 known-regression
+        diagnostics.
+      - Old HOLDOUT not rerun.
+- [ ] **Gate FAIL:**
+      - C 63/77 vs A 64/77;
+      - false NONE 1;
+      - unstated qualifier on the gate slice: 4 vs A's 3;
+      - 471 and 472 still select qna:342;
+      - production general/specific regressions 0.
+- [x] **Isolation:** production unchanged. Tests: new 8/8, full suite
+      539/539.
+
+Detailed evidence: [`PHASE_7B_VARIANT_C_DEV_REPORT.md`](PHASE_7B_VARIANT_C_DEV_REPORT.md).

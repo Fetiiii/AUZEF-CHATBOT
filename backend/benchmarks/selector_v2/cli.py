@@ -1687,6 +1687,258 @@ def cmd_qualifier_postmortem(args) -> None:
     _dump(summary)
 
 
+def cmd_qualifier_review_lock(args) -> None:
+    """Lock the filled 471/472 blind template and derive Semantic Gold V1.1."""
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2 import variant_c as vc
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    with no_live_calls():
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        by_id = {s.case.case_id: s for s in snapshots}
+        lock = vc.lock_qualifier_review(decisions_bytes=Path(args.decisions).read_bytes(),
+                                        review_dir=Path(args.review_dir), snapshots=by_id)
+        if args.expect_all_select and any(r["blind_decision"] != "SELECT_ACCEPTABLE" for r in lock["records"]):
+            raise SystemExit("expected SELECT_ACCEPTABLE for every row")
+        lock_manifest = vc.write_lock(Path(args.lock_dir), lock,
+                                      dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
+        v1_manifest, v1_cases = sh.load_semantic_gold(Path(args.semantic_gold), vc.PARENT_GOLD_FP)
+        built = vc.build_gold_v11(v1_cases, lock["records"], parent_fp=vc.PARENT_GOLD_FP,
+                                  lock_fp=lock["lock_fingerprint"])
+        files = {"semantic-gold.jsonl": "".join(c.model_dump_json() + "\n" for c in built["cases"]),
+                 "changes.jsonl": "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                          for r in built["changes"])}
+        from benchmarks.selector_v2 import adjudication as adj
+
+        hashes = adj.write_immutable(Path(args.gold_out), files)
+        adj.write_immutable(Path(args.gold_out), {"manifest.json": json.dumps({
+            "version": vc.GOLD_VERSION, "semantic_gold_fingerprint": built["fingerprint"],
+            "parent_semantic_gold_fingerprint": vc.PARENT_GOLD_FP,
+            "parent_snapshot_fingerprint": manifest["snapshot_fingerprint"],
+            "qualifier_review_lock_fingerprint": lock["lock_fingerprint"],
+            "changed_cases": [c["case_id"] for c in built["changes"] if c["gold_changed"]],
+            "outcomes": {c["case_id"]: c["derived_outcome"] for c in built["changes"]},
+            "artifact_sha256": hashes}, ensure_ascii=False, indent=2, sort_keys=True) + "\n"})
+        sh.load_semantic_gold(Path(args.semantic_gold), vc.PARENT_GOLD_FP)   # parent still intact
+    _dump({"lock_fingerprint": lock_manifest["lock_fingerprint"],
+           "source_decision_sha256": lock_manifest["source_decision_sha256"],
+           "records": [{k: r[k] for k in ("case_id", "blind_decision", "acceptable_labels", "mapped_refs",
+                                          "reviewer")} for r in lock["records"]],
+           "semantic_gold_v11": built["fingerprint"],
+           "outcomes": {c["case_id"]: (c["derived_outcome"], c["gold_changed"]) for c in built["changes"]}})
+
+
+def _variant_c_inputs(args):
+    from benchmarks.selector_v2 import prompt_experiment as px
+    from benchmarks.selector_v2 import semantic_gold as sg
+    from benchmarks.selector_v2 import variant_c as vc
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.prompt_contract import (
+        load_committed_manifest, load_prompt, prompt_manifest, serializer_contract_fingerprint,
+    )
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    manifest, snapshots = load_snapshot(Path(args.snapshot))
+    cm, cases = load_challenge(Path(args.challenge), manifest)
+    split = px.load_split(challenge_ids={c["case_id"] for c in cases})
+    gold_manifest, gold_cases = vc.load_gold_v11(Path(args.semantic_gold), args.expected_gold_fp)
+    if prompt_manifest() != load_committed_manifest():
+        raise SystemExit("prompt manifest drift")
+    prompt, base = load_prompt(vc.PROMPT_ID), load_prompt(vc.BASE_PROMPT_ID)
+    if prompt.fingerprint != args.expected_prompt_fp:
+        raise SystemExit("variant_c_v1 fingerprint differs from the frozen value")
+    runs = {"production": load_results(Path(args.stage_a_run) / RESULTS_FILE).by_case,
+            "variant_a_v1": load_results(Path(args.a_run) / RESULTS_FILE).by_case,
+            "variant_b_v1": load_results(Path(args.b_run) / RESULTS_FILE).by_case}
+    # Saved Variant A HOLDOUT decisions for the two known-regression cases only (diagnostic context).
+    a_hold = load_results(Path(args.a_holdout_run) / RESULTS_FILE).by_case
+    runs["variant_a_v1"] = {**runs["variant_a_v1"], **{c: a_hold[c] for c in vc.KNOWN_REGRESSIONS}}
+    return {"manifest": manifest, "snapshots": snapshots, "cm": cm, "split": split,
+            "gold_manifest": gold_manifest, "gold_fp": gold_manifest["semantic_gold_fingerprint"],
+            "sem": sg.semantic_snapshots(snapshots, gold_cases), "prompt": prompt, "base": base,
+            "runs": runs, "serializer_fp": serializer_contract_fingerprint()}
+
+
+def cmd_variant_c_prep(args) -> None:
+    """Offline: freeze V1.1 DEV baselines, heuristic, gate and the 97-call plan."""
+    from benchmarks.selector_v2 import variant_c as vc
+    from benchmarks.selector_v2.providers import selector_config
+    from benchmarks.selector_v2.tokens import estimate
+
+    with no_live_calls():
+        ctx = _variant_c_inputs(args)
+        out = Path(args.out)
+        if (out / "runs").exists() or (out / "diagnostics").exists():
+            raise SystemExit("Variant C outputs already exist: the baseline must precede them")
+        identity = {"snapshot_fingerprint": ctx["manifest"]["snapshot_fingerprint"],
+                    "split_fingerprint": ctx["split"]["split_fingerprint"],
+                    "semantic_gold_fingerprint": ctx["gold_fp"],
+                    "variant_c_prompt_fingerprint": ctx["prompt"].fingerprint,
+                    "variant_a_prompt_fingerprint": ctx["base"].fingerprint,
+                    "saved_runs": {"production": Path(args.stage_a_run).name,
+                                   "variant_a_v1": Path(args.a_run).name,
+                                   "variant_b_v1": Path(args.b_run).name},
+                    "saved_results_sha256": {n: vc.file_sha256(Path(p) / "results.jsonl") for n, p in
+                                             (("production", args.stage_a_run), ("variant_a_v1", args.a_run),
+                                              ("variant_b_v1", args.b_run))}}
+        baseline = vc.build_prelive_baseline(snapshots=ctx["snapshots"], sem=ctx["sem"], split=ctx["split"],
+                                             runs=ctx["runs"], identity=identity)
+        baseline["frozen_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        path = out / vc.BASELINE_FILE
+        if path.exists():
+            prior = vc.verify_baseline(path)
+            if prior["baseline_fingerprint"] != baseline["baseline_fingerprint"]:
+                raise SystemExit("a different frozen Variant C baseline exists")
+            baseline = prior
+        else:
+            _dump(baseline, path)
+        config = selector_config(provider="openrouter", model="openai/gpt-4o-mini", temperature=0.0,
+                                 max_tokens=32)
+        by_id = {s.case.case_id: s for s in ctx["snapshots"]}
+        ids = ctx["split"]["dev"] + list(vc.KNOWN_REGRESSIONS)
+        est = estimate([by_id[i] for i in ids], max_tokens=32, primary_only=True,
+                       system_prompt=ctx["prompt"].text)
+        plan = vc.build_plan(config=config, prompt=ctx["prompt"], base_prompt=ctx["base"], split=ctx["split"],
+                             baseline=baseline, snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+                             serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"],
+                             estimate_block={"input_tokens_approx": est["input_tokens"]["total"],
+                                             "output_tokens_upper_bound": est["output_tokens_upper_bound_total"],
+                                             "callable_cases": est["calls_per_config"]})
+        if est["calls_per_config"] != vc.MAX_TOTAL_CALLS:
+            raise SystemExit(f"{est['calls_per_config']} callable cases, expected {vc.MAX_TOTAL_CALLS}")
+        plan_path = out / vc.PLAN_FILE
+        if plan_path.exists() and json.loads(plan_path.read_text())["plan_fingerprint"] != plan["plan_fingerprint"]:
+            raise SystemExit("a different Variant C plan exists")
+        _dump(plan, plan_path)
+    b = baseline["runs"]
+    _dump({"baseline_fingerprint": baseline["baseline_fingerprint"], "plan_fingerprint": plan["plan_fingerprint"],
+           "dev_evaluable": baseline["dev_evaluable"], "qualifier_slice": len(baseline["qualifier_slice_ids"]),
+           "first_candidate": baseline["first_candidate"],
+           "runs": {n: {k: r[k] for k in ("exact", "false_none", "none_count", "unstated_qualifier_assumed_dev",
+                                          "unstated_qualifier_assumed_slice", "slices")} for n, r in b.items()},
+           "known": baseline["known_regressions_saved"], "estimate": plan["estimated_tokens"]})
+
+
+def cmd_variant_c_run(args) -> None:
+    """variant_c_v1 on DEV (95) or the two known-regression diagnostics (471, 472)."""
+    from benchmarks.selector_v2 import semantic_holdout as sh
+    from benchmarks.selector_v2 import variant_c as vc
+    from benchmarks.selector_v2.providers import (
+        FAKE_PROVIDER, FakeSelectorProvider, LiveSelectorBackend, selector_config,
+    )
+    from benchmarks.selector_v2.runner import ResultStore, RunIdentity, run_benchmark
+
+    check_live_gate(live=args.live, confirmed=args.confirm_live_provider_calls,
+                    provider=args.provider, model=args.model)
+    with no_live_calls():
+        ctx = _variant_c_inputs(args)
+        split, prompt = ctx["split"], ctx["prompt"]
+        case_ids = vc.scope_case_ids(args.scope, split)
+        baseline = vc.verify_baseline(Path(args.baseline_dir) / vc.BASELINE_FILE)
+        if baseline["identity"]["semantic_gold_fingerprint"] != ctx["gold_fp"]:
+            raise SystemExit("baseline belongs to another Semantic Gold")
+        if args.live:
+            config = selector_config(provider=args.provider, model=args.model,
+                                     temperature=args.temperature, max_tokens=args.max_tokens)
+            plan = json.loads((Path(args.baseline_dir) / vc.PLAN_FILE).read_text(encoding="utf-8"))
+            vc.validate_plan(plan, args.approve_plan_fingerprint, config=config, prompt=prompt, split=split,
+                             baseline=baseline, snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+                             serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"])
+            inner, mode = LiveSelectorBackend(config, prompt=prompt), "LIVE"
+        else:
+            config = selector_config(provider=FAKE_PROVIDER, model=f"fake-{args.fake_policy}", max_tokens=32)
+            inner, mode = FakeSelectorProvider(args.fake_policy, config, prompt=prompt), \
+                f"DRY_RUN_FAKE:{args.fake_policy}"
+        identity = RunIdentity(selector_contract_fingerprint=ctx["serializer_fp"], config=config,
+                               snapshot_fingerprint=ctx["manifest"]["snapshot_fingerprint"], run_mode=mode,
+                               prompt_fingerprint=prompt.fingerprint,
+                               split_fingerprint=split["split_fingerprint"])
+        out = Path(args.out) / ("diagnostics" if args.scope == "diagnostic" else "")
+        already = ResultStore(out / "runs" / identity.run_id, identity).load().by_case
+        if set(already) - set(case_ids):
+            raise SystemExit("run directory holds cases outside this scope")
+        budget = (vc.MAX_DIAGNOSTIC_CALLS if args.scope == "diagnostic" else vc.MAX_DEV_CALLS) - len(already)
+        backend = sh.BudgetedBackend(inner, budget, set(case_ids))
+
+    def execute():
+        return run_benchmark(ctx["snapshots"], backend, identity, out, concurrency=1,
+                             max_cases=len(case_ids), retry_errors=False, primary_only=True,
+                             case_ids=set(case_ids))
+
+    if args.live:
+        with no_live_calls([LIVE_PROVIDERS[config.provider]], block_sdks=False):
+            summary = execute()
+    else:
+        with no_live_calls():
+            summary = execute()
+    accounting = {"scope": args.scope, "run_id": identity.run_id, "run_mode": mode,
+                  "logical_calls_this_invocation": backend.calls, "previously_completed": len(already),
+                  "logical_calls_total": backend.calls + len(already),
+                  "refused_by_budget_guard": backend.refused, "summary": summary.__dict__,
+                  "production_calls": 0, "variant_a_calls": 0, "variant_b_calls": 0,
+                  "old_holdout_full_run": False}
+    _dump(accounting, Path(summary.run_dir) / "call-accounting.json")
+    _dump(accounting)
+
+
+def cmd_variant_c_eval(args) -> None:
+    from benchmarks.selector_v2 import variant_c as vc
+    from benchmarks.selector_v2.contract import sha256_text
+    from benchmarks.selector_v2.runner import RESULTS_FILE, RUN_MANIFEST, load_results
+
+    with no_live_calls():
+        ctx = _variant_c_inputs(args)
+        out = Path(args.out)
+        baseline = vc.verify_baseline(out / vc.BASELINE_FILE)
+        plan = json.loads((out / vc.PLAN_FILE).read_text(encoding="utf-8"))
+        loaded, accounts, raw = {}, {}, {}
+        for scope, root in (("dev", out / "runs"), ("diagnostic", out / "diagnostics" / "runs")):
+            dirs = [d for d in root.iterdir() if d.is_dir()]
+            if len(dirs) != 1:
+                raise SystemExit(f"{scope}: expected exactly one run dir, found {len(dirs)}")
+            ident = json.loads((dirs[0] / RUN_MANIFEST).read_text(encoding="utf-8"))
+            if ident["prompt_fingerprint"] != ctx["prompt"].fingerprint or \
+                    ident["split_fingerprint"] != ctx["split"]["split_fingerprint"] or \
+                    (ident["run_mode"] == "LIVE" and ident["config_fingerprint"] != plan["config_fingerprint"]):
+                raise SystemExit(f"{scope}: run identity mismatch")
+            loaded[scope] = load_results(dirs[0] / RESULTS_FILE)
+            accounts[scope] = json.loads((dirs[0] / "call-accounting.json").read_text(encoding="utf-8"))
+            raw[scope] = (dirs[0] / RESULTS_FILE).read_text(encoding="utf-8")
+        metrics = vc.evaluate(baseline=baseline, snapshots=ctx["snapshots"], sem=ctx["sem"], runs=ctx["runs"],
+                              variant_c=loaded["dev"].by_case, diagnostics=loaded["diagnostic"].by_case)
+        scored = metrics.pop("scored_rows")
+        integrity = {s: {"unique": len(l.by_case), "superseded": l.superseded, "corrupt": l.corrupt_lines}
+                     for s, l in loaded.items()}
+        files = {
+            "responses.jsonl": raw["dev"] + raw["diagnostic"],
+            "semantic-scores.jsonl": "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                             for r in scored),
+            "paired-comparison.json": json.dumps(metrics["paired"], indent=2, sort_keys=True) + "\n",
+            "qualifier-analysis.json": json.dumps({n: {k: r[k] for k in (
+                "unstated_qualifier_assumed_dev", "unstated_qualifier_assumed_slice", "unstated_ids_dev",
+                "compliance_dev", "compliance_slice")} for n, r in metrics["runs"].items()},
+                ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            "known-regressions.json": json.dumps(metrics["known_regressions"], ensure_ascii=False,
+                                                 indent=2, sort_keys=True) + "\n",
+            "metrics.json": json.dumps({**metrics, "integrity": integrity, "call_accounting": accounts},
+                                       ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n",
+        }
+        for name, text in files.items():
+            (out / name).write_text(text, encoding="utf-8")
+        gate = metrics["gate"]
+        _dump({"phase": "7B Variant C DEV", "baseline_fingerprint": baseline["baseline_fingerprint"],
+               "baseline_reverified_after_scoring": True, "plan_fingerprint": plan["plan_fingerprint"],
+               "semantic_gold_fingerprint": ctx["gold_fp"], "prompt_fingerprint": ctx["prompt"].fingerprint,
+               "gate_passed": gate["passed"],
+               "outcome": vc.DEV_GATE["pass_label"] if gate["passed"] else vc.DEV_GATE["fail_label"],
+               "artifact_sha256": {n: sha256_text(t) for n, t in files.items()}}, out / "manifest.json")
+    _dump({"gate": gate, "integrity": integrity,
+           "exact": {n: r["exact"] for n, r in metrics["runs"].items()},
+           "paired": metrics["paired"], "known": {c: (k["selected"], k["correct"]) for c, k in
+                                                  metrics["known_regressions"].items()}})
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -1996,6 +2248,40 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(name, required=True)
     p.add_argument("--final-size", type=int, default=120)
     p.set_defaults(func=cmd_qualifier_postmortem)
+
+    p = sub.add_parser("qualifier-review-lock", help="lock 471/472 review and derive Semantic Gold V1.1")
+    for name in ("--decisions", "--review-dir", "--snapshot", "--lock-dir", "--semantic-gold", "--gold-out"):
+        p.add_argument(name, required=True)
+    p.add_argument("--expect-all-select", action="store_true")
+    p.set_defaults(func=cmd_qualifier_review_lock)
+
+    def variant_c_args(p):
+        for name in ("--snapshot", "--challenge", "--semantic-gold", "--expected-gold-fp",
+                     "--expected-prompt-fp", "--stage-a-run", "--a-run", "--a-holdout-run", "--b-run",
+                     "--out"):
+            p.add_argument(name, required=True)
+
+    p = sub.add_parser("variant-c-prep", help="freeze Variant C DEV baselines, gate and plan")
+    variant_c_args(p)
+    p.set_defaults(func=cmd_variant_c_prep)
+
+    p = sub.add_parser("variant-c-run", help="variant_c_v1 on DEV or the 471/472 diagnostics (gated)")
+    variant_c_args(p)
+    p.add_argument("--scope", required=True)
+    p.add_argument("--baseline-dir", required=True)
+    p.add_argument("--live", action="store_true")
+    p.add_argument(CONFIRM_FLAG, dest="confirm_live_provider_calls", action="store_true")
+    p.add_argument("--provider")
+    p.add_argument("--model")
+    p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument("--max-tokens", type=int, default=32)
+    p.add_argument("--approve-plan-fingerprint")
+    p.add_argument("--fake-policy", default="oracle")
+    p.set_defaults(func=cmd_variant_c_run)
+
+    p = sub.add_parser("variant-c-eval", help="score Variant C DEV + diagnostics and apply the gate")
+    variant_c_args(p)
+    p.set_defaults(func=cmd_variant_c_eval)
 
     p = sub.add_parser("semantic-holdout-eval", help="score variant_a_v1 HOLDOUT on Semantic Gold")
     holdout_args(p)

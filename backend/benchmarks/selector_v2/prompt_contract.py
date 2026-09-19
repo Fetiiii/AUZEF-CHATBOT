@@ -36,7 +36,8 @@ from services.selector import build_selector_prompt, parse_selector_output
 
 PROMPT_DIR = Path(__file__).with_name("prompts")
 PRODUCTION = "production"
-PROMPT_FILES = {"variant_a_v1": "variant_a_v1.md", "variant_b_v1": "variant_b_v1.md"}
+PROMPT_FILES = {"variant_a_v1": "variant_a_v1.md", "variant_b_v1": "variant_b_v1.md",
+                "variant_c_v1": "variant_c_v1.md"}
 PROMPT_IDS = (PRODUCTION, *PROMPT_FILES)
 NORMALIZATION = ("CRLF->LF; rstrip each line; strip leading/trailing blank lines; "
                  "no other change; normalized text is what the model receives")
