@@ -248,3 +248,138 @@ def test_real_packet_is_blind_locked_and_unreviewed():
     for rec, a in zip(primary, audit):
         if a["current_gold_in_candidate_set"]:
             assert set(a["current_gold_labels"]) <= {c["label"] for c in rec["candidates"]}
+
+
+# ── full-candidate follow-up (second blind pass) ───────────────────────────
+
+FOLLOWUP = PACKET / "full-candidate-followup"
+EXPECTED_FOLLOWUP = ["19", "74", "112", "158", "160", "184", "215", "221", "230", "355", "371",
+                     "375", "383", "384", "412", "415", "436", "461", "503"]
+
+
+def _filled(packet, need):
+    rows = []
+    for rec in packet["primary"]:
+        cid = rec["case_id"]
+        if cid in need:
+            rows.append({"case_id": cid, "intent_text": rec["intent_text"],
+                         "blind_decision": "NEED_FULL_CANDIDATES", "acceptable_labels": ""})
+        else:
+            rows.append({"case_id": cid, "intent_text": rec["intent_text"],
+                         "blind_decision": "SELECT_ACCEPTABLE",
+                         "acceptable_labels": rec["candidates"][0]["label"]})
+    return rows
+
+
+def test_followup_lists_every_candidate_once_with_first_pass_labels():
+    snaps, _scope, packet = _world()
+    need = [packet["primary"][0]["case_id"], packet["primary"][2]["case_id"]]
+    records = adj.build_followup(snaps, packet["primary"], need)
+    by_id = {s.case.case_id: s for s in snaps}
+    first = {r["case_id"]: r for r in packet["primary"]}
+    assert [r["case_id"] for r in records] == need
+    for rec in records:
+        assert rec["candidate_view_complete"] is True
+        assert rec["candidate_count"] == len(by_id[rec["case_id"]].candidates)
+        labels = [c["label"] for c in rec["candidates"]]
+        assert len(labels) == len(set(labels))
+        questions = sorted(c["question"] for c in rec["candidates"])
+        assert questions == sorted(c.canonical_text for c in by_id[rec["case_id"]].candidates)
+        assert rec["candidates"] == first[rec["case_id"]]["all_candidates"]
+    assert adj.build_followup(snaps, packet["primary"], need) == records  # deterministic
+
+
+def test_followup_packet_is_blind_field_level():
+    snaps, _scope, packet = _world()
+    need = [packet["primary"][0]["case_id"]]
+    records = adj.build_followup(snaps, packet["primary"], need)
+    csv_text, md_text = adj.followup_template_csv(records), adj.followup_markdown(records)
+    readme = adj.FOLLOWUP_README.format(schema=adj.FOLLOWUP_SCHEMA_VERSION)
+    assert adj.followup_visible_violations(records, csv_text, md_text, readme) == []
+    # content may naturally contain such words: not a false positive
+    natural = [dict(records[0], candidates=[dict(records[0]["candidates"][0],
+                                                 answer="İnternet provider ve alias ayarı")])]
+    assert adj.followup_visible_violations(natural, adj.followup_template_csv(natural),
+                                           adj.followup_markdown(natural), readme) == []
+    # field names, refs and non-content text are caught
+    assert adj.followup_visible_violations([dict(records[0], gold="x")], csv_text, md_text, readme)
+    leaked = [dict(records[0], candidates=[dict(records[0]["candidates"][0], answer="bkz. qna:12")])]
+    assert adj.followup_visible_violations(leaked, csv_text, md_text, readme)
+    assert adj.followup_visible_violations(records, csv_text, md_text + "\ncurrent gold: A", readme)
+    assert adj.followup_visible_violations(records, csv_text, md_text, readme + " retrieval rank")
+    for word in ("model_decision", "variant", "first_candidate", "score", "rank"):
+        assert word not in json.dumps(records, ensure_ascii=False)
+
+
+def test_first_pass_validation_and_merge_preserve_completed_reviews():
+    _snaps, _scope, packet = _world()
+    need = {packet["primary"][0]["case_id"]}
+    template = adj.read_decisions(adj.review_template_csv(packet["primary"]))
+    filled = _filled(packet, need)
+    assert adj.validate_first_pass(filled, template, packet["primary"]) == []
+    bad = [dict(filled[0], intent_text="edited")] + filled[1:]
+    assert adj.validate_first_pass(bad, template, packet["primary"])
+    bad = [dict(filled[1], acceptable_labels="ZZ") if i == 1 else r for i, r in enumerate(filled)]
+    assert adj.validate_first_pass(bad, template, packet["primary"])
+    follow = [{"case_id": cid, "blind_decision": "EXPECT_NONE", "acceptable_labels": ""}
+              for cid in need]
+    merged = adj.merge_reviews(filled, follow)
+    assert len(merged) == len(filled)
+    for before, after in zip(filled, merged):
+        if before["case_id"] in need:
+            assert after["blind_decision"] == "EXPECT_NONE"
+            assert after["review_pass"] == "full_candidate_followup"
+        else:
+            assert {k: after[k] for k in before} == before and after["review_pass"] == "first"
+    with pytest.raises(SystemExit):
+        adj.merge_reviews(filled, [dict(follow[0], blind_decision="NEED_FULL_CANDIDATES")])
+    with pytest.raises(SystemExit):
+        adj.merge_reviews(filled, [])
+    assert "NEED_FULL_CANDIDATES" not in adj.FOLLOWUP_DECISIONS
+
+
+def test_primary_loader_never_needs_the_audit_view(tmp_path):
+    _snaps, _scope, packet = _world()
+    files = {"review-cases.jsonl": "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                           for r in packet["primary"]),
+             "review-template.csv": adj.review_template_csv(packet["primary"])}
+    hashes = adj.write_immutable(tmp_path, files)
+    (tmp_path / "manifest.json").write_text(json.dumps({"artifact_sha256": hashes}))
+    assert not (tmp_path / "audit-view.jsonl").exists()
+    _manifest, primary, template = adj.load_primary_review(tmp_path)
+    assert len(primary) == len(template) == len(packet["primary"])
+    (tmp_path / "review-template.csv").write_text("tampered")
+    with pytest.raises(SystemExit):
+        adj.load_primary_review(tmp_path)
+
+
+@pytest.mark.skipif(not (FOLLOWUP / "manifest.json").exists(), reason="private artifacts absent")
+def test_real_followup_packet():
+    from benchmarks.selector_v2.contract import sha256_text
+
+    manifest = json.loads((FOLLOWUP / "manifest.json").read_text())
+    for name, digest in manifest["artifact_sha256"].items():
+        assert sha256_text((FOLLOWUP / name).read_text(encoding="utf-8")) == digest
+    assert manifest["case_ids"] == EXPECTED_FOLLOWUP and manifest["case_count"] == 19
+    assert manifest["parent_review_packet_fingerprint"] == \
+        "2c229e4fb31d998511e54566dea2130bbdb489754070cbc02b13549eff2df269"
+    assert manifest["audit_view_read"] is False
+    records = [json.loads(line) for line in (FOLLOWUP / "review-cases-full.jsonl").read_text().splitlines()]
+    assert [r["case_id"] for r in records] == EXPECTED_FOLLOWUP
+    parent = {json.loads(line)["case_id"]: json.loads(line)
+              for line in (PACKET / "review-cases.jsonl").read_text().splitlines()}
+    for rec in records:
+        assert rec["candidate_view_complete"] is True
+        assert rec["candidates"] == parent[rec["case_id"]]["all_candidates"]
+        assert rec["candidate_count"] == parent[rec["case_id"]]["all_candidate_count"]
+        assert len({c["label"] for c in rec["candidates"]}) == rec["candidate_count"]
+    readme = (FOLLOWUP / "README.md").read_text()
+    assert adj.followup_visible_violations(
+        records, (FOLLOWUP / "review-template-full.csv").read_text(),
+        (FOLLOWUP / "review-packet-full.md").read_text(), readme) == []
+    first = adj.read_decisions((FOLLOWUP / "first-pass-decisions.csv").read_text().lstrip("﻿"))
+    completed = [r for r in first if r["blind_decision"].strip() not in ("", "NEED_FULL_CANDIDATES")]
+    assert len(completed) == 87 == manifest["first_pass"]["completed_count"]
+    assert [r["case_id"] for r in completed] == manifest["first_pass"]["completed_case_ids"]
+    assert all(not r["blind_decision"] for r in adj.read_decisions(
+        (FOLLOWUP / "review-template-full.csv").read_text()))

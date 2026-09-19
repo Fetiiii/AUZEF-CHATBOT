@@ -455,3 +455,204 @@ Rules:
 After freeze, KEEP_CURRENT / CHANGE_GOLD / MULTI_ACCEPTABLE are derived automatically by
 comparing your labels with the current Gold (you never need to know it).
 """
+
+
+# ── full-candidate follow-up (second blind pass) ───────────────────────────
+
+FOLLOWUP_SCHEMA_VERSION = "selector-semantic-adjudication-followup-v1"
+FOLLOWUP_DECISIONS = tuple(d for d in BLIND_DECISIONS if d != "NEED_FULL_CANDIDATES")
+FOLLOWUP_CSV_COLUMNS = ["case_id", "intent_text", "all_labels", "candidate_view_complete",
+                        "candidate_count", "blind_decision", "acceptable_labels",
+                        "review_note", "reviewer", "reviewed_at"]
+# Words that must not appear in any reviewer-visible field name or in the
+# non-content parts (headings, headers, README) of the follow-up packet.
+FOLLOWUP_FORBIDDEN_WORDS = ("qna:", "calendar:", "gold", "expected", "production", "variant_a",
+                            "variant_b", "first_candidate", "rank", "score", "provider", "rescue",
+                            "corruption", "taxonomy", "alias")
+PRIMARY_VERIFIED_FILES = ("review-cases.jsonl", "review-template.csv")
+
+
+def load_primary_review(directory: Path) -> tuple[dict, list[dict], list[dict]]:
+    """Manifest + primary view + blank template, hash-verified.
+
+    Deliberately never reads ``audit-view.jsonl``."""
+    directory = Path(directory)
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    for name in PRIMARY_VERIFIED_FILES:
+        if sha256_text((directory / name).read_text(encoding="utf-8")) != manifest["artifact_sha256"][name]:
+            raise SystemExit(f"primary review artifact {name} changed after it was locked")
+    primary = [json.loads(line) for line in (directory / "review-cases.jsonl").read_text(
+        encoding="utf-8").splitlines() if line.strip()]
+    template = read_decisions((directory / "review-template.csv").read_text(encoding="utf-8"))
+    return manifest, primary, template
+
+
+def validate_first_pass(filled: Sequence[dict], template: Sequence[dict],
+                        primary: Sequence[dict]) -> list[str]:
+    """First-pass decisions must belong to this packet and use real labels."""
+    problems = []
+    if [r["case_id"] for r in filled] != [r["case_id"] for r in template]:
+        problems.append("case ids/order differ from the review template")
+    by_template = {r["case_id"]: r for r in template}
+    labels = {rec["case_id"]: {c["label"] for c in rec["all_candidates"]} for rec in primary}
+    for row in filled:
+        cid = row["case_id"]
+        if cid in by_template and row["intent_text"] != by_template[cid]["intent_text"]:
+            problems.append(f"{cid}: intent text edited")
+        decision = (row.get("blind_decision") or "").strip()
+        if decision and decision not in BLIND_DECISIONS:
+            problems.append(f"{cid}: unknown decision {decision!r}")
+        chosen = (row.get("acceptable_labels") or "").replace(",", " ").split()
+        if decision == "SELECT_ACCEPTABLE" and not chosen:
+            problems.append(f"{cid}: SELECT_ACCEPTABLE without labels")
+        if decision != "SELECT_ACCEPTABLE" and chosen:
+            problems.append(f"{cid}: labels on {decision or 'empty'} decision")
+        unknown = [c for c in chosen if c not in labels.get(cid, set())]
+        if unknown:
+            problems.append(f"{cid}: unknown labels {unknown}")
+    return problems
+
+
+def build_followup(snapshots: Sequence[CaseSnapshot], primary: Sequence[dict],
+                   case_ids: Sequence[str]) -> list[dict]:
+    """Every eligible candidate once, same anonymous labels and neutral order
+    as the first pass (sha256(case_id|candidate_ref)); cross-checked against
+    the first-pass ``all_candidates``."""
+    by_id = {s.case.case_id: s for s in snapshots}
+    first = {rec["case_id"]: rec for rec in primary}
+    records = []
+    for cid in case_ids:
+        snap = by_id[cid]
+        refs = [c.candidate_ref for c in snap.candidates]
+        if len(refs) != len(set(refs)):
+            raise SystemExit(f"{cid}: duplicate candidate in snapshot")
+        ordered = sorted(snap.candidates, key=lambda c: _hash(cid, c.candidate_ref))
+        view = [{"label": label, "question": c.canonical_text, "answer": c.answer_text}
+                for label, c in zip(_labels(len(ordered)), ordered)]
+        if view != first[cid]["all_candidates"]:
+            raise SystemExit(f"{cid}: candidates differ from the locked first-pass packet")
+        records.append({"case_id": cid, "intent_text": snap.case.intent_text,
+                        "candidates": view, "candidate_view_complete": True,
+                        "candidate_count": len(view)})
+    return records
+
+
+def followup_template_csv(records: Sequence[dict]) -> str:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=FOLLOWUP_CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    for rec in records:
+        writer.writerow({"case_id": rec["case_id"], "intent_text": rec["intent_text"],
+                         "all_labels": " ".join(c["label"] for c in rec["candidates"]),
+                         "candidate_view_complete": "true", "candidate_count": rec["candidate_count"],
+                         "blind_decision": "", "acceptable_labels": "", "review_note": "",
+                         "reviewer": "", "reviewed_at": ""})
+    return buf.getvalue()
+
+
+def followup_markdown(records: Sequence[dict]) -> str:
+    lines = ["# Blind review — all candidates", "",
+             "Every candidate for each case is listed. Record decisions in "
+             "`review-template-full.csv` (see README.md).", ""]
+    for rec in records:
+        lines += [f"## Case {rec['case_id']} — {rec['candidate_count']} candidates", "",
+                  f"> {rec['intent_text']}", ""]
+        for cand in rec["candidates"]:
+            lines += [f"**{cand['label']}.** {cand['question']}", "", cand["answer"], ""]
+    return "\n".join(lines)
+
+
+FOLLOWUP_README = """# Blind review, second pass: all candidates ({schema})
+
+These cases were marked NEED_FULL_CANDIDATES in the first pass. Every eligible candidate is
+now listed (labels are the same as in the first pass; order is a fixed hash order, not a
+search order).
+
+Files: `review-packet-full.md` (read), `review-cases-full.jsonl` (same, machine-readable),
+`review-template-full.csv` (record decisions), `manifest.json` (fingerprints).
+
+`blind_decision` values:
+- SELECT_ACCEPTABLE + `acceptable_labels` (e.g. `B` or `B D`): the candidate(s) meet the
+  user's practical need; several labels = several acceptable answers for ONE request.
+- EXPECT_NONE: none of ALL listed candidates reasonably meets the need (not for "unsure
+  which one", not for unclear messages).
+- EXCLUDE_AMBIGUOUS: the message is too unclear to judge.
+- CONTENT_REVIEW_REQUIRED: the request is clear but the knowledge-base content is deficient.
+- RETRIEVAL_OR_KB_MAPPING_REVIEW: the right answer is not among the listed candidates.
+
+NEED_FULL_CANDIDATES is not accepted here: all candidates are shown.
+
+Rules: judge question AND answer against the user's practical need; exact wording is not
+required, a shared topic alone is not enough. Do not assume a qualifier the user did not
+state; if the user states one explicitly, the more specific candidate is natural.
+"""
+
+
+def followup_visible_violations(records: Sequence[dict], csv_text: str, md_text: str,
+                                readme: str) -> list[str]:
+    """Field-level contamination check: field names and non-content text are
+    searched; user text, candidate questions and answers are content and are
+    only searched for record refs (qna:/calendar:)."""
+    problems = []
+    allowed_keys = {"case_id", "intent_text", "candidates", "candidate_view_complete",
+                    "candidate_count", "label", "question", "answer"}
+    content: list[str] = []
+    for rec in records:
+        extra = set(rec) - allowed_keys
+        if extra:
+            problems.append(f"{rec['case_id']}: unexpected fields {sorted(extra)}")
+        content.append(rec["intent_text"])
+        for cand in rec["candidates"]:
+            extra = set(cand) - allowed_keys
+            if extra:
+                problems.append(f"{rec['case_id']}: unexpected candidate fields {sorted(extra)}")
+            content += [cand["question"], cand["answer"]]
+    for text in content:
+        for ref in ("qna:", "calendar:"):
+            if ref in text:
+                problems.append(f"record ref {ref!r} in content")
+
+    def scrub(text: str) -> str:
+        for piece in sorted(set(content), key=len, reverse=True):
+            if piece:
+                text = text.replace(piece, " ")
+        return text.casefold()
+
+    csv_rows = read_decisions(csv_text)
+    csv_noncontent = ",".join(FOLLOWUP_CSV_COLUMNS) + "\n" + "\n".join(
+        ",".join(v for k, v in row.items() if k != "intent_text") for row in csv_rows)
+    for name, text in (("csv", csv_noncontent.casefold()), ("markdown", scrub(md_text)),
+                       ("readme", readme.casefold())):
+        for word in FOLLOWUP_FORBIDDEN_WORDS:
+            if word in text:
+                problems.append(f"{name}: forbidden word {word!r}")
+    return problems
+
+
+def followup_fingerprint(parent_fp: str, snapshot_fp: str, records: Sequence[dict]) -> str:
+    return fingerprint({"schema": FOLLOWUP_SCHEMA_VERSION, "parent_packet": parent_fp,
+                        "snapshot": snapshot_fp,
+                        "cases": [[r["case_id"], sha256_text(json.dumps(
+                            r, ensure_ascii=False, sort_keys=True))] for r in records]})
+
+
+def merge_reviews(first_pass: Sequence[dict], followup: Sequence[dict]) -> list[dict]:
+    """First-pass rows (unchanged) with NEED_FULL_CANDIDATES rows replaced by
+    the follow-up decisions. Used at final lock; not run in this phase."""
+    follow = {r["case_id"]: r for r in followup}
+    need = {r["case_id"] for r in first_pass
+            if (r.get("blind_decision") or "").strip() == "NEED_FULL_CANDIDATES"}
+    if set(follow) != need:
+        raise SystemExit("follow-up cases must equal the first-pass NEED_FULL_CANDIDATES cases")
+    merged = []
+    for row in first_pass:
+        if row["case_id"] in follow:
+            decision = (follow[row["case_id"]].get("blind_decision") or "").strip()
+            if decision == "NEED_FULL_CANDIDATES" or (decision and decision not in FOLLOWUP_DECISIONS):
+                raise SystemExit(f"{row['case_id']}: {decision!r} not allowed in the follow-up")
+            merged.append({**row, **{k: follow[row["case_id"]].get(k, "") for k in (
+                "blind_decision", "acceptable_labels", "review_note", "reviewer", "reviewed_at")},
+                "review_pass": "full_candidate_followup"})
+        else:
+            merged.append({**row, "review_pass": "first"})
+    return merged

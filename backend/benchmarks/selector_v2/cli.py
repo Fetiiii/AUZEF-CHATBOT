@@ -813,6 +813,92 @@ def cmd_adjudication_rescore(args) -> None:
         _dump(report, Path(args.out) if args.out else None)
 
 
+def cmd_adjudication_followup(args) -> None:
+    """Second blind pass: ALL candidates for first-pass NEED_FULL_CANDIDATES cases.
+
+    Offline; never reads audit-view.jsonl; never changes Gold or decisions."""
+    from benchmarks.selector_v2 import adjudication as adj
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.contract import sha256_text
+    from benchmarks.selector_v2.gold_loader import GOLD_ALL, sha256_file
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    with no_live_calls():
+        review_dir = Path(args.review_dir)
+        parent, primary, template = adj.load_primary_review(review_dir)
+        filled_text = Path(args.filled).read_text(encoding="utf-8")
+        filled = adj.read_decisions(filled_text.lstrip("\ufeff"))
+        problems = adj.validate_first_pass(filled, template, primary)
+        if problems:
+            raise SystemExit(f"first-pass decisions rejected: {problems[:10]}")
+        need = [r["case_id"] for r in filled
+                if (r.get("blind_decision") or "").strip() == "NEED_FULL_CANDIDATES"]
+        completed = [r["case_id"] for r in filled
+                     if (r.get("blind_decision") or "").strip() not in ("", "NEED_FULL_CANDIDATES")]
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        cm, _cases = load_challenge(Path(args.challenge), manifest)
+        if parent["source_snapshot_fingerprint"] != manifest["snapshot_fingerprint"] or \
+                parent["source_challenge_fingerprint"] != cm["challenge_fingerprint"]:
+            raise SystemExit("snapshot/challenge differ from the parent review packet")
+        gold_sha = manifest["dataset"]["source"]["gold_all_sha256"]
+        gold_verified = None
+        if args.gold_dir:
+            gold_verified = sha256_file(Path(args.gold_dir) / GOLD_ALL) == gold_sha
+            if not gold_verified:
+                raise SystemExit("reviewed Gold file differs from the snapshot manifest")
+        records = adj.build_followup(snapshots, primary, need)
+        csv_text = adj.followup_template_csv(records)
+        md_text = adj.followup_markdown(records)
+        readme = adj.FOLLOWUP_README.format(schema=adj.FOLLOWUP_SCHEMA_VERSION)
+        violations = adj.followup_visible_violations(records, csv_text, md_text, readme)
+        if violations:
+            raise SystemExit(f"follow-up packet contaminated: {violations[:10]}")
+        files = {
+            "review-cases-full.jsonl": "".join(json.dumps(r, ensure_ascii=False, sort_keys=True)
+                                               + "\n" for r in records),
+            "review-template-full.csv": csv_text,
+            "review-packet-full.md": md_text,
+            "README.md": readme,
+            "first-pass-decisions.csv": filled_text,
+        }
+        out = Path(args.out)
+        hashes = adj.write_immutable(out, files)
+        fp = adj.followup_fingerprint(parent["review_packet_fingerprint"],
+                                      manifest["snapshot_fingerprint"], records)
+        manifest_out = {
+            "followup_schema_version": adj.FOLLOWUP_SCHEMA_VERSION,
+            "followup_fingerprint": fp,
+            "parent_review_packet_fingerprint": parent["review_packet_fingerprint"],
+            "source_snapshot_fingerprint": manifest["snapshot_fingerprint"],
+            "source_challenge_fingerprint": cm["challenge_fingerprint"],
+            "reviewed_gold_all_sha256": gold_sha,
+            "reviewed_gold_file_verified": gold_verified,
+            "case_ids": need,
+            "case_count": len(need),
+            "candidate_counts": {r["case_id"]: r["candidate_count"] for r in records},
+            "candidate_content_sha256": {
+                r["case_id"]: [sha256_text(json.dumps(c, ensure_ascii=False, sort_keys=True))
+                               for c in r["candidates"]] for r in records},
+            "neutral_ordering": "sha256(case_id|candidate_ref) ascending; labels identical "
+                                "to the first pass",
+            "allowed_decisions": list(adj.FOLLOWUP_DECISIONS),
+            "first_pass": {"file_sha256": sha256_text(filled_text),
+                           "completed_case_ids": completed,
+                           "completed_count": len(completed),
+                           "needs_full_candidates": len(need)},
+            "audit_view_read": False,
+            "artifact_sha256": hashes,
+            "human_review_status": "READY_FOR_HUMAN_REVIEW",
+        }
+        adj.write_immutable(out, {"manifest.json": json.dumps(
+            manifest_out, ensure_ascii=False, indent=2, sort_keys=True) + "\n"})
+    _dump({"followup_fingerprint": fp, "case_count": len(need),
+           "first_pass_completed": len(completed),
+           "candidate_count_min": min(r["candidate_count"] for r in records),
+           "candidate_count_max": max(r["candidate_count"] for r in records),
+           "reviewed_gold_file_verified": gold_verified})
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -1066,6 +1152,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run", action="append", required=True, help="name=run_dir")
     p.add_argument("--out")
     p.set_defaults(func=cmd_adjudication_rescore)
+
+    p = sub.add_parser("adjudication-followup",
+                       help="second blind pass with all candidates (offline)")
+    for name in ("--review-dir", "--filled", "--snapshot", "--challenge", "--out"):
+        p.add_argument(name, required=True)
+    p.add_argument("--gold-dir", help="reviewed Gold dir, to verify its sha256 read-only")
+    p.set_defaults(func=cmd_adjudication_followup)
 
     p = sub.add_parser("postmortem", help="deterministic Stage A failure analysis (no LLM)")
     p.add_argument("--snapshot", required=True)

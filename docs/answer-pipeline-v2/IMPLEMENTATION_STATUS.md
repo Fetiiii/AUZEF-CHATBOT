@@ -48,8 +48,14 @@ STATUS: PASS
 Phase 7B-Semantic Adjudication Prep
 STATUS: PASS
 
+Phase 7B-Semantic Adjudication First Review
+STATUS: PARTIAL_COMPLETE
+
+Phase 7B-Semantic Adjudication Full Candidate Follow-up
+STATUS: READY_FOR_HUMAN_REVIEW
+
 Phase 7B-Semantic Adjudication Review
-STATUS: WAITING_FOR_HUMAN_REVIEW
+STATUS: WAITING_FOR_19_CASES
 
 Phase 7B-Prompt HOLDOUT Live
 STATUS: BLOCKED_PENDING_ADJUDICATION
@@ -563,3 +569,25 @@ Detailed evidence: [`PHASE_7B_PROMPT_DEV_REPORT.md`](PHASE_7B_PROMPT_DEV_REPORT.
       auto-completed. HOLDOUT and Stage B not run; Phase 7C not started.
 
 Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_PREP_REPORT.md`](PHASE_7B_SEMANTIC_ADJUDICATION_PREP_REPORT.md).
+
+## Phase 7B-Semantic Adjudication Full-Candidate Follow-up record
+
+- [x] **First pass.** The user's first-pass file was validated against the
+      locked template: 87 decided and 19 NEED_FULL_CANDIDATES (19, 74, 112,
+      158, 160, 184, 215, 221, 230, 355, 371, 375, 383, 384, 412, 415, 436,
+      461, 503).
+- [x] **Second blind packet.** It lists every eligible candidate once (8–16
+      per case, `candidate_view_complete=true`).
+      - **Labels:** the same labels and hash-neutral order as the first pass.
+      - **Hidden:** refs, rank, score, source, Gold, alias, model outputs,
+        taxonomy and the prior decision.
+      - **Check:** field-level contamination check passes.
+- [x] **Fingerprints.** Follow-up `078bec9f…`. The parent packet
+      `2c229e4f…` is unchanged. Snapshot, challenge and reviewed Gold sha256
+      were re-verified.
+- [x] **Isolation.** The audit view was not read, the Gold was not
+      modified, and no apply, re-score or final lock was run. The 87
+      first-pass decisions are preserved. Zero live calls.
+- [x] **Tests.** Adjudication module 27/27; full suite 508/508.
+
+Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_FOLLOWUP_REPORT.md`](PHASE_7B_SEMANTIC_ADJUDICATION_FOLLOWUP_REPORT.md).
