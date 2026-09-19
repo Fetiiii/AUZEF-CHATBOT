@@ -1,0 +1,25 @@
+{
+  "fixture_version": "near-qna-pairs-1",
+  "purpose": "Diagnostic slice definition only. Ids and canonical question texts are the real AUZEF KB values (same list as backend/tests/test_selector_v2.py NEAR_QNA_PAIRS); the snapshot generator re-verifies them against the live KB. No answers are stored here and no benchmark case is synthesized from this file: a Gold case joins the near_qna slice only when one member is acceptable and the other member is present in its frozen candidate set.",
+  "relation_note": "relation=general_specific only where the specific question adds an explicit qualifier the general one lacks (the Selector prompt's own general/specific example is 129 vs 342). This is a harness classification of the canonical questions, not a dataset tag.",
+  "pairs": [
+    {"a": {"qna_id": 316, "question": "Çözüm Merkezi'ne giriş yapamıyorum, ne yapmalıyım?"},
+     "b": {"qna_id": 335, "question": "Çözüm Merkezi'ne talep oluşturamıyorum, ne yapmalıyım?"},
+     "relation": "sibling"},
+    {"a": {"qna_id": 328, "question": "Çocuk Gelişimi bölümü kapatıldı mı?"},
+     "b": {"qna_id": 336, "question": "YKS ile Çocuk Gelişimi lisans bölümüne tercih yapabilir miyim?"},
+     "relation": "sibling"},
+    {"a": {"qna_id": 310, "question": "Kayıt tarihleri ne zamandır?", "role": "general"},
+     "b": {"qna_id": 405, "question": "İkinci Üniversite sınavsız kayıt tarihleri ne zaman?", "role": "specific"},
+     "relation": "general_specific"},
+    {"a": {"qna_id": 333, "question": "Öğrenci affı başvurusu nasıl yapılır?"},
+     "b": {"qna_id": 319, "question": "Af başvurusu nasıl yapılır?"},
+     "relation": "near_duplicate"},
+    {"a": {"qna_id": 129, "question": "Yatay geçiş işlemleri ile ilgili detaylı bilgiye nereden ulaşabiliriz?", "role": "general"},
+     "b": {"qna_id": 342, "question": "Merkezi yatay geçiş başvurusu nasıl yapılır?", "role": "specific"},
+     "relation": "general_specific"},
+    {"a": {"qna_id": 347, "question": "Staj defterindeki eksikleri düzeltmek için ne kadar süre var?"},
+     "b": {"qna_id": 72, "question": "Endüstri Mühendisliği programı öğrencisiyim staj defterimi en son hangi tarihe kadar göndermem gerekiyor?"},
+     "relation": "sibling"}
+  ]
+}

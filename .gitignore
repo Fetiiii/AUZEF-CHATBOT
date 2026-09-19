@@ -72,3 +72,6 @@ data/
 # İzin kurallari lokal komutlari (ve bazen kimlik bilgilerini) icerebilir.
 .claude/settings.json
 .claude/settings.local.json
+
+# ── Offline benchmark artifacts (Phase 7A; may contain real user messages) ──
+/outputs/

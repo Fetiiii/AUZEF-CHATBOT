@@ -27,9 +27,29 @@ STATUS: PASS
 Phase 6 — Model Registry + Admin Control
 STATUS: PASS
 
-Phase 7 — Necessity Experiments
+Phase 7A — Selector Benchmark Harness
+STATUS: PASS
+
+Phase 7B — Model / Reasoning Evaluation
+STATUS: NOT_STARTED
+
+Phase 7C — Metadata Necessity
+STATUS: NOT_STARTED
+
+Phase 7D — Exact Alias Experiment
+STATUS: NOT_STARTED
+
+Phase 7E — Candidate Budget Experiment
+STATUS: NOT_STARTED
+
+Phase 7F — Bot Context Necessity
+STATUS: NOT_STARTED
+
+Phase 7G — Final E2E Freeze
 STATUS: NOT_STARTED
 ```
+
+Phase 7 is tracked per sub-phase. There is no single Phase 7 PASS.
 
 ## Phase 0 acceptance record
 
@@ -195,3 +215,72 @@ Detailed evidence: [`PHASE_5_REPORT.md`](PHASE_5_REPORT.md).
 - [x] Phase 7 not started.
 
 Detailed evidence: [`PHASE_6_REPORT.md`](PHASE_6_REPORT.md).
+
+## Phase 7A acceptance record
+
+- [x] **No behavior change, no spend.** Production behavior is unchanged: the
+      app does not import `backend/benchmarks/`, and the only tracked change
+      outside the tooling is `/outputs/` in `.gitignore`. No live
+      provider/LLM call was made.
+- [x] **Case contract.** There is a typed, versioned selector-only case
+      contract (`selector-v2-1`). It covers SELECT, NONE and multi-acceptable
+      cases, and `calendar:<id>` refs.
+- [x] **Denominators.** Excluded, hold and context-required cases are loaded
+      but never counted. Multi-intent cases 71 and 480 become derived,
+      non-primary intent cases.
+- [x] **Reviewed Gold v2 validated read-only.**
+      - **Integrity:** manifest sha256 values and counts match
+        (503 / 17 / 486).
+      - **Review decisions:** 17 are present.
+      - **Expected ids:** 87 expected ids are active in the KB, with
+        identical content.
+- [x] **Frozen candidate snapshot.**
+      - **Builder:** the production pool builder (retrieval + eligibility +
+        budget) makes it once, with no selector and no analyzer.
+      - **Determinism:** it is deterministic; two generations gave identical
+        fingerprint and file hash.
+      - **Pinning:** it is fingerprinted and versioned, and every run is
+        pinned to it.
+- [x] **Miss classes.** Retrieval, eligibility and budget misses are
+      separate classes outside the selector denominator. This snapshot has
+      2 retrieval misses and 0 of the others.
+- [x] **Production contract reuse.** The production prompt builder, parser,
+      `SelectorCandidate` and `SelectorDecision` are reused. The contract
+      fingerprint tracks prompt, schema and serializer changes.
+      Score/rank/provider/alias never reach the model (tested).
+- [x] **Current config recorded.** The production selector config is v1,
+      openrouter/openai/gpt-4o-mini, fingerprint `af9eb2d0…`. The harness
+      baseline has the same fingerprint.
+- [x] **Self-tests.** The fake provider modes are oracle, always_none,
+      first_candidate, malformed, unknown_ref, empty, timeout and
+      model_error. The oracle scores 100% and is labeled HARNESS SELF-TEST,
+      not model accuracy.
+- [x] **Resume and isolation.**
+      - **Resume:** completed cases are skipped. A different config,
+        snapshot or contract gets a new namespace.
+      - **Bad lines:** foreign results are rejected, and torn lines are
+        ignored and rerun.
+      - **Retries:** they supersede earlier attempts and are not
+        double-counted.
+- [x] **Metrics.**
+      - **Primary:** Exact Selector Accuracy.
+      - **Secondary:** SELECT accuracy, NONE precision/recall, false NONE,
+        false SELECT, and invalid/error/timeout rates.
+      - **Slices:** general/specific and near-QnA slices, with their
+        matrices.
+      - **Paired comparison:** it uses the exact McNemar test.
+- [x] **Estimate and live gate.**
+      - **Token estimate:** APPROXIMATE; about 1.12 M input tokens per
+        config over 482 primary cases.
+      - **Dollar cost:** only from explicit price input; none was computed.
+      - **Live gate:** `--live` + `--confirm-live-provider-calls` +
+        provider/model are required.
+      - **Reasoning runs:** refused until the adapters transmit reasoning
+        effort.
+      - **Network guard:** default commands and the test module run inside
+        a socket and provider-SDK guard.
+- [x] **Tests.** Targeted 43/43. The full suite has no new failure
+      (repository-root layout 435/435).
+- [x] Phase 7B not started.
+
+Detailed evidence: [`PHASE_7A_REPORT.md`](PHASE_7A_REPORT.md).
