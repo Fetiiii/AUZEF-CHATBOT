@@ -685,6 +685,134 @@ def cmd_prompt_dev_compare(args) -> None:
            "paired": comparison["paired"], "diff_counts": comparison["diff_counts"]})
 
 
+def cmd_adjudication_prep(args) -> None:
+    """Blind semantic Gold review packet (offline; alias table read-only)."""
+    from benchmarks.selector_v2 import adjudication as adj
+    from benchmarks.selector_v2 import postmortem as pm
+    from benchmarks.selector_v2.challenge import load_challenge
+    from benchmarks.selector_v2.contract import sha256_text
+    from benchmarks.selector_v2.snapshot import load_near_pairs, load_snapshot
+
+    with no_live_calls(_infra_hosts()):
+        from core.database import QnAQuery, SessionLocal
+
+        db = SessionLocal()
+        try:
+            alias_rows = [(int(r[0]), r[1]) for r in db.query(QnAQuery.qna_id, QnAQuery.query_text)]
+        finally:
+            db.close()
+    with no_live_calls():
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        cm, cases = load_challenge(Path(args.challenge), manifest)
+        pdir = Path(args.postmortem)
+        failure_text = (pdir / "failure-cases.jsonl").read_text(encoding="utf-8")
+        failures = [json.loads(line) for line in failure_text.splitlines() if line.strip()]
+        postmortem_fp = fingerprint({
+            "failure-cases.jsonl": sha256_text(failure_text),
+            "taxonomy-summary.json": sha256_text(
+                (pdir / "taxonomy-summary.json").read_text(encoding="utf-8")),
+        })
+        scope = adj.review_scope(failures, [c["case_id"] for c in cases])
+        alias_map = pm.build_alias_map(alias_rows)
+        by_id = {s.case.case_id: s for s in snapshots}
+        owners = {cid: pm.alias_owners(alias_map, by_id[cid].case.intent_text or "")
+                  for cid in scope["case_ids"]}
+        packet = adj.build_packet(snapshots, scope, load_near_pairs(), owners)
+        problems = adj.primary_view_violations(packet["primary"], ("variant_a_v1", "variant_b_v1"))
+        if problems:
+            raise SystemExit(f"primary view contaminated: {problems[:10]}")
+        packet_fp = adj.packet_fingerprint(scope, packet["content_hashes"],
+                                           manifest["snapshot_fingerprint"], postmortem_fp)
+        files = {
+            "review-cases.jsonl": "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                          for r in packet["primary"]),
+            "review-template.csv": adj.review_template_csv(packet["primary"]),
+            "review-packet.md": adj.review_markdown(packet["primary"]),
+            "audit-view.jsonl": "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
+                                        for r in packet["audit"]),
+            "README.md": adj.README.format(schema=adj.REVIEW_SCHEMA_VERSION),
+        }
+        out = Path(args.out)
+        hashes = adj.write_immutable(out, files)
+        manifest_out = {
+            "review_schema_version": adj.REVIEW_SCHEMA_VERSION,
+            "review_packet_fingerprint": packet_fp,
+            "source_snapshot_fingerprint": manifest["snapshot_fingerprint"],
+            "source_challenge_fingerprint": cm["challenge_fingerprint"],
+            "postmortem_fingerprint": postmortem_fp,
+            "alias_table_fingerprint": fingerprint(sorted(alias_rows)),
+            "case_ids": scope["case_ids"],
+            "scope_counts": scope["counts"],
+            "control_case_ids": scope["control"],
+            "clear_selector_error_diagnostic_not_in_scope": scope["clear_selector_error_diagnostic"],
+            "candidate_content_sha256": packet["content_hashes"],
+            "candidate_policy": {"gold": "all current acceptable refs present",
+                                 "near_qna": "all near-pair siblings present",
+                                 "top_retrieved": adj.TOP_RETRIEVED,
+                                 "top_lexical": adj.TOP_LEXICAL, "max_shown": adj.MAX_SHOWN,
+                                 "never_used": "any model decision (production / variants)",
+                                 "order": "sha256(case_id|candidate_ref), rank-neutral"},
+            "candidate_view_incomplete_cases": [r["case_id"] for r in packet["primary"]
+                                                if not r["candidate_view_complete"]],
+            "artifact_sha256": hashes,
+            "human_review_status": "WAITING_FOR_HUMAN_REVIEW",
+        }
+        adj.write_immutable(out, {"manifest.json": json.dumps(
+            manifest_out, ensure_ascii=False, indent=2, sort_keys=True) + "\n"})
+    _dump({"review_packet_fingerprint": packet_fp, "scope": scope["counts"],
+           "incomplete_views": len(manifest_out["candidate_view_incomplete_cases"])})
+
+
+def cmd_adjudication_apply(args) -> None:
+    """Locked blind decisions -> CHILD Gold (parent untouched)."""
+    from benchmarks.selector_v2 import adjudication as adj
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    with no_live_calls():
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        review_manifest, audit = adj.load_locked_review(Path(args.review_dir))
+        rows = adj.read_decisions(Path(args.decisions).read_text(encoding="utf-8"))
+        result = adj.apply_adjudication(
+            [s.case for s in snapshots], audit, rows,
+            packet_fp=review_manifest["review_packet_fingerprint"],
+            expected_packet_fp=args.packet_fingerprint,
+            parent_fp=manifest["snapshot_fingerprint"])
+        adj.write_immutable(Path(args.out), {
+            "cases.jsonl": "".join(c.model_dump_json() + "\n" for c in result["cases"]),
+            "provenance.jsonl": "".join(json.dumps(p, ensure_ascii=False, sort_keys=True) + "\n"
+                                        for p in result["provenance"]),
+            "manifest.json": json.dumps({k: v for k, v in result.items()
+                                         if k not in ("cases", "provenance")},
+                                        ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        })
+    _dump({k: v for k, v in result.items() if k not in ("cases", "provenance")})
+
+
+def cmd_adjudication_rescore(args) -> None:
+    """Re-score SAVED outputs against a child Gold. No provider call."""
+    from benchmarks.selector_v2 import adjudication as adj
+    from benchmarks.selector_v2.evaluator import metrics
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.schema import BenchmarkCase
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    with no_live_calls():
+        _manifest, snapshots = load_snapshot(Path(args.snapshot))
+        child = [BenchmarkCase.model_validate_json(line) for line in
+                 (Path(args.child_dir) / "cases.jsonl").read_text(encoding="utf-8").splitlines()
+                 if line.strip()]
+        report = {}
+        for item in args.run:
+            name, _, path = item.partition("=")
+            results = load_results(Path(path) / RESULTS_FILE).by_case
+            new_snaps, new_results = adj.rescore(snapshots, child, results)
+            scoped = [s for s in new_snaps if s.case.case_id in new_results and s.selector_evaluable]
+            report[name] = {"parent": metrics([s for s in snapshots if s.case.case_id in results
+                                               and s.selector_evaluable], results),
+                            "child": metrics(scoped, new_results)}
+        _dump(report, Path(args.out) if args.out else None)
+
+
 def cmd_challenge_eval(args) -> None:
     with no_live_calls():
         report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
@@ -921,6 +1049,23 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(name, required=True)
     p.add_argument("--run", action="append", required=True, help="name=run_dir (repeatable)")
     p.set_defaults(func=cmd_prompt_dev_compare)
+
+    p = sub.add_parser("adjudication-prep", help="blind semantic Gold review packet (offline)")
+    for name in ("--snapshot", "--challenge", "--postmortem", "--out"):
+        p.add_argument(name, required=True)
+    p.set_defaults(func=cmd_adjudication_prep)
+
+    p = sub.add_parser("adjudication-apply", help="locked human decisions -> child Gold")
+    for name in ("--snapshot", "--review-dir", "--decisions", "--packet-fingerprint", "--out"):
+        p.add_argument(name, required=True)
+    p.set_defaults(func=cmd_adjudication_apply)
+
+    p = sub.add_parser("adjudication-rescore", help="re-score saved outputs on a child Gold")
+    for name in ("--snapshot", "--child-dir"):
+        p.add_argument(name, required=True)
+    p.add_argument("--run", action="append", required=True, help="name=run_dir")
+    p.add_argument("--out")
+    p.set_defaults(func=cmd_adjudication_rescore)
 
     p = sub.add_parser("postmortem", help="deterministic Stage A failure analysis (no LLM)")
     p.add_argument("--snapshot", required=True)

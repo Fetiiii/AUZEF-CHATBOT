@@ -45,8 +45,14 @@ STATUS: PASS
 Phase 7B-Prompt DEV Live
 STATUS: PASS
 
+Phase 7B-Semantic Adjudication Prep
+STATUS: PASS
+
+Phase 7B-Semantic Adjudication Review
+STATUS: WAITING_FOR_HUMAN_REVIEW
+
 Phase 7B-Prompt HOLDOUT Live
-STATUS: BLOCKED_NO_DEV_VARIANT_PASSED_GATE
+STATUS: BLOCKED_PENDING_ADJUDICATION
 
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
@@ -514,3 +520,46 @@ Detailed evidence: [`PHASE_7B_PROMPT_PREP_REPORT.md`](PHASE_7B_PROMPT_PREP_REPOR
       exist. Tests 17/17; full suite 481/481. Phase 7C not started.
 
 Detailed evidence: [`PHASE_7B_PROMPT_DEV_REPORT.md`](PHASE_7B_PROMPT_DEV_REPORT.md).
+
+## Phase 7B-Semantic Adjudication Prep acceptance record
+
+- [x] **Nothing existing changed.** Production runtime, parent reviewed
+      Gold, Stage A outputs, Variant A/B outputs and prompts, and the prompt
+      gate are the same. Zero live calls.
+- [x] **Deterministic review scope:**
+
+      | Source | Cases |
+      |---|---:|
+      | GOLD_ALIAS_QUESTIONABLE | 18 |
+      | CONTRACT_MISMATCH | 29 |
+      | NEEDS_HUMAN_REVIEW | 37 |
+      | KB_OVERLAP (subset) | 5 |
+      | Existing queue (+74, 436) | 7 |
+      | **Unique scope** | **86** |
+      | Hash-selected blind control | 20 |
+      | **Total** | **106** |
+- [x] **Primary view is model-output blind.** It contains no production/A/B
+      decisions, first-candidate result, rescue/corruption, retrieval
+      rank/score, refs, current Gold or alias provenance (build-time check +
+      tests).
+      - **Shown per candidate:** anonymous labels in rank-neutral hash order,
+        with canonical question and curated answer.
+      - **Secondary audit view:** separate, to be opened only after the
+        review.
+- [x] **Candidate subset.** Deterministic and model-independent (Gold +
+      near-QnA + top-5 retrieved + top-3 lexical), with a completeness flag
+      and NEED_FULL_CANDIDATES.
+- [x] **Decision schema.** Blind decisions (SELECT_ACCEPTABLE, EXPECT_NONE,
+      EXCLUDE_AMBIGUOUS, CONTENT_REVIEW_REQUIRED,
+      RETRIEVAL_OR_KB_MAPPING_REVIEW, NEED_FULL_CANDIDATES) map to KEEP /
+      CHANGE / MULTI after the review is locked. The general/specific and
+      practical-answer rules are documented.
+- [x] **Packet locked.** Fingerprint `2c229e4f…`, immutable.
+- [x] **Tooling prepared, not executed against the real packet:**
+      - apply to a child Gold with provenance (parent immutable);
+      - re-score of saved outputs without calls;
+      - expected-NONE scoring.
+- [x] **Tests.** New 22/22; full suite 503/503. Human review not
+      auto-completed. HOLDOUT and Stage B not run; Phase 7C not started.
+
+Detailed evidence: [`PHASE_7B_SEMANTIC_ADJUDICATION_PREP_REPORT.md`](PHASE_7B_SEMANTIC_ADJUDICATION_PREP_REPORT.md).
