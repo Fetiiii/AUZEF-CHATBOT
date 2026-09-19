@@ -1,16 +1,21 @@
-"""Cevap üretim pipeline'ı: Intent Analyzer + eligibility + Selector V2.
+"""Cevap üretim pipeline'ı: Intent Analyzer + eligibility + Selector V2
++ resmi degraded mode.
 
-LLM açıkken current turn 1 veya en fazla 2 resolved intent'e dönüştürülür.
-Her intent için QnA (Meili + Qdrant) ve gerekiyorsa filtreli Calendar adayları
-tek tipli (typed) aday kümesine çevrilir, objektif eligibility uygulanır ve
+Normal LLM modunda current turn 1 veya en fazla 2 resolved intent'e ayrılır;
+her intent için typed aday kümesi kurulur, objektif eligibility uygulanır ve
 Selector V2 strict ``SELECT``/``NONE`` kararı verir. LLM asla son kullanıcı
-cevabı üretmez; seçilen curated cevap birebir döner.
+cevabı üretmez.
 
-Semantic ``NONE`` ve ``NO_ELIGIBLE_CANDIDATES`` finaldir: eşik fallback'i
-çalışmaz. Selector ``INVALID_OUTPUT``/``MODEL_ERROR``/``TIMEOUT`` ise Phase 5
-degraded-mode tasarımına kadar mevcut deterministik uyumluluk yedeğine
-(takvim kelime eşleşmesi → Meili ≥0.90 → Qdrant >0.75) açık gerekçeyle düşer.
-LLM kapalıyken aynı deterministik yol değişmeden kullanılır.
+Semantic ``NONE`` ve ``NO_ELIGIBLE_CANDIDATES`` finaldir: degraded yol açılmaz.
+LLM kullanılamıyorsa tek deterministik degraded servis
+(``answer_in_degraded_mode``: Calendar → Meili ≥0.90 → Qdrant >0.75) çalışır:
+
+- admin LLM OFF / sağlayıcı yok  → ham current turn (ADMIN_DEGRADED)
+- Intent Analyzer hata/geçersiz çıktı ya da circuit OPEN → ham current turn
+- Selector hata/geçersiz çıktı ya da circuit OPEN → YALNIZ o intent'in
+  ``resolved_text``'i (diğer intent'lerin kararları korunur)
+
+Altyapı hataları capability/config bazlı circuit breaker'a yazılır.
 """
 import os
 import logging
@@ -44,9 +49,16 @@ from services.candidate_eligibility import (
 )
 from services.routing_guards import RoutingGuardPolicy
 from services.decision_trace import DecisionTrace
+from services.circuit_breaker import (
+    LLM_ADMIN_MODE_TRACKER,
+    LLM_CIRCUIT_BREAKER,
+    CallOutcomeKind,
+    breaker_key,
+)
 from services.llm_config import LLMCapability
 from services.llm_types import (
-    SELECTION_ERROR_OUTCOMES,
+    ExecutionMode,
+    IntentResolution,
     LLMOutcomeStatus,
     LLMParseStatus,
     SelectionOutcome,
@@ -64,12 +76,37 @@ class PoolSelection:
 
 
 @dataclass(frozen=True)
+class DegradedAnswer:
+    """One deterministic degraded-mode decision (never LLM-generated)."""
+
+    answer: Optional[str]
+    source: str
+    qna_id: Optional[int] = None
+    calendar_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class IntentResult:
+    position: int
+    resolution: IntentResolution
+    execution_mode: ExecutionMode
+    answer: Optional[str] = None
+    source: Optional[str] = None
+    qna_id: object = None
+    calendar_id: Optional[int] = None
+    selection_outcome: Optional[SelectionOutcome] = None
+    degraded_reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class LLMAnswerResult:
     answer: Optional[str]
-    outcome: SelectionOutcome
+    source: str
+    execution_mode: ExecutionMode
+    intents: tuple
     selected_qna_ids: list
     answer_count: int = 0
-    intent_outcomes: tuple = ()
+    degraded_reason: Optional[str] = None
 
 
 def _previous_user_turns(conversation_context: tuple[dict, ...]) -> tuple[str, ...]:
@@ -161,6 +198,29 @@ def is_date_query(query: str) -> bool:
     return bool(set(q.split()) & {"tarih", "tarihi", "tarihler", "tarihleri"})
 
 
+def _degraded_calendar(
+    query: str,
+    db: Session,
+    trace: DecisionTrace | None = None,
+    purpose: str = "fallback",
+) -> tuple[Optional[str], Optional[int]]:
+    """Deterministic Calendar V2 lookup (year/term/event safety, limit 1)."""
+    try:
+        result = retrieve_calendar_candidates(query, db, limit=1)
+    except Exception:
+        logger.exception("Calendar V2 retrieval hatası")
+        result = failed_calendar_result()
+    if trace is not None:
+        trace.record_calendar_route(result.trace_snapshot, purpose=purpose)
+    if not result.candidates:
+        return None, None
+    best = result.candidates[0]
+    return (
+        format_calendar_answer(best.period, best.event, best.start_date, best.end_date),
+        normalized_record_id(getattr(best, "id", None)),
+    )
+
+
 def search_calendar(
     query: str,
     db: Session,
@@ -173,17 +233,8 @@ def search_calendar(
     V2 never starts a Calendar-specific LLM call.
     """
     del use_llm
-    try:
-        result = retrieve_calendar_candidates(query, db, limit=1)
-    except Exception:
-        logger.exception("Calendar V2 retrieval hatası")
-        result = failed_calendar_result()
-    if trace is not None:
-        trace.record_calendar_route(result.trace_snapshot, purpose="fallback")
-    if not result.candidates:
-        return None
-    best = result.candidates[0]
-    return format_calendar_answer(best.period, best.event, best.start_date, best.end_date)
+    answer, _calendar_id = _degraded_calendar(query, db, trace)
+    return answer
 
 
 def _active_qna_lookup(db: Session):
@@ -267,6 +318,67 @@ _OUTCOME_BY_STATUS = {
 }
 
 
+def _availability_kind(status: LLMOutcomeStatus) -> CallOutcomeKind:
+    """Only infrastructure failures count against capability availability."""
+    if status in (LLMOutcomeStatus.MODEL_ERROR, LLMOutcomeStatus.TIMEOUT):
+        return CallOutcomeKind.FAILURE
+    if status is LLMOutcomeStatus.INVALID_OUTPUT:
+        return CallOutcomeKind.NEUTRAL
+    return CallOutcomeKind.SUCCESS
+
+
+def _capability_permit(prov, capability: LLMCapability):
+    config = prov.effective_config(capability)
+    key = breaker_key(capability.value, config.provider, config.model, config.fingerprint)
+    return config, LLM_CIRCUIT_BREAKER.acquire(key)
+
+
+def _trace_circuit(
+    trace: DecisionTrace | None,
+    *,
+    capability: LLMCapability,
+    purpose: str,
+    config,
+    permit,
+    record=None,
+    status: LLMOutcomeStatus | None = None,
+    failure_category: str | None = None,
+    degraded_reason: str | None = None,
+) -> None:
+    if trace is None:
+        return
+    trace.record_circuit({
+        "capability": capability.value,
+        "purpose": purpose,
+        "circuit_key": permit.key,
+        "provider": config.provider,
+        "model": config.model,
+        "config_fingerprint": config.fingerprint,
+        "circuit_state_before": permit.state_before.value,
+        "circuit_state_after": (
+            record.state_after.value if record is not None else permit.state_before.value
+        ),
+        "consecutive_failures_before": permit.failures_before,
+        "consecutive_failures_after": (
+            record.failures_after if record is not None else permit.failures_before
+        ),
+        "llm_call_skipped": not permit.allowed,
+        "probe_attempted": permit.probe,
+        "call_status": status.value if status is not None else None,
+        "availability_outcome": (
+            _availability_kind(status).value if status is not None else None
+        ),
+        "failure_kind": (
+            status.value if status in (
+                LLMOutcomeStatus.MODEL_ERROR, LLMOutcomeStatus.TIMEOUT
+            ) else None
+        ),
+        "failure_category": failure_category,
+        "transition": record.transition if record is not None else None,
+        "degraded_reason": degraded_reason,
+    })
+
+
 def _select_from_pool(
     query: str,
     calendar_entries: list,
@@ -278,8 +390,9 @@ def _select_from_pool(
 ) -> PoolSelection:
     """Eligible aday kümesini kurar ve Selector V2'yi en fazla bir kez çağırır.
 
-    Sıfır eligible aday → selector çağrılmaz (``NO_ELIGIBLE_CANDIDATES``).
-    Tek aday bile selector'dan geçer; otomatik bypass yoktur."""
+    Sıfır eligible aday → selector çağrılmaz (``NO_ELIGIBLE_CANDIDATES``,
+    circuit'e dokunulmaz). Tek aday bile selector'dan geçer. Selector circuit
+    OPEN ise çağrı yapılmaz (``CIRCUIT_OPEN``)."""
     build = _build_candidate_pool_result(
         query,
         calendar_entries,
@@ -290,7 +403,24 @@ def _select_from_pool(
         trace.record_retrieval({**build.trace_snapshot, "purpose": trace_purpose})
     if not build.candidates:
         return PoolSelection(SelectionOutcome.NO_ELIGIBLE_CANDIDATES, None, build)
-    result = prov.ask_with_result(query, list(build.candidates))
+
+    config, permit = _capability_permit(prov, LLMCapability.SELECTOR)
+    if not permit.allowed:
+        _trace_circuit(
+            trace, capability=LLMCapability.SELECTOR, purpose=trace_purpose,
+            config=config, permit=permit, degraded_reason="selector_circuit_open",
+        )
+        return PoolSelection(SelectionOutcome.CIRCUIT_OPEN, None, build)
+    try:
+        result = prov.ask_with_result(query, list(build.candidates))
+    except Exception:
+        record = LLM_CIRCUIT_BREAKER.record(permit, CallOutcomeKind.FAILURE)
+        _trace_circuit(
+            trace, capability=LLMCapability.SELECTOR, purpose=trace_purpose,
+            config=config, permit=permit, record=record,
+            status=LLMOutcomeStatus.MODEL_ERROR, failure_category="UNKNOWN",
+        )
+        raise
     if result.status is LLMOutcomeStatus.SUCCESS:
         # Provider doubles/custom providers must also respect the candidate set.
         allowed = {candidate.candidate_ref for candidate in build.candidates}
@@ -308,29 +438,83 @@ def _select_from_pool(
                 selected_candidate_source=None,
                 invalid_reason="unknown_candidate_ref",
             )
+    record = LLM_CIRCUIT_BREAKER.record(permit, _availability_kind(result.status))
+    _trace_circuit(
+        trace, capability=LLMCapability.SELECTOR, purpose=trace_purpose,
+        config=config, permit=permit, record=record, status=result.status,
+        failure_category=(
+            result.invocation.failure_category if result.invocation else None
+        ),
+    )
     outcome = _OUTCOME_BY_STATUS.get(result.status, SelectionOutcome.INVALID_OUTPUT)
     return PoolSelection(outcome, result, build)
 
 
-def _aggregate_outcome(outcomes: list[SelectionOutcome]) -> SelectionOutcome:
-    """No-answer aggregation across intents.
+def _degraded_request(
+    query: str,
+    db: Session,
+    routing_policy: RoutingGuardPolicy | None,
+    trace: DecisionTrace | None,
+    *,
+    mode: ExecutionMode,
+    reason: str,
+) -> LLMAnswerResult:
+    """Whole current turn → deterministic path (no analyzer/selector call).
 
-    A semantic decision (NONE / no eligible candidate) in any intent is final
-    and suppresses the error-compatibility fallback, which would otherwise
-    re-answer the raw turn and could override that NONE. Only when every
-    intent failed with a selector error does the compatibility path run.
-    """
-    if not outcomes:
-        return SelectionOutcome.MODEL_ERROR
-    if SelectionOutcome.SEMANTIC_NONE in outcomes:
-        return SelectionOutcome.SEMANTIC_NONE
-    if SelectionOutcome.NO_ELIGIBLE_CANDIDATES in outcomes:
-        return SelectionOutcome.NO_ELIGIBLE_CANDIDATES
-    if SelectionOutcome.INVALID_OUTPUT in outcomes:
-        return SelectionOutcome.INVALID_OUTPUT
-    if SelectionOutcome.TIMEOUT in outcomes:
-        return SelectionOutcome.TIMEOUT
-    return SelectionOutcome.MODEL_ERROR
+    Used for admin OFF and for analyzer failure/OPEN circuit: no LLM context
+    resolution exists, so the raw current turn with the deterministic date gate
+    is used (the pre-V2 behavior)."""
+    degraded = answer_in_degraded_mode(
+        query, db,
+        routing_policy=routing_policy,
+        calendar_gate="date_query",
+        reason=reason,
+        trace=trace,
+        purpose="request",
+        query_kind="raw_current_turn",
+    )
+    intent = IntentResult(
+        position=1,
+        resolution=(
+            IntentResolution.DEGRADED_SELECTED
+            if degraded.answer else IntentResolution.DEGRADED_NONE
+        ),
+        execution_mode=mode,
+        answer=degraded.answer,
+        source=degraded.source if degraded.answer else None,
+        qna_id=degraded.qna_id,
+        calendar_id=degraded.calendar_id,
+        degraded_reason=reason,
+    )
+    return _compose((intent,), mode=mode, degraded_reason=reason)
+
+
+def _compose(
+    intents: tuple,
+    *,
+    mode: ExecutionMode,
+    degraded_reason: Optional[str] = None,
+) -> LLMAnswerResult:
+    """Deterministic multi-answer composition: intent order, exact dedupe."""
+    answers, sources, qna_ids = [], [], []
+    for intent in intents:
+        if intent.answer and intent.answer not in answers:
+            answers.append(intent.answer)
+            sources.append(intent.source)
+            if intent.qna_id is not None:
+                qna_ids.append(intent.qna_id)
+    # Existing source vocabulary only: any selector answer → "llm",
+    # otherwise the (first) deterministic source.
+    source = "llm" if "llm" in sources else (sources[0] if sources else "none")
+    return LLMAnswerResult(
+        answer="\n\n".join(answers) if answers else None,
+        source=source,
+        execution_mode=mode,
+        intents=tuple(intents),
+        selected_qna_ids=qna_ids,
+        answer_count=len(answers),
+        degraded_reason=degraded_reason,
+    )
 
 
 def _llm_answer(
@@ -342,9 +526,9 @@ def _llm_answer(
 ) -> LLMAnswerResult:
     """Analyze the current turn, then run eligibility + Selector V2 per intent.
 
-    Context is consumed only by the analyzer. Retrieval and selector receive
-    the resolved intent, never the conversation. Each intent is independent:
-    one intent's NONE never removes another intent's valid answer."""
+    Context is consumed only by the analyzer. Each intent is independent: a
+    NONE is final for that intent only, and a selector failure degrades only
+    that intent (using its own ``resolved_text``)."""
     prov = get_llm_provider(db)
     if prov is None:
         raise RuntimeError("LLM sağlayıcısı yok (anahtar DB'de/env'de bulunamadı)")
@@ -352,9 +536,50 @@ def _llm_answer(
         trace.set_llm(enabled=True, configs=getattr(prov, "configs", None))
 
     previous_user_turns = _previous_user_turns(conversation_context)
-    analysis_result = prov.analyze_intents_with_result(query, previous_user_turns)
+    analyzer_config, permit = _capability_permit(prov, LLMCapability.INTENT_ANALYZER)
+    if not permit.allowed:
+        _trace_circuit(
+            trace, capability=LLMCapability.INTENT_ANALYZER, purpose="request",
+            config=analyzer_config, permit=permit,
+            degraded_reason="intent_analyzer_circuit_open",
+        )
+        return _degraded_request(
+            query, db, routing_policy, trace,
+            mode=ExecutionMode.CIRCUIT_DEGRADED,
+            reason="intent_analyzer_circuit_open",
+        )
+    try:
+        analysis_result = prov.analyze_intents_with_result(query, previous_user_turns)
+    except Exception:
+        record = LLM_CIRCUIT_BREAKER.record(permit, CallOutcomeKind.FAILURE)
+        _trace_circuit(
+            trace, capability=LLMCapability.INTENT_ANALYZER, purpose="request",
+            config=analyzer_config, permit=permit, record=record,
+            status=LLMOutcomeStatus.MODEL_ERROR, failure_category="UNKNOWN",
+            degraded_reason="intent_analyzer_model_error",
+        )
+        logger.exception("Intent Analyzer hattı hatası")
+        return _degraded_request(
+            query, db, routing_policy, trace,
+            mode=ExecutionMode.REQUEST_DEGRADED,
+            reason="intent_analyzer_model_error",
+        )
+    status = analysis_result.status
+    record = LLM_CIRCUIT_BREAKER.record(permit, _availability_kind(status))
+    analyzer_degraded_reason = (
+        f"intent_analyzer_{status.value}"
+        if status is not LLMOutcomeStatus.SUCCESS else None
+    )
+    _trace_circuit(
+        trace, capability=LLMCapability.INTENT_ANALYZER, purpose="request",
+        config=analyzer_config, permit=permit, record=record, status=status,
+        failure_category=(
+            analysis_result.invocation.failure_category
+            if analysis_result.invocation else None
+        ),
+        degraded_reason=analyzer_degraded_reason,
+    )
     if trace is not None:
-        analyzer_config = prov.effective_config(LLMCapability.INTENT_ANALYZER)
         trace.record_intent_analyzer(
             analysis_result,
             analyzer_config.to_dict(),
@@ -362,11 +587,17 @@ def _llm_answer(
             current_input_length=len(query),
             previous_user_context_count=len(previous_user_turns),
         )
+    if analyzer_degraded_reason is not None:
+        # The analyzer contract did not complete: keep its lossless raw SINGLE
+        # and answer the whole current turn deterministically. No selector.
+        return _degraded_request(
+            query, db, routing_policy, trace,
+            mode=ExecutionMode.REQUEST_DEGRADED,
+            reason=analyzer_degraded_reason,
+        )
 
     active_lookup = _active_qna_lookup(db)
-    answers = []
-    selected_qna_ids = []
-    outcomes: list[SelectionOutcome] = []
+    results = []
     for position, intent in enumerate(analysis_result.analysis.intents, start=1):
         purpose = f"intent_{position}"
         if intent.calendar_relevant:
@@ -393,50 +624,225 @@ def _llm_answer(
                 purpose,
                 active_qna_lookup=active_lookup,
             )
+            outcome = selection.outcome
         except Exception:
             logger.exception("Selector V2 intent hattı hatası")
-            outcomes.append(SelectionOutcome.MODEL_ERROR)
+            selection = None
+            outcome = SelectionOutcome.MODEL_ERROR
             if trace is not None:
                 trace.record_selector_pipeline_error(purpose=purpose)
-            continue
-        outcomes.append(selection.outcome)
-        if trace is not None:
-            selector_config = prov.effective_config(LLMCapability.SELECTOR)
+        if trace is not None and selection is not None:
             if selection.result is None:
-                trace.record_selector_skipped(
-                    purpose=purpose, outcome=selection.outcome.value
-                )
+                trace.record_selector_skipped(purpose=purpose, outcome=outcome.value)
             else:
+                selector_config = prov.effective_config(LLMCapability.SELECTOR)
                 trace.record_selector(
                     selection.result,
-                    outcome=selection.outcome.value,
+                    outcome=outcome.value,
                     config=selector_config.to_dict(),
                     config_fingerprint=selector_config.fingerprint,
                     candidate_refs=selection.build.trace_snapshot["selector_candidate_refs"],
                     candidate_kinds=selection.build.trace_snapshot["selector_candidate_kinds"],
                     candidate_qna_ids=selection.build.trace_snapshot["candidate_qna_ids"],
                     purpose=purpose,
-                    used_in_final=selection.outcome is SelectionOutcome.SELECTED,
+                    used_in_final=outcome is SelectionOutcome.SELECTED,
                 )
-        result = selection.result
-        if (
-            selection.outcome is SelectionOutcome.SELECTED
-            and result.answer
-            and result.answer not in answers
-        ):
-            answers.append(result.answer)
-            if result.selected_qna_id is not None:
-                selected_qna_ids.append(result.selected_qna_id)
 
-    if answers:
-        return LLMAnswerResult(
-            "\n\n".join(answers), SelectionOutcome.SELECTED, selected_qna_ids,
-            answer_count=len(answers), intent_outcomes=tuple(outcomes),
-        )
-    return LLMAnswerResult(
-        None, _aggregate_outcome(outcomes), [], answer_count=0,
-        intent_outcomes=tuple(outcomes),
+        if outcome is SelectionOutcome.SELECTED:
+            result = selection.result
+            results.append(IntentResult(
+                position, IntentResolution.SELECTED, ExecutionMode.NORMAL_LLM,
+                answer=result.answer, source="llm",
+                qna_id=result.selected_qna_id,
+                calendar_id=result.selected_calendar_id,
+                selection_outcome=outcome,
+            ))
+        elif outcome in (
+            SelectionOutcome.SEMANTIC_NONE, SelectionOutcome.NO_ELIGIBLE_CANDIDATES
+        ):
+            # Final semantic decision for THIS intent: no degraded fallback.
+            results.append(IntentResult(
+                position,
+                IntentResolution(outcome.value),
+                ExecutionMode.NORMAL_LLM,
+                selection_outcome=outcome,
+            ))
+        else:
+            mode = (
+                ExecutionMode.CIRCUIT_DEGRADED
+                if outcome is SelectionOutcome.CIRCUIT_OPEN
+                else ExecutionMode.REQUEST_DEGRADED
+            )
+            reason = (
+                f"selector_{outcome.value}" if selection is not None
+                else "selector_pipeline_error"
+            )
+            # Only this intent, only its resolved text (never the raw turn).
+            degraded = answer_in_degraded_mode(
+                intent.resolved_text, db,
+                routing_policy=routing_policy,
+                calendar_gate="intent_relevant" if intent.calendar_relevant else "closed",
+                reason=reason,
+                trace=trace,
+                purpose=purpose,
+                query_kind="resolved_intent",
+            )
+            results.append(IntentResult(
+                position,
+                (
+                    IntentResolution.DEGRADED_SELECTED
+                    if degraded.answer else IntentResolution.DEGRADED_NONE
+                ),
+                mode,
+                answer=degraded.answer,
+                source=degraded.source if degraded.answer else None,
+                qna_id=degraded.qna_id,
+                calendar_id=degraded.calendar_id,
+                selection_outcome=outcome,
+                degraded_reason=reason,
+            ))
+
+    modes = {item.execution_mode for item in results}
+    request_mode = (
+        ExecutionMode.CIRCUIT_DEGRADED if ExecutionMode.CIRCUIT_DEGRADED in modes
+        else ExecutionMode.REQUEST_DEGRADED if ExecutionMode.REQUEST_DEGRADED in modes
+        else ExecutionMode.NORMAL_LLM
     )
+    reasons = [item.degraded_reason for item in results if item.degraded_reason]
+    return _compose(
+        tuple(results), mode=request_mode,
+        degraded_reason=reasons[0] if reasons else None,
+    )
+
+
+def _fallback_safe_hits(
+    hits: list,
+    policy: RoutingGuardPolicy,
+    active_lookup,
+    reasons: dict,
+) -> list:
+    """Degraded QnA eligibility: fallback guard semantics + ``status=1``.
+
+    ``semantic_selector_only``, expired and not-yet-valid guarded QnA cannot be
+    a degraded answer. Guard or activity errors fail closed."""
+    def exclude(reason: str) -> None:
+        reasons[reason] = reasons.get(reason, 0) + 1
+
+    allowed = []
+    for hit in hits:
+        qna_id = normalized_record_id(hit.get("qna_id"))
+        if qna_id is None:
+            exclude(ExclusionReason.MISSING_QNA_ID.value)
+            continue
+        try:
+            permitted = policy.decision(qna_id).fallback_allowed
+        except Exception:
+            exclude(ExclusionReason.GUARD_EVALUATION_ERROR.value)
+            continue
+        if not permitted:
+            exclude("guard_fallback_blocked")
+            continue
+        allowed.append((qna_id, hit))
+    if not allowed:
+        return []
+    try:
+        active = active_lookup([qna_id for qna_id, _ in allowed])
+    except Exception:
+        logger.exception("Degraded QnA aktiflik kontrolü başarısız; QnA bloke edildi")
+        for _ in allowed:
+            exclude(ExclusionReason.ACTIVITY_LOOKUP_FAILED.value)
+        return []
+    safe = []
+    for qna_id, hit in allowed:
+        if qna_id in active:
+            safe.append({**hit, "qna_id": qna_id})
+        else:
+            exclude(ExclusionReason.INACTIVE_OR_MISSING.value)
+    return safe
+
+
+def answer_in_degraded_mode(
+    query: str,
+    db: Session,
+    *,
+    routing_policy: RoutingGuardPolicy | None = None,
+    calendar_gate: str = "date_query",
+    reason: str = "llm_disabled_or_unavailable",
+    trace: DecisionTrace | None = None,
+    purpose: str = "request",
+    query_kind: str = "raw_current_turn",
+) -> DegradedAnswer:
+    """The single deterministic degraded-answer service. No LLM call.
+
+    Order: Calendar (gate) → Meili (≥ MEILI_THERESHOLD) → Qdrant
+    (> QDRANT_THERESHOLD) → no answer. Exactly one curated answer or none.
+
+    ``calendar_gate``: ``date_query`` (deterministic date-question gate; used
+    without analyzer), ``intent_relevant`` (analyzer said calendar_relevant)
+    or ``closed``. Calendar always goes through Calendar V2 year/term/event
+    rules; there is no random-event or all-rows fallback."""
+    run = {
+        "purpose": purpose,
+        "degraded_reason": reason,
+        "query_kind": query_kind,
+        "calendar_gate": calendar_gate,
+        "degraded_calendar_attempted": False,
+        "degraded_meili_attempted": False,
+        "degraded_qdrant_attempted": False,
+        "degraded_selected_source": None,
+        "degraded_selected_qna_id": None,
+        "degraded_selected_calendar_id": None,
+        "degraded_no_answer": False,
+        "exclusion_reasons": {},
+    }
+
+    def finish(result: DegradedAnswer) -> DegradedAnswer:
+        if result.answer:
+            run["degraded_selected_source"] = result.source
+            run["degraded_selected_qna_id"] = result.qna_id
+            run["degraded_selected_calendar_id"] = result.calendar_id
+        else:
+            run["degraded_no_answer"] = True
+        if trace is not None:
+            trace.record_degraded(run)
+        return result
+
+    open_calendar = (
+        calendar_gate == "intent_relevant"
+        or (calendar_gate == "date_query" and is_date_query(query))
+    )
+    if open_calendar:
+        run["degraded_calendar_attempted"] = True
+        calendar_answer, calendar_id = _degraded_calendar(
+            query, db, trace, purpose=f"degraded_{purpose}"
+        )
+        if calendar_answer:
+            return finish(DegradedAnswer(
+                calendar_answer, "academic_calendar", calendar_id=calendar_id
+            ))
+
+    policy = routing_policy or RoutingGuardPolicy.empty()
+    active_lookup = _active_qna_lookup(db)
+    run["degraded_meili_attempted"] = True
+    hits = _fallback_safe_hits(
+        meili_search_safe(query, limit=3), policy, active_lookup, run["exclusion_reasons"]
+    )
+    if hits and hits[0]["score"] >= MEILI_THERESHOLD:
+        return finish(DegradedAnswer(hits[0]["answer"], "meilisearch", hits[0]["qna_id"]))
+
+    try:
+        run["degraded_qdrant_attempted"] = True
+        qhits = _fallback_safe_hits(
+            QDRANT_PROVIDER.search(query, limit=5), policy, active_lookup,
+            run["exclusion_reasons"],
+        )
+        if qhits and qhits[0]["score"] > QDRANT_THERESHOLD:
+            return finish(
+                DegradedAnswer(qhits[0]["answer"], "qdrant_vector", qhits[0]["qna_id"])
+            )
+    except Exception:
+        pass
+    return finish(DegradedAnswer(None, "none"))
 
 
 def _fallback_answer(
@@ -447,55 +853,15 @@ def _fallback_answer(
     trace: DecisionTrace | None = None,
     fallback_reason: str = "llm_disabled_or_unavailable",
 ) -> tuple:
-    """Eşik tabanlı yedek zincir. (answer, source) döner; bulunamazsa (None, "none").
-
-    ``use_calendar``: kelime tabanlı takvim kapısını çalıştır. Yalnızca LLM
-    tamamen erişilemezken (kapalı/hata) True olmalı. LLM çalışıp "uygun yok"
-    dediyse takvim zaten aday havuzundaydı ve LLM onu reddetti; o durumda bu
-    kapı yeniden AÇILMAMALI (yoksa "vize sınavına nasıl çalışmalıyım" gibi
-    sorular tekrar yanlışlıkla bir tarihe düşer)."""
-    if use_calendar and is_date_query(query):
-        cal = search_calendar(query, db, use_llm=False, trace=trace)
-        if cal:
-            if trace is not None:
-                trace.record_fallback(
-                    reason=fallback_reason, selected_source="academic_calendar"
-                )
-            return cal, "academic_calendar"
-
-    policy = routing_policy or RoutingGuardPolicy.empty()
-    hits = [
-        hit for hit in meili_search_safe(query, limit=3)
-        if policy.fallback_allows(hit)
-    ]
-    if hits and hits[0]["score"] >= MEILI_THERESHOLD:
-        if trace is not None:
-            trace.record_fallback(
-                reason=fallback_reason,
-                selected_source="meilisearch",
-                selected_qna_id=_normalized_qna_id(hits[0].get("qna_id")),
-            )
-        return hits[0]["answer"], "meilisearch"
-
-    try:
-        qhits = [
-            hit for hit in QDRANT_PROVIDER.search(query, limit=5)
-            if policy.fallback_allows(hit)
-        ]
-        if qhits and qhits[0]["score"] > QDRANT_THERESHOLD:
-            if trace is not None:
-                trace.record_fallback(
-                    reason=fallback_reason,
-                    selected_source="qdrant_vector",
-                    selected_qna_id=_normalized_qna_id(qhits[0].get("qna_id")),
-                )
-            return qhits[0]["answer"], "qdrant_vector"
-    except Exception:
-        pass
-
-    if trace is not None:
-        trace.record_fallback(reason=fallback_reason, selected_source="none")
-    return None, "none"
+    """Compatibility wrapper over ``answer_in_degraded_mode`` → (answer, source)."""
+    result = answer_in_degraded_mode(
+        query, db,
+        routing_policy=routing_policy,
+        calendar_gate="date_query" if use_calendar else "closed",
+        reason=fallback_reason,
+        trace=trace,
+    )
+    return (result.answer, result.source) if result.answer else (None, "none")
 
 
 def answer_question(
@@ -506,12 +872,13 @@ def answer_question(
 ) -> tuple:
     """Bir soruya cevap üretir. (answer, source) döner; cevap yoksa (None, "none").
 
-    - Selector SELECT                   → seçilen curated cevap (source "llm").
-    - Semantic NONE / eligible aday yok → final cevapsız; eşik/takvim yedeği YOK.
-    - Selector INVALID_OUTPUT           → uyumluluk yedeği, takvim kapısı kapalı.
-    - Selector MODEL_ERROR / TIMEOUT ya da hat hatası → uyumluluk yedeği
-      (takvim kapısı dahil); Phase 5 degraded-mode ile yeniden tasarlanacak.
-    - LLM kapalı                        → değişmemiş deterministik yol."""
+    - NORMAL_LLM: analyzer + selector; SELECT → curated cevap, semantic NONE /
+      eligible aday yok → o intent için final cevapsız (degraded yol YOK).
+    - REQUEST_DEGRADED / CIRCUIT_DEGRADED: yalnız etkilenen kısım (analyzer
+      → tüm ham turn; selector → yalnız o intent'in resolved_text'i)
+      deterministik degraded servise gider.
+    - ADMIN_DEGRADED: admin LLM OFF ya da sağlayıcı yok; LLM çağrısı yok.
+    Tek istek hatası DB'deki LLM_ENABLED ayarını asla değiştirmez."""
     try:
         routing_policy = RoutingGuardPolicy.load(db)
     except Exception:
@@ -524,77 +891,60 @@ def answer_question(
         return None, "none"
 
     llm_enabled = is_llm_enabled(db)
+    # Admin OFF → ON (explicit operator action) resets this node's breakers.
+    LLM_ADMIN_MODE_TRACKER.observe(llm_enabled, LLM_CIRCUIT_BREAKER)
     if trace is not None:
         trace.set_llm(enabled=llm_enabled, configs=None)
     if not llm_enabled:
-        # LLM kapalı → Phase 0 deterministik yol değişmeden (Phase 5 konusu).
-        return _fallback_answer(
-            query,
-            db,
-            use_calendar=True,
-            routing_policy=routing_policy,
-            trace=trace,
-            fallback_reason="llm_disabled_or_unavailable",
+        result = _degraded_request(
+            query, db, routing_policy, trace,
+            mode=ExecutionMode.ADMIN_DEGRADED,
+            reason="llm_disabled_or_unavailable",
         )
-
-    try:
-        llm_result = _llm_answer(
-            query, db, conversation_context, routing_policy, trace
-        )
-    except Exception as e:
-        # Sağlayıcı yok / analyzer hattı çöktü: seçim hiç yapılamadı.
-        logger.error(f"LLM ana yol hatası (yedeğe düşülüyor): {e}")
-        if trace is not None:
-            trace.record_selection_outcome(
-                SelectionOutcome.MODEL_ERROR.value, fallback_allowed=True
+    else:
+        try:
+            result = _llm_answer(
+                query, db, conversation_context, routing_policy, trace
             )
-        return _fallback_answer(
-            query,
-            db,
-            use_calendar=True,
-            routing_policy=routing_policy,
-            trace=trace,
-            fallback_reason="llm_model_error",
-        )
+        except Exception as e:
+            # Pipeline hatası (ör. sağlayıcı kurulamadı): request-level degraded.
+            logger.error(f"LLM ana yol hatası (degraded yola düşülüyor): {e}")
+            result = _degraded_request(
+                query, db, routing_policy, trace,
+                mode=ExecutionMode.REQUEST_DEGRADED,
+                reason="llm_pipeline_error",
+            )
 
-    outcome = llm_result.outcome
     if trace is not None:
-        trace.record_selection_outcome(
-            outcome.value,
-            fallback_allowed=(
-                llm_result.answer is None and outcome in SELECTION_ERROR_OUTCOMES
-            ),
-            intent_outcomes=[item.value for item in llm_result.intent_outcomes],
+        trace.record_execution(
+            execution_mode=result.execution_mode.value,
+            degraded_reason=result.degraded_reason,
+            intents=[
+                {
+                    "position": item.position,
+                    "resolution": item.resolution.value,
+                    "execution_mode": item.execution_mode.value,
+                    "selection_outcome": (
+                        item.selection_outcome.value if item.selection_outcome else None
+                    ),
+                    "degraded_reason": item.degraded_reason,
+                    "answer_source": item.source,
+                    "qna_id": item.qna_id,
+                    "calendar_id": item.calendar_id,
+                }
+                for item in result.intents
+            ],
         )
-    if llm_result.answer:
+    if result.answer:
         if trace is not None:
             trace.finalize(
                 outcome="answer",
-                source="llm",
-                qna_ids=llm_result.selected_qna_ids,
-                answer_count=llm_result.answer_count,
+                source=result.source,
+                qna_ids=result.selected_qna_ids,
+                answer_count=result.answer_count,
             )
-        return llm_result.answer, "llm"
-
-    if outcome not in SELECTION_ERROR_OUTCOMES:
-        # SEMANTIC_NONE / NO_ELIGIBLE_CANDIDATES: final no-answer. Meili,
-        # Qdrant ve Calendar yedekleri bu karardan sonra ÇALIŞMAZ.
-        return None, "none"
-
-    # Selector sistem hatası: Phase 5'e kadar mevcut uyumluluk yedeği. Geçersiz
-    # çıktı Phase 0'daki gibi takvim kapısını açmaz; model hatası/timeout açar.
-    return _fallback_answer(
-        query,
-        db,
-        use_calendar=outcome is not SelectionOutcome.INVALID_OUTPUT,
-        routing_policy=routing_policy,
-        trace=trace,
-        fallback_reason={
-            SelectionOutcome.INVALID_OUTPUT: "selector_invalid_output",
-            SelectionOutcome.TIMEOUT: "selector_timeout",
-            SelectionOutcome.MODEL_ERROR: "selector_model_error",
-        }[outcome],
-    )
+        return result.answer, result.source
+    return None, "none"
 
 
 def guard_safe_suggestions(

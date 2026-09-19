@@ -59,8 +59,15 @@ def test_maintenance_roundtrip_blocks_only_widget(
     with SessionLocal() as db:
         assert db.get(SystemConfig, MAINTENANCE_CONFIG_KEY).value == "false"
 
+    from core.database import QnA
+
+    with SessionLocal() as db:
+        db.add(QnA(id=1, question_text="kayıt nasıl yapılır",
+                   answer_text="Kayıt için OBS'yi kullanın.", status=1))
+        db.commit()
     providers.FakeMeili.hits = [{
         "id": 1,
+        "qna_id": 1,
         "question": "kayıt nasıl yapılır",
         "answer": "Kayıt için OBS'yi kullanın.",
         "score": 0.95,

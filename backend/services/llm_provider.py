@@ -321,6 +321,30 @@ def _is_timeout_exception(exc: Exception) -> bool:
     return isinstance(exc, TimeoutError) or "timeout" in exc.__class__.__name__.lower()
 
 
+def _failure_category(exc: Exception) -> str:
+    """Coarse, secret-free category from exception class/status only."""
+    if _is_timeout_exception(exc):
+        return "TIMEOUT"
+    name = exc.__class__.__name__.lower()
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    try:
+        status = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status = None
+    if "ratelimit" in name or status == 429:
+        return "RATE_LIMIT"
+    if "authentication" in name or "permission" in name or status in (401, 403):
+        return "AUTH"
+    if "connection" in name or "network" in name or isinstance(exc, ConnectionError):
+        return "NETWORK"
+    if (status is not None and status >= 500) or "internalserver" in name or "unavailable" in name:
+        return "PROVIDER_5XX"
+    module = exc.__class__.__module__ or ""
+    if module.startswith(("openai", "google", "httpx")):
+        return "SDK_ERROR"
+    return "UNKNOWN"
+
+
 def _error_result(
     exc: Exception, requested_model: str, started: float
 ) -> LLMInvocationResult:
@@ -334,6 +358,7 @@ def _error_result(
         latency_ms=(time.perf_counter() - started) * 1000,
         metadata=LLMResponseMetadata(requested_model=requested_model),
         error_type=exc.__class__.__name__,
+        failure_category=_failure_category(exc),
     )
 
 

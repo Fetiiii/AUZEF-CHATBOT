@@ -22,7 +22,7 @@ Phase 4 — Candidate Eligibility + Selector V2
 STATUS: PASS
 
 Phase 5 — Degraded Mode
-STATUS: NOT_STARTED
+STATUS: PASS
 
 Phase 6 — Model Registry + Admin Control
 STATUS: NOT_STARTED
@@ -143,3 +143,30 @@ Detailed evidence: [`PHASE_3_REPORT.md`](PHASE_3_REPORT.md).
 - [x] Phase 5 not started.
 
 Detailed evidence: [`PHASE_4_REPORT.md`](PHASE_4_REPORT.md).
+
+## Phase 5 acceptance record
+
+- [x] SEMANTIC_NONE and NO_ELIGIBLE_CANDIDATES never open degraded mode or
+      touch the circuit breaker; INVALID_OUTPUT/MODEL_ERROR/TIMEOUT are never
+      semantic NONE.
+- [x] Admin LLM OFF is the formal `ADMIN_DEGRADED` mode (no analyzer/selector
+      call, no breaker mutation); request failures never change `LLM_ENABLED`.
+- [x] One deterministic degraded service (`answer_in_degraded_mode`):
+      Calendar V2 → Meili ≥0.90 → Qdrant >0.75; thresholds unchanged; guard
+      fallback semantics, `status=1`, fail-closed guard/activity errors.
+- [x] Analyzer MODEL_ERROR/TIMEOUT/INVALID_OUTPUT/OPEN → raw current turn
+      degraded, no selector; only infra errors count against the breaker.
+- [x] Selector failures degrade only the affected intent on its
+      `resolved_text`; g25 resolved (NONE stays final, error intent degrades,
+      raw multi-intent turn never re-answered).
+- [x] Capability/config-scoped, thread-safe CLOSED/OPEN/HALF_OPEN breaker with
+      configurable threshold (3) and cooldown (60 s), single HALF_OPEN probe,
+      success reset, admin OFF → ON reset; node-local by design.
+- [x] Decision trace v5: execution mode, per-intent resolution, circuit state,
+      degraded provenance; PII-safe.
+- [x] Phase 2/3/4 normal paths unchanged; no model/provider/reasoning change;
+      no live API call.
+- [x] Targeted 33/33; full suite no new failure (repository-root 341/341).
+- [x] Phase 6 not started.
+
+Detailed evidence: [`PHASE_5_REPORT.md`](PHASE_5_REPORT.md).

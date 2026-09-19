@@ -164,13 +164,26 @@ def _wire(monkeypatch, provider, spy, *, calendar_rows=(), llm_enabled=True):
 
 def _forbid_fallback(monkeypatch, answer_pipeline):
     monkeypatch.setattr(
-        answer_pipeline, "_fallback_answer",
-        lambda *_a, **_k: pytest.fail("threshold fallback must not run"),
+        answer_pipeline, "answer_in_degraded_mode",
+        lambda *_a, **_k: pytest.fail("degraded/threshold fallback must not run"),
     )
     monkeypatch.setattr(
-        answer_pipeline, "search_calendar",
+        answer_pipeline, "_degraded_calendar",
         lambda *_a, **_k: pytest.fail("calendar fallback must not run"),
     )
+
+
+def _capture_degraded(monkeypatch, answer_pipeline, answer=None, source="meilisearch"):
+    calls = []
+
+    def degraded(query, _db, **kwargs):
+        calls.append({"query": query, **kwargs})
+        if answer:
+            return answer_pipeline.DegradedAnswer(answer, source, qna_id=77)
+        return answer_pipeline.DegradedAnswer(None, "none")
+
+    monkeypatch.setattr(answer_pipeline, "answer_in_degraded_mode", degraded)
+    return calls
 
 
 def _calendar_row(row_id=17, event="Bütünleme Sınavları"):
@@ -333,7 +346,8 @@ def test_zero_eligible_candidates_skips_selector_and_forces_no_answer(db, monkey
     assert snapshot["selectors"][0]["selector_called"] is False
     assert snapshot["selectors"][0]["selector_status"] == "no_eligible_candidates"
     assert snapshot["selectors"][0]["semantic_none"] is False
-    assert snapshot["selection"]["aggregate_outcome"] == "no_eligible_candidates"
+    assert snapshot["execution"]["intents"][0]["resolution"] == "no_eligible_candidates"
+    assert snapshot["execution"]["execution_mode"] == "NORMAL_LLM"
     assert snapshot["fallback"]["fallback_entered"] is False
 
 
@@ -420,7 +434,7 @@ def test_semantic_none_is_final_with_no_meili_qdrant_or_calendar_fallback(
     )
     pipeline = _wire(monkeypatch, provider, spy, calendar_rows=[_calendar_row()])
     monkeypatch.setattr(
-        pipeline, "search_calendar",
+        pipeline, "_degraded_calendar",
         lambda *_a, **_k: pytest.fail("calendar fallback must not run"),
     )
     trace = DecisionTrace(endpoint="test")
@@ -431,7 +445,9 @@ def test_semantic_none_is_final_with_no_meili_qdrant_or_calendar_fallback(
     snapshot = trace.to_dict()
     assert snapshot["selectors"][0]["selector_status"] == "semantic_none"
     assert snapshot["selectors"][0]["semantic_none"] is True
-    assert snapshot["selection"]["aggregate_outcome"] == "semantic_none"
+    assert snapshot["execution"]["intents"][0]["resolution"] == "semantic_none"
+    assert snapshot["execution"]["execution_mode"] == "NORMAL_LLM"
+    assert snapshot["degraded"] == []
     assert snapshot["fallback"]["fallback_entered"] is False
     assert snapshot["fallback"]["meili_fallback_used"] is False
     assert snapshot["fallback"]["qdrant_fallback_used"] is False
@@ -499,23 +515,18 @@ def test_explicit_null_ref_is_a_valid_none():
     "raw",
     ["3", '{"decision":"SELECT","candidate_ref":"qna:999999"}', '{"decision":"MAYBE"}'],
 )
-def test_invalid_output_enters_error_compatibility_path_not_none_path(
+def test_invalid_output_enters_degraded_path_not_none_path(
     db, monkeypatch, raw
 ):
     _seed_qna(db, {1: ("q", "a")})
     provider = ScriptedProvider(_analysis("soru"), [raw])
     pipeline = _wire(monkeypatch, provider, RetrievalSpy([_hit(1, "q", "a")]))
-    captured = {}
-
-    def fallback(_query, _db, **kwargs):
-        captured.update(kwargs)
-        return None, "none"
-
-    monkeypatch.setattr(pipeline, "_fallback_answer", fallback)
+    calls = _capture_degraded(monkeypatch, pipeline)
     trace = DecisionTrace(endpoint="test")
     pipeline.answer_question("soru", db, trace=trace)
-    assert captured["fallback_reason"] == "selector_invalid_output"
-    assert captured["use_calendar"] is False
+    assert calls[0]["reason"] == "selector_invalid_output"
+    assert calls[0]["calendar_gate"] == "closed"  # intent not calendar_relevant
+    assert calls[0]["query_kind"] == "resolved_intent"
     selector = trace.to_dict()["selectors"][0]
     assert selector["invalid_output"] is True
     assert selector["semantic_none"] is False
@@ -529,27 +540,17 @@ def test_invalid_output_enters_error_compatibility_path_not_none_path(
         (TimeoutError("late"), "timeout", "selector_timeout"),
     ],
 )
-def test_model_error_and_timeout_use_explicit_compatibility_fallback(
+def test_model_error_and_timeout_use_explicit_degraded_path(
     db, monkeypatch, error, outcome, reason
 ):
     _seed_qna(db, {1: ("q", "a")})
     provider = ScriptedProvider(_analysis("soru"), error=error)
     pipeline = _wire(monkeypatch, provider, RetrievalSpy([_hit(1, "q", "a")]))
-    captured = {}
-
-    def fallback(_query, _db, **kwargs):
-        captured.update(kwargs)
-        return "compat", "meilisearch"
-
-    monkeypatch.setattr(pipeline, "_fallback_answer", fallback)
+    calls = _capture_degraded(monkeypatch, pipeline, answer="compat")
     trace = DecisionTrace(endpoint="test")
     assert pipeline.answer_question("soru", db, trace=trace) == ("compat", "meilisearch")
-    assert captured == {
-        "use_calendar": True,
-        "routing_policy": captured["routing_policy"],
-        "trace": trace,
-        "fallback_reason": reason,
-    }
+    assert [(c["query"], c["reason"]) for c in calls] == [("soru", reason)]
+    assert trace.to_dict()["execution"]["execution_mode"] == "REQUEST_DEGRADED"
     selector = trace.to_dict()["selectors"][0]
     assert selector["selector_status"] == outcome
     assert selector[outcome] is True
@@ -670,17 +671,17 @@ def test_one_intent_none_does_not_remove_other_intent_answer(db, monkeypatch):
     assert statuses == ["selected", "semantic_none"]
 
 
-def test_mixed_none_and_error_without_answer_does_not_override_none(db, monkeypatch):
+def test_mixed_none_and_error_degrades_only_the_error_intent(db, monkeypatch):
+    """Phase 5 (g25): the NONE stays final; only intent B degrades on its text."""
     _seed_qna(db, {1: ("q", "a")})
     provider = ScriptedProvider(_analysis("A", "B"), ['{"decision":"NONE"}', "bozuk"])
     pipeline = _wire(monkeypatch, provider, RetrievalSpy([_hit(1, "q", "a")]))
-    _forbid_fallback(monkeypatch, pipeline)
+    calls = _capture_degraded(monkeypatch, pipeline, answer="B cevabı")
     trace = DecisionTrace(endpoint="test")
-    assert pipeline.answer_question("A ve B", db, trace=trace) == (None, "none")
-    selection = trace.to_dict()["selection"]
-    assert selection["intent_outcomes"] == ["semantic_none", "invalid_output"]
-    assert selection["aggregate_outcome"] == "semantic_none"
-    assert selection["error_fallback_allowed"] is False
+    assert pipeline.answer_question("A ve B", db, trace=trace) == ("B cevabı", "meilisearch")
+    assert [c["query"] for c in calls] == ["B"]
+    intents = trace.to_dict()["execution"]["intents"]
+    assert [item["resolution"] for item in intents] == ["semantic_none", "degraded_selected"]
 
 
 # ── candidate budget (§50) ──────────────────────────────────────────────────
@@ -820,21 +821,15 @@ def test_llm_off_never_calls_analyzer_or_selector(db, monkeypatch):
         answer_pipeline, "get_llm_provider",
         lambda _db: pytest.fail("LLM provider must not be requested when LLM is off"),
     )
-    captured = {}
-
-    def fallback(_query, _db, **kwargs):
-        captured.update(kwargs)
-        return None, "none"
-
-    monkeypatch.setattr(answer_pipeline, "_fallback_answer", fallback)
+    calls = _capture_degraded(monkeypatch, answer_pipeline)
     answer_pipeline.answer_question("Final ne zaman?", db)
-    assert captured["use_calendar"] is True
-    assert captured["fallback_reason"] == "llm_disabled_or_unavailable"
+    assert calls[0]["calendar_gate"] == "date_query"
+    assert calls[0]["reason"] == "llm_disabled_or_unavailable"
 
 
 def test_selection_outcome_values_are_distinct():
     values = {item.value for item in SelectionOutcome}
     assert values == {
         "selected", "semantic_none", "no_eligible_candidates",
-        "invalid_output", "model_error", "timeout",
+        "invalid_output", "model_error", "timeout", "circuit_open",
     }

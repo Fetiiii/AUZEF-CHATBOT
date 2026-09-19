@@ -189,6 +189,11 @@ def clean_tables():
     providers.FakeQdrant.hits = []
     providers.FakeQdrant.batch_calls = []
     providers.FakeQdrant.single_calls = 0
+    # Process-local LLM circuit breaker / admin-mode tracker must not leak
+    # state between tests.
+    from services.circuit_breaker import LLM_ADMIN_MODE_TRACKER, LLM_CIRCUIT_BREAKER
+    LLM_CIRCUIT_BREAKER.reset_all()
+    LLM_ADMIN_MODE_TRACKER.reset()
     yield
 
 

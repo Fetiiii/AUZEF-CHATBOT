@@ -29,6 +29,7 @@ from admin.auth import (
     current_user as _current_user,
     hash_password,
 )
+from services.circuit_breaker import LLM_CIRCUIT_BREAKER
 from services.calendar_retrieval import (
     CURRENT_TERM_CONFIG_KEY,
     CURRENT_YEAR_CONFIG_KEY,
@@ -219,6 +220,11 @@ def get_llm_settings(db: Session = Depends(get_db)):
 def update_llm_settings(body: LLMSettingsRequest, db: Session = Depends(get_db)):
     if body.enabled is not None:
         _set_config(db, "LLM_ENABLED", "true" if body.enabled else "false")
+        if body.enabled:
+            # Manual re-enable is an explicit operator action: this node's
+            # capability breakers start CLOSED (other nodes reset when they
+            # observe the OFF → ON transition on their next request).
+            LLM_CIRCUIT_BREAKER.reset_all()
     if body.openrouter_api_key is not None:
         key = body.openrouter_api_key.strip()
         if key and (len(key) < 20 or " " in key):

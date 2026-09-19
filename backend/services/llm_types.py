@@ -53,6 +53,8 @@ class LLMInvocationResult:
     latency_ms: float
     metadata: LLMResponseMetadata
     error_type: Optional[str] = None
+    # Safe coarse category for MODEL_ERROR/TIMEOUT (never raw error text).
+    failure_category: Optional[str] = None
 
 
 class SelectionOutcome(str, Enum):
@@ -69,13 +71,41 @@ class SelectionOutcome(str, Enum):
     INVALID_OUTPUT = "invalid_output"
     MODEL_ERROR = "model_error"
     TIMEOUT = "timeout"
+    # Selector call skipped because its capability circuit is OPEN.
+    CIRCUIT_OPEN = "circuit_open"
 
 
 SELECTION_ERROR_OUTCOMES = frozenset({
     SelectionOutcome.INVALID_OUTPUT,
     SelectionOutcome.MODEL_ERROR,
     SelectionOutcome.TIMEOUT,
+    SelectionOutcome.CIRCUIT_OPEN,
 })
+
+
+class IntentResolution(str, Enum):
+    """Final per-intent result after selection and, if needed, degradation."""
+
+    SELECTED = "selected"
+    SEMANTIC_NONE = "semantic_none"
+    NO_ELIGIBLE_CANDIDATES = "no_eligible_candidates"
+    DEGRADED_SELECTED = "degraded_selected"
+    DEGRADED_NONE = "degraded_none"
+
+
+class ExecutionMode(str, Enum):
+    """How a request (or intent) was answered.
+
+    NORMAL_LLM: analyzer and selector ran. ADMIN_DEGRADED: admin LLM OFF or no
+    configured provider; no LLM call at all. REQUEST_DEGRADED: a request-level
+    LLM error/invalid output sent (part of) the request to the deterministic
+    path. CIRCUIT_DEGRADED: an OPEN capability circuit skipped the LLM call.
+    """
+
+    NORMAL_LLM = "NORMAL_LLM"
+    ADMIN_DEGRADED = "ADMIN_DEGRADED"
+    REQUEST_DEGRADED = "REQUEST_DEGRADED"
+    CIRCUIT_DEGRADED = "CIRCUIT_DEGRADED"
 
 
 CandidateRefText = Annotated[str, Field(min_length=1, max_length=64)]

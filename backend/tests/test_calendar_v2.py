@@ -375,7 +375,7 @@ def test_llm_off_uses_deterministic_calendar_then_preserves_fallback_order(db, m
     )
     assert source == "academic_calendar"
     assert "Bütünleme" in answer
-    assert trace.to_dict()["calendar_routes"][0]["purpose"] == "fallback"
+    assert trace.to_dict()["calendar_routes"][0]["purpose"] == "degraded_request"
 
 
 def test_llm_off_procedure_query_does_not_open_calendar(db, monkeypatch):

@@ -142,6 +142,9 @@ def test_fallback_skips_active_selector_only_candidate(monkeypatch, db):
         {"id": 11, "qna_id": 11, "question": "serbest", "answer": "serbest", "score": 0.99, "source": "meilisearch"},
     ]
     monkeypatch.setattr(answer_pipeline, "meili_search_safe", lambda _q, limit: hits[:limit])
+    for qna_id in (10, 11):
+        db.add(QnA(id=qna_id, question_text=f"q{qna_id}", answer_text="a", status=1))
+    db.commit()
     policy = RoutingGuardPolicy({10: _guard()}, today=date(2026, 9, 17))
 
     assert answer_pipeline._fallback_answer(

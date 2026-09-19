@@ -19,8 +19,10 @@ logger = logging.getLogger("auzef")
 @dataclass
 class DecisionTrace:
     # v4: Selector V2 — typed candidate refs, eligibility, SELECT/NONE decision,
-    # NO_ELIGIBLE_CANDIDATES, selection outcome and guard-safe suggestions.
-    schema_version: int = field(default=4, init=False)
+    # NO_ELIGIBLE_CANDIDATES and guard-safe suggestions.
+    # v5: degraded mode — execution mode, per-intent resolution, per-run
+    # degraded provenance and capability circuit-breaker state.
+    schema_version: int = field(default=5, init=False)
     endpoint: str
     conversation_id: Optional[int] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -46,11 +48,13 @@ class DecisionTrace:
         "selected_qna_id": None,
         "selected_source": None,
     })
-    selection: dict = field(default_factory=lambda: {
-        "aggregate_outcome": None,
-        "intent_outcomes": [],
-        "error_fallback_allowed": False,
+    execution: dict = field(default_factory=lambda: {
+        "execution_mode": None,
+        "degraded_reason": None,
+        "intents": [],
     })
+    circuit: list[dict] = field(default_factory=list)
+    degraded: list[dict] = field(default_factory=list)
     suggestions: dict = field(default_factory=lambda: {
         "suggestions_evaluated": False,
         "retrieved_count": 0,
@@ -205,19 +209,45 @@ class DecisionTrace:
             entry["pipeline_error"] = True
             self.selectors.append(entry)
 
-    def record_selection_outcome(
+    def record_execution(
         self,
-        aggregate_outcome: str,
         *,
-        fallback_allowed: bool,
-        intent_outcomes: Optional[list] = None,
+        execution_mode: str,
+        degraded_reason: Optional[str],
+        intents: list,
     ) -> None:
         with self._lock:
-            self.selection = {
-                "aggregate_outcome": aggregate_outcome,
-                "intent_outcomes": list(intent_outcomes or []),
-                "error_fallback_allowed": fallback_allowed,
+            self.execution = {
+                "execution_mode": execution_mode,
+                "degraded_reason": degraded_reason,
+                "intents": list(intents),
             }
+
+    def record_circuit(self, entry: dict) -> None:
+        """Capability breaker state around one (possibly skipped) LLM call."""
+        with self._lock:
+            self.circuit.append(dict(entry))
+
+    def record_degraded(self, run: dict) -> None:
+        """One deterministic degraded run; also maintains the request summary."""
+        with self._lock:
+            self.degraded.append(dict(run))
+            summary = self.fallback
+            summary["fallback_entered"] = True
+            if summary["fallback_reason"] is None:
+                summary["fallback_reason"] = run.get("degraded_reason")
+            source = run.get("degraded_selected_source")
+            if source is not None and summary["selected_source"] in (None, "none"):
+                summary["selected_source"] = source
+                summary["selected_qna_id"] = run.get("degraded_selected_qna_id")
+            elif summary["selected_source"] is None:
+                summary["selected_source"] = "none"
+            if source == "academic_calendar":
+                summary["calendar_fallback_used"] = True
+            elif source == "meilisearch":
+                summary["meili_fallback_used"] = True
+            elif source == "qdrant_vector":
+                summary["qdrant_fallback_used"] = True
 
     def record_suggestions(
         self,
@@ -235,25 +265,6 @@ class DecisionTrace:
                 "offered_qna_ids": list(offered_qna_ids),
                 "exclusion_reasons": dict(exclusion_reasons),
             }
-
-    def record_fallback(
-        self,
-        *,
-        reason: str,
-        selected_source: Optional[str] = None,
-        selected_qna_id=None,
-    ) -> None:
-        with self._lock:
-            self.fallback["fallback_entered"] = True
-            self.fallback["fallback_reason"] = reason
-            self.fallback["selected_source"] = selected_source
-            self.fallback["selected_qna_id"] = selected_qna_id
-            if selected_source == "academic_calendar":
-                self.fallback["calendar_fallback_used"] = True
-            elif selected_source == "meilisearch":
-                self.fallback["meili_fallback_used"] = True
-            elif selected_source == "qdrant_vector":
-                self.fallback["qdrant_fallback_used"] = True
 
     def finalize(
         self,
@@ -302,7 +313,9 @@ class DecisionTrace:
                 "calendar_routes": list(self.calendar_routes),
                 "retrieval": list(self.retrieval),
                 "selectors": list(self.selectors),
-                "selection": dict(self.selection),
+                "execution": dict(self.execution),
+                "circuit": list(self.circuit),
+                "degraded": list(self.degraded),
                 "fallback": dict(self.fallback),
                 "suggestions": dict(self.suggestions),
                 "final": dict(self.final),

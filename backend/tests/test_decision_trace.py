@@ -63,7 +63,7 @@ def test_trace_has_unique_request_correlation_and_config_fingerprint():
     assert snapshot["request"]["endpoint"] == "widget_chat"
     assert snapshot["request"]["ai_config_fingerprint"] == configs.fingerprint
     assert snapshot["request"]["effective_configs"]["selector"]["max_tokens"] == 32
-    assert snapshot["schema_version"] == 4
+    assert snapshot["schema_version"] == 5
 
 
 def test_trace_records_candidates_selection_fallback_and_final_qna():
@@ -93,9 +93,12 @@ def test_trace_records_candidates_selection_fallback_and_final_qna():
         purpose="subquestion",
         used_in_final=True,
     )
-    trace.record_fallback(
-        reason="selector_model_error", selected_source="meilisearch", selected_qna_id=99
-    )
+    trace.record_degraded({
+        "purpose": "intent_2",
+        "degraded_reason": "selector_model_error",
+        "degraded_selected_source": "meilisearch",
+        "degraded_selected_qna_id": 99,
+    })
     trace.finalize(outcome="answer", source="llm", qna_ids=[42], answer_count=1)
     snapshot = trace.to_dict()
     assert snapshot["retrieval"][0]["candidate_qna_ids"] == [42, 99]
@@ -107,6 +110,8 @@ def test_trace_records_candidates_selection_fallback_and_final_qna():
     assert snapshot["selectors"][0]["requested_model"] == "gpt-4o-mini"
     assert "raw_selector_value" not in snapshot["selectors"][0]
     assert snapshot["fallback"]["fallback_reason"] == "selector_model_error"
+    assert snapshot["fallback"]["meili_fallback_used"] is True
+    assert snapshot["degraded"][0]["degraded_selected_qna_id"] == 99
     assert snapshot["final"]["final_qna_ids"] == [42]
 
 

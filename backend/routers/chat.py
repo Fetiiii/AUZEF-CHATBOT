@@ -220,7 +220,7 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
         background_tasks.add_task(_log_query, source, "success", ip)
         trace.finalize(
             outcome="answer", source=source,
-            answer_count=None if source == "llm" else 1,
+            answer_count=None,  # pipeline already recorded the real count
         )
         emit_decision_trace(trace)
         return _widget_reply(db, conv, answer, source)
@@ -297,7 +297,7 @@ def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(.
             background_tasks.add_task(_log_query, source, "success", ip)
             trace.finalize(
                 outcome="answer", source=source,
-                answer_count=None if source == "llm" else 1,
+                answer_count=None,  # pipeline already recorded the real count
             )
             emit_decision_trace(trace)
             return {
