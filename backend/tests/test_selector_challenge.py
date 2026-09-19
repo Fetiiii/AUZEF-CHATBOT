@@ -424,3 +424,51 @@ def test_benchmark_run_does_not_touch_breaker_trace_or_config(frozen, tmp_path, 
     assert {r.outcome.value for r in results.values()} == {"TIMEOUT"}
     assert LLM_CIRCUIT_BREAKER._states == {}
     assert (db.query(AIConfigVersion).count(), db.query(AICapabilityConfig).count()) == before
+
+
+# ── Stage A hardening: OpenRouter-only live policy, live network allowlist ──
+
+def test_live_gate_is_openrouter_only():
+    from benchmarks.selector_v2.safety import check_live_gate
+
+    for provider in ("openai", "gemini"):
+        with pytest.raises(SystemExit):
+            check_live_gate(live=True, confirmed=True, provider=provider, model="m")
+    check_live_gate(live=True, confirmed=True, provider="openrouter", model="openai/gpt-4o-mini")
+
+
+def test_live_network_guard_keeps_sdk_but_blocks_other_hosts():
+    import socket
+
+    from benchmarks.selector_v2.safety import LiveCallBlocked
+    from openai.resources.chat.completions import Completions
+
+    original = Completions.create
+    with no_live_calls(["openrouter.invalid"], block_sdks=False):
+        assert Completions.create is original  # SDK usable in an approved live run
+        for host in ("api.openai.com", "generativelanguage.googleapis.com"):
+            with pytest.raises(LiveCallBlocked):
+                socket.getaddrinfo(host, 443)
+
+
+def test_stage_report_records_and_error_review(frozen, tmp_path):
+    from benchmarks.selector_v2.challenge import case_records, error_review, run_summary
+
+    ids = {c["case_id"] for c in frozen.built["cases"]}
+    config = selector_config(provider="fake", model="fake-always_none")
+    identity = RunIdentity(selector_contract_fingerprint(), config,
+                           frozen.manifest["snapshot_fingerprint"], "DRY_RUN_FAKE:always_none")
+    summary = run_benchmark(frozen.snaps, FakeSelectorProvider("always_none", config), identity,
+                            tmp_path / "o", case_ids=ids)
+    results = load_results(Path(summary.run_dir) / RESULTS_FILE, identity).by_case
+    _m, cases = load_challenge(frozen.dir / "challenge", frozen.manifest)
+    records = case_records(frozen.snaps, cases, results)
+    assert len(records) == 36 and {r["value_class"] for r in records} == {"CORRUPTION", "UNRESOLVED"}
+    first = next(r for r in records if r["case_id"] == "1")
+    assert first["first_candidate_ref"] == "qna:10" and first["model_decision"] == "NONE"
+    review = error_review(records)
+    assert len(review["model_wrong_cases"]) == 36 and len(review["unresolved_cases"]) == 3
+    stats = run_summary(records)
+    assert stats["valid_none"] == stats["false_none"] == 36
+    assert stats["usage_metadata_coverage"] == "0/36"
+    assert stats["cost"].startswith("NOT_CALCULATED")

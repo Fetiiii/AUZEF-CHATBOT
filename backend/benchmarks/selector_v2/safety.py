@@ -25,22 +25,29 @@ def _host_of(address) -> str | None:
 
 
 @contextmanager
-def no_live_calls(allow_hosts: Iterable[str] = ()):
-    """Refuse outbound connections except to ``allow_hosts`` (names or IPs)."""
+def no_live_calls(allow_hosts: Iterable[str] = (), *, block_sdks: bool = True):
+    """Refuse outbound connections except to ``allow_hosts`` (names or IPs).
+
+    With ``block_sdks=False`` (approved live runs only) the provider SDKs may
+    run, but sockets can still reach only the allowlisted hosts.
+    """
     real_getaddrinfo = socket.getaddrinfo
     allowed_names = {h for h in allow_hosts if h}
     allowed_ips: set[str] = set()
     for host in allowed_names:
         try:
             allowed_ips.update(info[4][0] for info in real_getaddrinfo(host, None))
-        except OSError:
+        except (OSError, LiveCallBlocked):  # unresolvable now; resolved lazily later
             pass
         allowed_ips.add(host)
 
     def guarded_getaddrinfo(host, *args, **kwargs):
         if host is not None and str(host) not in allowed_names | allowed_ips:
             raise LiveCallBlocked(f"network lookup blocked by benchmark guard: {host}")
-        return real_getaddrinfo(host, *args, **kwargs)
+        infos = real_getaddrinfo(host, *args, **kwargs)
+        if host is not None and str(host) in allowed_names:
+            allowed_ips.update(info[4][0] for info in infos)  # DNS may rotate
+        return infos
 
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
@@ -65,6 +72,9 @@ def no_live_calls(allow_hosts: Iterable[str] = ()):
         stack.enter_context(mock.patch.object(socket, "getaddrinfo", guarded_getaddrinfo))
         stack.enter_context(mock.patch.object(socket.socket, "connect", guarded_connect))
         stack.enter_context(mock.patch.object(socket.socket, "connect_ex", guarded_connect_ex))
+        if not block_sdks:
+            yield
+            return
         try:
             from openai.resources.chat.completions import Completions
 
@@ -81,6 +91,8 @@ def no_live_calls(allow_hosts: Iterable[str] = ()):
 
 
 LIVE_FLAG = "--live"
+# Project inference policy: live model inference goes through OpenRouter only.
+LIVE_PROVIDERS = {"openrouter": "openrouter.ai"}
 CONFIRM_FLAG = "--confirm-live-provider-calls"
 
 
@@ -95,6 +107,11 @@ def check_live_gate(*, live: bool, confirmed: bool, provider: str | None, model:
         missing.append("--provider")
     if not model:
         missing.append("--model")
+    if provider and provider not in LIVE_PROVIDERS:
+        raise SystemExit(
+            f"live mode refused: provider {provider!r} not allowed "
+            f"(inference policy: {', '.join(LIVE_PROVIDERS)} only)"
+        )
     if missing:
         raise SystemExit(
             f"live mode refused: {LIVE_FLAG} also requires {', '.join(missing)}"

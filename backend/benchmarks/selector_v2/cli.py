@@ -17,7 +17,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from benchmarks.selector_v2 import BENCHMARK_VERSION
-from benchmarks.selector_v2.safety import CONFIRM_FLAG, check_live_gate, no_live_calls
+from benchmarks.selector_v2.safety import (
+    CONFIRM_FLAG, LIVE_PROVIDERS, check_live_gate, no_live_calls,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ARCH_DOC = REPO_ROOT / "docs" / "ANSWER_PIPELINE_V2_ARCHITECTURE.md"
@@ -254,7 +256,9 @@ def cmd_run(args) -> None:
                              case_ids=case_ids)
 
     if args.live:
-        summary = execute()
+        # SDK allowed, sockets only to the provider's API host (no fallback).
+        with no_live_calls([LIVE_PROVIDERS[config.provider]], block_sdks=False):
+            summary = execute()
     else:
         with no_live_calls():
             summary = execute()
@@ -303,6 +307,40 @@ def cmd_challenge(args) -> None:
            "counts": built["counts"],
            "first_candidate_full": baseline["FULL_REFERENCE_EXACT"]["exact"],
            "first_candidate_challenge": baseline["CHALLENGE_EXACT"]["exact"]})
+
+
+def cmd_stage_report(args) -> None:
+    from benchmarks.selector_v2.challenge import (
+        case_records, error_review, load_challenge, run_summary,
+    )
+    from benchmarks.selector_v2.runner import RESULTS_FILE, load_results
+    from benchmarks.selector_v2.snapshot import load_snapshot
+
+    with no_live_calls():
+        report = _write_challenge_report(Path(args.snapshot), Path(args.challenge),
+                                         Path(args.run_dir))
+        manifest, snapshots = load_snapshot(Path(args.snapshot))
+        _cm, cases = load_challenge(Path(args.challenge), manifest)
+        loaded = load_results(Path(args.run_dir) / RESULTS_FILE)
+        records = case_records(snapshots, cases, loaded.by_case)
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "case-results.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in records),
+            encoding="utf-8")
+        _dump(error_review(records), out / "error-review.json")
+        summary = {
+            "run_summary": run_summary(records),
+            "result_file": {"superseded_attempts": loaded.superseded,
+                            "corrupt_lines_ignored": loaded.corrupt_lines,
+                            "unique_cases": len(loaded.by_case)},
+            "challenge": report["CHALLENGE_EXACT"],
+            "paired_vs_first_candidate": report["paired_vs_first_candidate"]["CHALLENGE_EXACT"],
+            "challenge_fingerprint": report["challenge_fingerprint"],
+            "winner": None,
+        }
+        _dump(summary, out / "summary.json")
+    _dump(summary["run_summary"])
 
 
 def cmd_challenge_eval(args) -> None:
@@ -493,6 +531,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--challenge", required=True)
     p.add_argument("--run-dir", required=True)
     p.set_defaults(func=cmd_challenge_eval)
+
+    p = sub.add_parser("stage-report", help="case-level + error-review artifacts for a run")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--challenge", required=True)
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_stage_report)
 
     p = sub.add_parser("registry-models", help="selector-eligible registry models (read-only)")
     p.add_argument("--out")

@@ -359,3 +359,103 @@ def two_layer_report(snapshots: Sequence[CaseSnapshot], challenge_ids: Sequence[
         "winner": None,
         "winner_note": "no automatic model winner; decision is a human review",
     }
+
+
+# ── case-level + error-review artifacts (Stage runs) ───────────────────────
+
+VALUE_CLASSES = {(True, True): "PRESERVE", (True, False): "CORRUPTION",
+                 (False, True): "RESCUE", (False, False): "UNRESOLVED"}
+
+
+def case_records(snapshots: Sequence[CaseSnapshot], challenge_cases: Sequence[dict],
+                 results: Mapping[str, BenchmarkResult]) -> list[dict]:
+    by_id = {s.case.case_id: s for s in snapshots}
+    records = []
+    for item in challenge_cases:
+        s = by_id[item["case_id"]]
+        texts = {c.candidate_ref: c.canonical_text for c in s.candidates}
+        r = results.get(s.case.case_id)
+        baseline = first_candidate_correct(s)
+        records.append({
+            "case_id": s.case.case_id,
+            "membership": item["membership"],
+            "tags": s.all_tags,
+            "expected_refs": s.case.acceptable_candidate_refs,
+            "candidate_refs": ordered_refs(s),
+            "first_candidate_ref": first_candidate_ref(s),
+            "first_candidate_correct": baseline,
+            "gold_rank": gold_rank(s),
+            "status": r.outcome.value if r else "MISSING",
+            "selector_status": r.selector_status if r else None,
+            "invalid_reason": r.invalid_reason if r else None,
+            "model_decision": r.decision if r else None,
+            "selected_candidate_ref": r.selected_candidate_ref if r else None,
+            "model_correct": r.correct if r else None,
+            "value_class": VALUE_CLASSES[(baseline, r.correct)] if r else None,
+            "input_tokens": r.input_tokens if r else None,
+            "output_tokens": r.output_tokens if r else None,
+            "total_tokens": r.total_tokens if r else None,
+            "latency_ms": r.latency_ms if r else None,
+            "actual_model": r.actual_model if r else None,
+            "finish_reason": r.finish_reason if r else None,
+            "canonical_text": {
+                "expected": {ref: texts.get(ref) for ref in s.case.acceptable_candidate_refs},
+                "first_candidate": texts.get(first_candidate_ref(s)),
+                "selected": texts.get(r.selected_candidate_ref) if r and r.selected_candidate_ref else None,
+            },
+        })
+    return records
+
+
+def error_review(records: Sequence[dict]) -> dict:
+    def pick(pred):
+        return [{k: rec[k] for k in ("case_id", "expected_refs", "first_candidate_ref",
+                                     "model_decision", "selected_candidate_ref", "status",
+                                     "candidate_refs", "canonical_text", "tags")}
+                for rec in records if pred(rec)]
+
+    return {
+        "model_wrong_cases": pick(lambda r: r["model_correct"] is False),
+        "rescued_cases": pick(lambda r: r["value_class"] == "RESCUE"),
+        "corrupted_cases": pick(lambda r: r["value_class"] == "CORRUPTION"),
+        "unresolved_cases": pick(lambda r: r["value_class"] == "UNRESOLVED"),
+        "invalid_or_error_cases": pick(
+            lambda r: r["status"] in ("INVALID_OUTPUT", "MODEL_ERROR", "TIMEOUT", "MISSING")),
+    }
+
+
+def run_summary(records: Sequence[dict]) -> dict:
+    from benchmarks.selector_v2.snapshot import describe
+
+    def values(key):
+        return [r[key] for r in records if r[key] is not None]
+
+    status = {}
+    for r in records:
+        status[r["status"]] = status.get(r["status"], 0) + 1
+    decisions = [r["model_decision"] for r in records]
+    latency = sorted(((r["latency_ms"], r["case_id"]) for r in records
+                      if r["latency_ms"] is not None), reverse=True)
+    with_usage = [r for r in records if r["input_tokens"] is not None and r["output_tokens"] is not None]
+    return {
+        "cases": len(records),
+        "completed": sum(1 for r in records if r["status"] != "MISSING"),
+        "outcomes": status,
+        "valid_select": sum(1 for r in records if r["status"] in
+                            ("CORRECT_SELECT", "WRONG_SELECT", "FALSE_SELECT")),
+        "valid_none": decisions.count("NONE"),
+        "false_none": status.get("FALSE_NONE", 0),
+        "invalid_output": status.get("INVALID_OUTPUT", 0),
+        "model_error": status.get("MODEL_ERROR", 0),
+        "timeout": status.get("TIMEOUT", 0),
+        "value_classes": {v: sum(1 for r in records if r["value_class"] == v)
+                          for v in VALUE_CLASSES.values()},
+        "usage_metadata_coverage": f"{len(with_usage)}/{len(records)}",
+        "input_tokens": describe(values("input_tokens")),
+        "output_tokens": describe(values("output_tokens")),
+        "total_tokens": describe(values("total_tokens")),
+        "latency_ms": describe(values("latency_ms")),
+        "slowest_cases": [{"case_id": c, "latency_ms": ms} for ms, c in latency[:5]],
+        "actual_models": sorted({r["actual_model"] for r in records if r["actual_model"]}),
+        "cost": "NOT_CALCULATED — no explicit price inputs",
+    }

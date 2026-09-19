@@ -33,8 +33,11 @@ STATUS: PASS
 Phase 7B-Prep — Model / Reasoning Evaluation Preparation
 STATUS: PASS
 
-Phase 7B-Live — Model / Reasoning Live Evaluation
-STATUS: BLOCKED_PENDING_APPROVAL
+Phase 7B-Live Stage A — Production Selector Baseline on Challenge Set
+STATUS: PASS
+
+Phase 7B-Live Stage B — Full Reference Validation
+STATUS: NOT_STARTED
 
 Phase 7C — Metadata Necessity
 STATUS: NOT_STARTED
@@ -347,3 +350,41 @@ Detailed evidence: [`PHASE_7A_REPORT.md`](PHASE_7A_REPORT.md).
       started.
 
 Detailed evidence: [`PHASE_7B_PREP_REPORT.md`](PHASE_7B_PREP_REPORT.md).
+
+## Phase 7B-Live Stage A acceptance record
+
+- [x] **Scope as approved.** The user explicitly approved exactly 137
+      OpenRouter calls, and 137 unique calls were made.
+      - **Provider:** OpenRouter only; no direct OpenAI or Gemini call, and
+        no fallback.
+      - **Config:** `openai/gpt-4o-mini`, no reasoning, temperature 0,
+        max_tokens 32. The config fingerprint `af9eb2d0…` equals production.
+- [x] **Frozen inputs verified and unchanged:**
+      - plan `a4dd2c8a…`;
+      - snapshot `3e558768…`;
+      - challenge `bed2dad1…`;
+      - contract `3f49b198…`.
+- [x] **Production untouched.** Registry config, version and audit rows
+      were identical before and after the run. The production breaker and
+      telemetry were unaffected: the benchmark ran in a separate process, and
+      the backend logged only health probes during the run window.
+- [x] **Resume and dedup.** A second pass executed 0 cases with 0 calls.
+      The result file holds 137 unique cases with no supersede.
+- [x] **Challenge results** (CHALLENGE_EXACT; not a global accuracy):
+      - Exact: 51/137 vs first-candidate 117/137.
+      - Value: rescue 8/20, corruption 74/117, preserve 43, unresolved 12,
+        net −66.
+      - Paired: 43/74/8/12, McNemar p = 1.6e−14.
+      - NONE: 41 false NONE.
+      - Errors: 0 invalid, 0 model error, 0 timeout.
+- [x] **Slices reported:** general/specific, near-QnA per pair,
+      KB-overlap with its caveat, multi-acceptable, rank1 wrong and correct.
+- [x] **Usage from provider metadata** (137/137 coverage): input 256,151
+      and output 1,453 tokens; latency median 1.25 s, p95 2.12 s. No dollar
+      figure without a price input.
+- [x] **Artifacts.** Case-level, error-review and review-queue artifacts
+      exist under git-ignored `outputs/`.
+- [x] **Stage B not run.** Phase 7C not started.
+- [x] **Tests.** Benchmark tests 66/66; full suite 458/458.
+
+Detailed evidence: [`PHASE_7B_STAGE_A_REPORT.md`](PHASE_7B_STAGE_A_REPORT.md).
