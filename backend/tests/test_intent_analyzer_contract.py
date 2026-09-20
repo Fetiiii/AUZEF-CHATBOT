@@ -774,11 +774,9 @@ def test_amendment_3_is_a_context_only_bug_fix():
     assert _amendment3()["changed"]["multi_rules_touched"] is False
 
 
-def test_amendment_3_tracks_the_live_analyzer_prompt():
-    from services.internal_pilot_freeze import intent_analyzer_prompt_fingerprint
-
+def test_amendment_3_retains_its_historical_analyzer_prompt_fingerprint():
     assert _amendment3()["changed"]["intent_analyzer_prompt_fingerprint"] == (
-        intent_analyzer_prompt_fingerprint()
+        "4e1583f8c06c8369eeda08dd1025bbb0db8f50977e4b902873fd07fcd174cecf"
     )
 
 
@@ -789,3 +787,127 @@ def test_amendment_3_preserves_selector_and_contract():
     assert p["context_used_false_implies_verbatim_resolved_text"] is True
     assert p["context_used_true_requires_real_resolution"] is True
     assert p["candidate_order"] == "production"
+
+
+# ── Bare plural / implicit set context detection ───────────────────────
+
+
+def test_prompt_treats_grammar_and_semantic_self_containment_separately():
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "GRAMER YETERLİ DEĞİLDİR" in system
+    assert "semantik olarak self-contained olmayabilir" in system
+    assert "genel bir isim ya da isim öbeğinin" in system
+    assert "HANGİ konu, işlem, başvuru veya sürece" in system
+
+
+def test_bare_document_set_can_be_resolved_from_one_previous_user_referent():
+    previous = ("Yatay geçiş başvurusu yapmak istiyorum.",)
+    current = "Hangi evraklar lazım?"
+    system, user = build_intent_analyzer_prompt(current, previous)
+    assert "previous_user_turns'e bak" in system
+    assert "tek anlamlı biçimde sağlıyorsa context_used = true" in system
+    assert "Yatay geçiş başvurusu yapmak istiyorum." in user
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": current,
+        "normalized_text": current,
+        "resolved_text": "Yatay geçiş başvurusu: hangi evraklar lazım?",
+        "context_used": True,
+        "calendar_relevant": False,
+    }]}
+    analysis = _parse(json.dumps(payload, ensure_ascii=False), turn=current,
+                      previous=previous)
+    assert "yatay geçiş" in analysis.intents[0].resolved_text.casefold()
+
+
+def test_explicit_subject_document_set_stays_context_free():
+    previous = ("Kayıt dondurma hakkında bilgi almak istiyorum.",)
+    current = "Yatay geçiş için hangi evraklar lazım?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": current,
+        "normalized_text": current,
+        "resolved_text": current,
+        "context_used": False,
+        "calendar_relevant": False,
+    }]}
+    analysis = _parse(json.dumps(payload, ensure_ascii=False), turn=current,
+                      previous=previous)
+    assert analysis.intents[0].context_used is False
+    assert analysis.intents[0].resolved_text == analysis.intents[0].normalized_text
+
+
+def test_ambiguous_previous_topics_do_not_authorize_an_invented_referent():
+    previous = (
+        "Yatay geçiş ile kayıt dondurma arasında karar veremedim.",
+        "Her ikisi hakkında bilgi arıyorum.",
+    )
+    current = "Gerekli evraklar hangileri?"
+    system, _user = build_intent_analyzer_prompt(current, previous)
+    assert "tek anlamlı sağlamıyorsa context_used = false" in system
+    assert "uydurma" in system
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": current,
+        "normalized_text": current,
+        "resolved_text": current,
+        "context_used": False,
+        "calendar_relevant": False,
+    }]}
+    analysis = _parse(json.dumps(payload, ensure_ascii=False), turn=current,
+                      previous=previous)
+    assert analysis.intents[0].context_used is False
+
+
+# ── Freeze amendment 4 ──────────────────────────────────────────────
+
+
+AMENDMENT_4_PARTS = ("deploy", "internal-pilot", "answer-pipeline-freeze-amendment-4.json")
+AMENDMENT_3_FP = "429dc8c0f44f3969a09ef04b6a46363959aa4c37354a3f7394a8896d6511bbce"
+
+
+def _amendment4():
+    from services.internal_pilot_freeze import repo_root
+
+    return json.loads(repo_root().joinpath(*AMENDMENT_4_PARTS).read_text(encoding="utf-8"))
+
+
+def test_amendment_4_chains_to_immutable_amendment_3():
+    a4 = _amendment4()
+    assert a4["parent_amendment_fingerprint"] == AMENDMENT_3_FP
+    assert a4["historical_parent_freeze_fingerprint"] == PARENT_FP
+    assert a4["parents_are_immutable"] is True
+    assert _amendment3()["amendment_fingerprint"] == AMENDMENT_3_FP
+
+
+def test_amendment_4_fingerprint_is_deterministic_and_matches_the_file():
+    from services.internal_pilot_freeze import amendment_4_fingerprint, build_freeze_amendment_4
+
+    stored = _amendment4()
+    assert amendment_4_fingerprint(stored) == stored["amendment_fingerprint"]
+    first = build_freeze_amendment_4(git_commit="a" * 40, created_at="2026-01-01T00:00:00Z")
+    second = build_freeze_amendment_4(git_commit="b" * 40, created_at="2027-12-31T23:59:59Z",
+                                      live_screen={"probes": 14})
+    assert first["amendment_fingerprint"] == second["amendment_fingerprint"]
+    assert first["amendment_fingerprint"] != AMENDMENT_3_FP
+
+
+def test_amendment_4_is_only_a_context_detection_bug_fix():
+    a4 = _amendment4()
+    c = a4["classification"]
+    assert c["intent_analyzer_context_detection_bug_fix"] is True
+    for forbidden in ("model_change", "selector_change", "retrieval_change",
+                      "calendar_change", "parser_contract_change",
+                      "context_assembly_change", "multi_rule_change"):
+        assert c[forbidden] is False
+    assert a4["changed"]["multi_rules_touched"] is False
+
+
+def test_amendment_4_tracks_prompt_and_preserves_selector_contract():
+    from services.internal_pilot_freeze import intent_analyzer_prompt_fingerprint
+
+    a4 = _amendment4()
+    assert a4["changed"]["intent_analyzer_prompt_fingerprint"] == (
+        intent_analyzer_prompt_fingerprint()
+    )
+    assert a4["preserved"]["selector_prompt_fingerprint"] == SELECTOR_FP
+    assert a4["preserved"]["parser_strictness"] == (
+        "strict=True, extra=forbid, Literal[1, 2]"
+    )

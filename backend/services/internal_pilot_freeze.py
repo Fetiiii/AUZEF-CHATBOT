@@ -1104,3 +1104,88 @@ def amendment_3_fingerprint(amendment: Mapping) -> str:
     payload = {key: value for key, value in amendment.items()
                if key not in AMENDMENT_3_EXCLUDED_FIELDS}
     return _sha256(_canonical(_jsonable(payload)))
+
+
+# Amendment 4 is the final narrow context-detection correction. Amendment 3
+# closed claimed-without-resolution; one bare plural set referent still looked
+# grammatically complete and was therefore not resolved. Parser, context
+# assembly, MULTI rules, selector and calendar policy remain unchanged.
+
+AMENDMENT_4_ID = "INTERNAL_PILOT_FREEZE_AMENDMENT_4"
+AMENDMENT_3_FINGERPRINT = (
+    "429dc8c0f44f3969a09ef04b6a46363959aa4c37354a3f7394a8896d6511bbce"
+)
+
+
+def build_freeze_amendment_4(*, git_commit: str, created_at: str,
+                             live_screen: Optional[Mapping] = None) -> dict:
+    amendment = {
+        "schema_version": SCHEMA_VERSION,
+        "amendment_id": AMENDMENT_4_ID,
+        "milestone": MILESTONE,
+        "parent_amendment_id": AMENDMENT_3_ID,
+        "parent_amendment_fingerprint": AMENDMENT_3_FINGERPRINT,
+        "historical_parent_freeze_fingerprint": PARENT_FREEZE_FINGERPRINT,
+        "parents_are_immutable": True,
+        "git_commit": git_commit,
+        "classification": {
+            "intent_analyzer_context_detection_bug_fix": True,
+            "model_change": False,
+            "selector_change": False,
+            "retrieval_change": False,
+            "calendar_change": False,
+            "parser_contract_change": False,
+            "context_assembly_change": False,
+            "multi_rule_change": False,
+        },
+        "rationale": (
+            "amendment 3 restored 3/4 context-required probes and eliminated "
+            "CONTEXT_CLAIMED_WITHOUT_RESOLUTION. The remaining "
+            "BARE_PLURAL_REFERENT_NOT_RESOLVED class treated a grammatically "
+            "complete generic set question as semantically self-contained. "
+            "Prompt-only fix: semantic self-containment now requires an "
+            "explicit subject/process for generic category or set referents."
+        ),
+        "changed": {
+            "component": "services.intent_analyzer.build_intent_analyzer_prompt",
+            "what": (
+                "context branch only: generic bare category/set referents require "
+                "an explicit subject or a unique previous USER referent; "
+                "anti-over-trigger and ambiguity guards retained"
+            ),
+            "intent_analyzer_prompt_fingerprint": intent_analyzer_prompt_fingerprint(),
+            "multi_rules_touched": False,
+            "context_assembly_changed": False,
+        },
+        "preserved": {
+            "analyzer_policy": (
+                "ambiguity -> SINGLE, MULTI max 2, calendar semantics, "
+                "normalization policy, bot exclusion, max 2 previous USER turns"
+            ),
+            "parser_strictness": "strict=True, extra=forbid, Literal[1, 2]",
+            "context_used_false_implies_verbatim_resolved_text": True,
+            "context_used_true_requires_real_resolution": True,
+            "anti_over_trigger_guard": True,
+            "no_invented_referent_guard": True,
+            "selector_prompt_version": SELECTOR_PROMPT_VERSION,
+            "selector_prompt_fingerprint": SELECTOR_PROMPT_FINGERPRINT,
+            "selector_provider": SELECTOR_PROVIDER,
+            "selector_model": SELECTOR_MODEL,
+            "selector_config_fingerprint": SELECTOR_CONFIG_FINGERPRINT,
+            "candidate_order": CANDIDATE_ORDER,
+        },
+        "live_semantic_screen": dict(live_screen) if live_screen else None,
+        "created_at": created_at,
+    }
+    amendment = _jsonable(amendment)
+    amendment["amendment_fingerprint"] = amendment_4_fingerprint(amendment)
+    return amendment
+
+
+AMENDMENT_4_EXCLUDED_FIELDS = AMENDMENT_3_EXCLUDED_FIELDS
+
+
+def amendment_4_fingerprint(amendment: Mapping) -> str:
+    payload = {key: value for key, value in amendment.items()
+               if key not in AMENDMENT_4_EXCLUDED_FIELDS}
+    return _sha256(_canonical(_jsonable(payload)))

@@ -1,0 +1,45 @@
+{
+  "amendment_fingerprint": "f92d8eb2a7e809ae15e256280cbe7c707480e2b261553df15aa62707a8cfee98",
+  "amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_4",
+  "changed": {
+    "component": "services.intent_analyzer.build_intent_analyzer_prompt",
+    "context_assembly_changed": false,
+    "intent_analyzer_prompt_fingerprint": "0bd2a42977187de11252c716007f3d3b21e229afd0af77f9884c3daffced5a42",
+    "multi_rules_touched": false,
+    "what": "context branch only: generic bare category/set referents require an explicit subject or a unique previous USER referent; anti-over-trigger and ambiguity guards retained"
+  },
+  "classification": {
+    "calendar_change": false,
+    "context_assembly_change": false,
+    "intent_analyzer_context_detection_bug_fix": true,
+    "model_change": false,
+    "multi_rule_change": false,
+    "parser_contract_change": false,
+    "retrieval_change": false,
+    "selector_change": false
+  },
+  "created_at": "2026-09-20T15:11:44Z",
+  "git_commit": "4147eb5488130a7b0e6d30d24502ad5b4a96d543",
+  "historical_parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "live_semantic_screen": null,
+  "milestone": "INTERNAL_PILOT",
+  "parent_amendment_fingerprint": "429dc8c0f44f3969a09ef04b6a46363959aa4c37354a3f7394a8896d6511bbce",
+  "parent_amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_3",
+  "parents_are_immutable": true,
+  "preserved": {
+    "analyzer_policy": "ambiguity -> SINGLE, MULTI max 2, calendar semantics, normalization policy, bot exclusion, max 2 previous USER turns",
+    "anti_over_trigger_guard": true,
+    "candidate_order": "production",
+    "context_used_false_implies_verbatim_resolved_text": true,
+    "context_used_true_requires_real_resolution": true,
+    "no_invented_referent_guard": true,
+    "parser_strictness": "strict=True, extra=forbid, Literal[1, 2]",
+    "selector_config_fingerprint": "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e",
+    "selector_model": "openai/gpt-4o-mini",
+    "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+    "selector_prompt_version": "variant_a_v1",
+    "selector_provider": "openrouter"
+  },
+  "rationale": "amendment 3 restored 3/4 context-required probes and eliminated CONTEXT_CLAIMED_WITHOUT_RESOLUTION. The remaining BARE_PLURAL_REFERENT_NOT_RESOLVED class treated a grammatically complete generic set question as semantically self-contained. Prompt-only fix: semantic self-containment now requires an explicit subject/process for generic category or set referents.",
+  "schema_version": 1
+}
