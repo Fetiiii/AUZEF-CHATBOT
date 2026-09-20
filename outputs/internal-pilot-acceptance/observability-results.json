@@ -1,0 +1,58 @@
+{
+  "traces_analyzed": 14,
+  "schema_versions": [
+    7
+  ],
+  "field_presence": {
+    "request_id": 14,
+    "conversation_id": 14,
+    "timestamp": 14,
+    "llm_enabled": 14,
+    "schema_version": 14,
+    "source_availability": 14,
+    "retrieval": 14,
+    "selectors": 14,
+    "execution": 14,
+    "intent_analyzer": 14,
+    "final": 14
+  },
+  "all_required_fields_present_in_every_trace": true,
+  "availability_states_observed": {
+    "calendar": [
+      "available"
+    ],
+    "meili": [],
+    "qdrant": []
+  },
+  "zero_results_still_available_observations": 0,
+  "intent_analyzer_outcomes": {
+    "invalid_output": 14
+  },
+  "degraded_turns": 14,
+  "degraded_reasons": {
+    "intent_analyzer_invalid_output": 14
+  },
+  "provider_errors": 0,
+  "parser_errors": 14,
+  "timeouts": 0,
+  "semantic_none": 0,
+  "latency": {
+    "total": {
+      "count": 14,
+      "avg_ms": 2468.5,
+      "median_ms": 2349.5,
+      "p95_ms": 3202.0,
+      "max_ms": 3344.1
+    },
+    "intent_analyzer": {
+      "count": 14,
+      "avg_ms": 2184.4,
+      "median_ms": 2236.7,
+      "p95_ms": 2677.7,
+      "max_ms": 2804.1
+    },
+    "retrieval_ms": null,
+    "selector": null
+  },
+  "note": "Sample is small and taken on a developer host; these are not production SLA figures."
+}

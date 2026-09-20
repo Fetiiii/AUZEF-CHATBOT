@@ -1,0 +1,22 @@
+{
+  "latency": {
+    "total": {
+      "count": 14,
+      "avg_ms": 2468.5,
+      "median_ms": 2349.5,
+      "p95_ms": 3202.0,
+      "max_ms": 3344.1
+    },
+    "intent_analyzer": {
+      "count": 14,
+      "avg_ms": 2184.4,
+      "median_ms": 2236.7,
+      "p95_ms": 2677.7,
+      "max_ms": 2804.1
+    },
+    "retrieval_ms": null,
+    "selector": null
+  },
+  "sample_traces": 14,
+  "note": "Sample is small and taken on a developer host; these are not production SLA figures."
+}

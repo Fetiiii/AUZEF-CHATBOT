@@ -1,0 +1,26 @@
+{
+  "F1_admin_llm_off": {
+    "status": "PASS",
+    "observed": "execution_mode=ADMIN_DEGRADED, degraded_reason=llm_disabled_or_unavailable, no LLM call, answered from Meili (qna_id 11) in 13.2ms",
+    "state_restored": "LLM_ENABLED set back to true and verified"
+  },
+  "F2_openrouter_failure": {
+    "status": "PASS_PARTIAL",
+    "method": "temporary invalid sentinel key; real key held in memory and restored in a finally block",
+    "observed": "HTTP 200, graceful no-answer + curated suggestions, no 5xx, no stack trace to the client",
+    "limitation": "the decision trace for this request was lost when the container was recreated during restore, so only the observed HTTP behaviour is claimed",
+    "state_restored": "real key restored; backend recreated; Variant A verified"
+  },
+  "F3_meili_unavailable": {
+    "status": "PASS_PARTIAL",
+    "observed": "Meili container stopped; request still answered from Qdrant (degraded_qdrant_attempted=true), no crash",
+    "limitation": "source_availability stayed null because the request degraded at the Intent Analyzer before retrieval ran, so live availability telemetry could not be exercised",
+    "state_restored": "auzef_meili restarted and healthy"
+  },
+  "F4_qdrant_unavailable": {
+    "status": "PASS_PARTIAL",
+    "observed": "Qdrant stopped; request completed with curated no-answer + suggestions, no crash, no 5xx",
+    "limitation": "same as F3 — availability telemetry not reached",
+    "state_restored": "auzef_qdrant restarted and healthy"
+  }
+}

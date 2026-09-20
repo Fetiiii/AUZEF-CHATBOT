@@ -1,0 +1,41 @@
+{
+  "A_runtime_config": {
+    "status": "PASS",
+    "evidence": "effective config read from inside the running container: variant_a_v1 / 1aed5688…, openrouter, openai/gpt-4o-mini, temperature 0, max_tokens 32, reasoning unset, reasoning_request_fields={} , LLM_ENABLED=true",
+    "note": "required a backend image REBUILD; `up -d` alone reused a stale image that predated the prompt catalog"
+  },
+  "B_automated_regression": {
+    "status": "FAIL",
+    "result": "6 failed, 698 passed",
+    "root_cause": "backend main/core call load_dotenv(), so the pilot values added to root .env leak into the pytest process and change the resolved selector prompt and the LLM_ENABLED seed",
+    "proof": "re-running the same tests with SELECTOR_PROMPT_VERSION=production_v2 and LLM_ENABLED_DEFAULT=false: 110 passed, 0 failed",
+    "classification": "test environment-isolation gap, not a runtime defect"
+  },
+  "C_docker_services": {
+    "status": "PASS",
+    "evidence": "db/meili/qdrant/backend/frontend all Up; db+backend healthy; 0 restart loops"
+  },
+  "D_offline_regression": {
+    "status": "PASS",
+    "evidence": "frozen benchmark/prompt-contract assertions pass when the environment is isolated (Stage B proof run); freeze fingerprint and Variant A bytes unchanged",
+    "note": "no new LLM benchmark call was made"
+  },
+  "E_live_e2e": {
+    "status": "FAIL",
+    "blocker": "BLOCKER_INTENT_ANALYZER_INVALID_OUTPUT",
+    "evidence": "14/14 live traces degraded with degraded_reason=intent_analyzer_invalid_output; Selector Variant A was never invoked in any live request"
+  },
+  "F_failure_paths": {
+    "status": "PASS_PARTIAL",
+    "detail": "see failure-path-results.json"
+  },
+  "G_ui": {
+    "status": "MANUAL_REQUIRED",
+    "evidence": "angular.json defines only build and serve targets; no test target, no *.spec.ts, no karma/jasmine/playwright/cypress installed. No browser framework was installed (forbidden by the plan)."
+  },
+  "H_observability": {
+    "status": "PASS_PARTIAL",
+    "verified": "schema_version 7, request_id, conversation_id, timezone-aware UTC timestamp present in 14/14 traces; calendar availability observed as 'available'",
+    "not_verifiable_live": "retrieval_ms, meili/qdrant availability and all selector telemetry never populate because every live request degrades before retrieval"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "milestone": "INTERNAL_PILOT",
+  "artifact": "acceptance-execution",
+  "git_head": "9c3d893c61849cb94ddf4b632df812bd7a431179",
+  "freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "selector_prompt_version": "variant_a_v1",
+  "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+  "provider": "openrouter",
+  "model": "openai/gpt-4o-mini",
+  "reasoning": "unset (no reasoning key emitted)",
+  "e2e": {
+    "scenarios_in_catalog": 48,
+    "stage_e_scenarios_in_scope": 41,
+    "scenarios_executed": 12,
+    "logical_user_turns": 18,
+    "turn_budget": 60,
+    "categories_executed": [
+      "calendar_irrelevant",
+      "calendar_relevant",
+      "conversation_context",
+      "explicit_qualifier",
+      "explicit_specific_intent",
+      "general_intent",
+      "generic_vs_specific_qualifier",
+      "multi_intent",
+      "near_qna",
+      "short_noisy_language",
+      "single_intent",
+      "valid_none"
+    ],
+    "semantic_passes": 0,
+    "stopped_early": true,
+    "stop_reason": "BLOCKER_INTENT_ANALYZER_INVALID_OUTPUT — every request degraded identically; running the remaining scenarios would have reproduced the same failure and spent budget for no new information",
+    "logical_user_turns_breakdown": "13 Stage E catalog + 1 smoke + 4 failure-path",
+    "intent_analyzer_inference_calls": 17,
+    "selector_inference_calls": 0,
+    "direct_diagnostic_probes": 4,
+    "total_inference_calls_approx": 21,
+    "inference_budget": 120
+  },
+  "blockers": [
+    "BLOCKER_INTENT_ANALYZER_INVALID_OUTPUT",
+    "BLOCKER_CALENDAR_DATA",
+    "BLOCKER_TEST_ENV_ISOLATION"
+  ],
+  "acceptance": "FAIL",
+  "release_candidate": "BLOCKED",
+  "contains_secrets": false,
+  "contains_raw_pii": false,
+  "determinism_evidence": "4/4 direct raw-output probes across short, two-intent and calendar message shapes returned intent_count as the string \"1\"; 14/14 live requests failed validation. Systematic, not intermittent.",
+  "env_state": "Root .env deliberately left with the 4 pilot overrides; this is what causes BLOCKER_TEST_ENV_ISOLATION on this host."
+}

@@ -1,0 +1,61 @@
+{
+  "captured_at_utc": "2026-09-20T09:31:13Z",
+  "git_head": "9c3d893c61849cb94ddf4b632df812bd7a431179",
+  "freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "selector_prompt_fingerprint_frozen": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+  "variant_a_runtime_sha256": "a1ef0e3b9b92065e24f5acc7e1e65e2abc3fb299207499f0b9b7017fc23cb793",
+  "variant_a_benchmark_sha256": "a1ef0e3b9b92065e24f5acc7e1e65e2abc3fb299207499f0b9b7017fc23cb793",
+  "variant_a_copies_identical": true,
+  "benchmark_prompt_manifest_sha256": "ea72417a429e8e5631de74cb8698fe14144792756c7027f8533ecf680f91db6c",
+  "db_content_digests": {
+    "qna_md5": "5313b9fea05b3dc24d925e68b940b5ea",
+    "qna_queries_md5": "e7ab1126776a80731d5c76415cb3f19b",
+    "academic_calendar_md5": "dde641685a0c9c21922203ea17cb393a"
+  },
+  "table_counts": {
+    "qna": 326,
+    "qna_queries": 2695,
+    "academic_calendar": 19,
+    "ai_model_registry": 3,
+    "ai_capability_config": 2,
+    "conversations": 1709,
+    "conversation_messages": 3420
+  },
+  "system_config": [
+    "LLM_ENABLED=true"
+  ],
+  "env_key_names_only": [
+    "ACADEMIC_CALENDAR_CURRENT_TERM",
+    "ACADEMIC_CALENDAR_CURRENT_YEAR",
+    "ADMIN_AUTH_ENFORCED",
+    "ADMIN_COOKIE_SECURE",
+    "CIRCUIT_BREAKER_TIME",
+    "CM_AUTH_SCHEME",
+    "CM_BASE_URL",
+    "CM_CHANNEL_SHORTCODE",
+    "CM_SERVICE_TOKEN",
+    "COMPOSE_PROJECT_NAME",
+    "GEMINI_API_KEY",
+    "LLM_ENABLED_DEFAULT",
+    "LLM_PROVIDER",
+    "MEILI_MASTER_KEY",
+    "MEILI_THERESHOLD",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "PGADMIN_EMAIL",
+    "PGADMIN_PASSWORD",
+    "POSTGRES_DB",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_USER",
+    "QDRANT_THERESHOLD",
+    "SELECTOR_PROMPT_VERSION"
+  ],
+  "containers": [
+    "auzef_backend|Up About a minute (healthy)",
+    "auzef_frontend|Up 2 hours",
+    "auzef_db|Up 2 hours (healthy)",
+    "auzef_qdrant|Up 2 minutes",
+    "auzef_meili|Up 3 minutes"
+  ],
+  "note": "No secret VALUE is recorded anywhere in this file; env is key names only."
+}
