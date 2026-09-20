@@ -69,22 +69,51 @@ MEILI_STATUS = {"healthy": True, "last_check": 0}
 CIRCUIT_BREAKER_TIME = int(os.getenv("CIRCUIT_BREAKER_TIME", "30"))
 
 
-def meili_search_safe(query: str, limit: int) -> list:
-    """Circuit-breaker'lı Meili araması. Meili çökükse boş liste döner ve
-    CIRCUIT_BREAKER_TIME saniye boyunca Meili'yi atlar (her istekte yavaş
-    hataya düşmemek için)."""
+def meili_search_with_availability(query: str, limit: int) -> tuple[list, bool]:
+    """Circuit-breaker'lı Meili araması + kaynağın erişilebilir olup olmadığı.
+
+    İkinci değer SONUÇ SAYISI DEĞİL, erişilebilirliktir: Meili başarıyla
+    cevap verip hiç sonuç döndürmediyse ``(‌[], True)`` döner. Yalnız gerçek
+    hata ya da açık circuit (bilinen arıza) ``False`` üretir.
+
+    ``meili_search_safe`` davranışı değişmeden bunun üzerine kuruludur.
+    """
     now = time.time()
     if not MEILI_STATUS["healthy"] and (now - MEILI_STATUS["last_check"] <= CIRCUIT_BREAKER_TIME):
-        return []
+        # Bilinen arıza penceresi: kaynak sorgulanamadı, "sonuç yok" değil.
+        return [], False
     try:
         hits = MEILI_PROVIDER.search(query, limit=limit)
         MEILI_STATUS["healthy"] = True
-        return hits
+        return hits, True
     except Exception:
         MEILI_STATUS["healthy"] = False
         MEILI_STATUS["last_check"] = now
         logger.error(f"⚠️ MeiliSearch hatası — {CIRCUIT_BREAKER_TIME} sn atlanacak.")
-        return []
+        return [], False
+
+
+def meili_is_available() -> bool:
+    """Whether Meili is currently consultable (circuit closed).
+
+    Reads the status ``meili_search_safe`` maintains, so callers get the
+    availability of the search they just performed without changing how that
+    search is invoked.
+    """
+    if MEILI_STATUS["healthy"]:
+        return True
+    return (time.time() - MEILI_STATUS["last_check"]) > CIRCUIT_BREAKER_TIME
+
+
+def meili_search_safe(query: str, limit: int) -> list:
+    """Circuit-breaker'lı Meili araması. Meili çökükse boş liste döner ve
+    CIRCUIT_BREAKER_TIME saniye boyunca Meili'yi atlar (her istekte yavaş
+    hataya düşmemek için).
+
+    Davranış değişmedi; erişilebilirlik bilgisi gerekiyorsa
+    ``meili_search_with_availability`` kullanılır."""
+    hits, _available = meili_search_with_availability(query, limit)
+    return hits
 
 
 # ── LLM sağlayıcısı ──────────────────────────────────────────────────────────

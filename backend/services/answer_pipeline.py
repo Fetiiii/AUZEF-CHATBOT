@@ -19,6 +19,7 @@ Altyapı hataları capability/config bazlı circuit breaker'a yazılır.
 """
 import os
 import logging
+import time
 from dataclasses import dataclass, replace
 from typing import Optional
 
@@ -38,6 +39,7 @@ from core.deps import (
     get_llm_provider,
     is_llm_enabled,
     llm_config_problem,
+    meili_is_available,
     meili_search_safe,
 )
 from services.candidate_eligibility import (
@@ -272,13 +274,21 @@ def _build_candidate_pool_result(
     skor/rank/sağlayıcı olarak girmez."""
     qdrant_hits = []
     raw = []
+    qdrant_available = True
+    started = time.perf_counter()
     try:
         qdrant_hits = QDRANT_PROVIDER.search(query, limit=24)
         raw.extend(_decorate_hits(qdrant_hits, stage=0, provider_priority=0))
     except Exception:
-        pass
+        # Zero results and an outage are different facts; record the outage.
+        qdrant_available = False
+    # meili_search_safe stays the call site: it is the seam the pipeline tests
+    # substitute. Availability comes from the circuit status that same helper
+    # maintains, so a successful empty result stays "available".
     meili_hits = meili_search_safe(query, limit=5)
+    meili_available = meili_is_available()
     raw.extend(_decorate_hits(meili_hits, stage=0, provider_priority=1))
+    retrieval_ms = round((time.perf_counter() - started) * 1000, 3)
     return build_candidate_set(
         calendar_entries=calendar_entries,
         qna_hits=sorted(raw, key=_candidate_sort_key),
@@ -289,6 +299,9 @@ def _build_candidate_pool_result(
         ),
         qdrant_candidate_count=len(qdrant_hits),
         meili_candidate_count=len(meili_hits),
+        retrieval_ms=retrieval_ms,
+        qdrant_available=qdrant_available,
+        meili_available=meili_available,
     )
 
 

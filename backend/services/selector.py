@@ -59,12 +59,24 @@ SELECTOR_SYSTEM_PROMPT = (
 def build_selector_prompt(
     resolved_intent: str, candidates: Sequence[SelectorCandidate]
 ) -> tuple[str, str]:
-    """Serialize only resolved intent + semantic candidate content."""
+    """Serialize only resolved intent + semantic candidate content.
+
+    The system prompt comes from the versioned runtime catalog, which
+    defaults to ``production_v2`` — i.e. ``SELECTOR_SYSTEM_PROMPT`` above, so
+    unconfigured deployments are byte-identical to before. The internal pilot
+    sets ``SELECTOR_PROMPT_VERSION=variant_a_v1``.
+
+    The catalog is imported lazily: ``selector_prompt_catalog`` resolves
+    ``production_v2`` back out of this module, and a module-level import
+    would make that circular.
+    """
+    from services.selector_prompt_catalog import resolve_selector_prompt
+
     payload = {
         "resolved_intent": resolved_intent.strip(),
         "candidates": [candidate.prompt_view() for candidate in candidates],
     }
-    return SELECTOR_SYSTEM_PROMPT, json.dumps(
+    return resolve_selector_prompt().text, json.dumps(
         payload, ensure_ascii=False, separators=(",", ":")
     )
 

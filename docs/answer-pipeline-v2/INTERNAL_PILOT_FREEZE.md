@@ -1,7 +1,13 @@
 # Answer Pipeline V2 — Internal Pilot Freeze
 
 **Milestone:** `INTERNAL_PILOT`
-**Status:** freeze artifacts complete; **runtime preflight currently FAILs (2 blockers — see §3)**
+**Status:** freeze artifacts complete.
+**Runtime status: all three blockers are now CLOSED** —
+`INTERNAL_PILOT_RUNTIME_PREFLIGHT = PASS`. See
+[`INTERNAL_PILOT_RUNTIME_PREFLIGHT_REPORT.md`](INTERNAL_PILOT_RUNTIME_PREFLIGHT_REPORT.md).
+The blocker sections below are retained **as the historical freeze-time
+record** and are deliberately not rewritten; the freeze fingerprint is
+unchanged.
 **Freeze fingerprint:** `c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6`
 **Manifest:** `deploy/internal-pilot/answer-pipeline-freeze.json`
 **Git commit:** `22a63e87af81960a5f376cb26165149d6d69b70c`
@@ -383,7 +389,10 @@ fingerprints. A test asserts this against the actually emitted manifest.
 | --- | --- |
 | Freeze manifest | `deploy/internal-pilot/answer-pipeline-freeze.json` |
 | Freeze module + preflight | `backend/services/internal_pilot_freeze.py` |
-| Preflight CLI | `backend/scripts/internal_pilot_preflight.py` |
+| Preflight CLI | `backend/scripts/internal_pilot_preflight.py` (`runtime` subcommand) |
+| Runtime preflight | `backend/services/internal_pilot_runtime.py` |
+| Selector prompt catalog | `backend/services/selector_prompt_catalog.py` |
+| Pilot configuration | `deploy/internal-pilot/pilot.env.example` |
 | Tests | `backend/tests/test_internal_pilot_freeze.py` |
 | Acceptance plan | `docs/answer-pipeline-v2/INTERNAL_PILOT_ACCEPTANCE_PLAN.md` |
 | E2E scenario catalog | `tests/e2e/internal_pilot/scenarios.json` |

@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Callable, Iterable, Mapping, Optional, Sequence
 
 from services.calendar_utils import format_calendar_answer
+from services.decision_trace import SourceAvailability
 from services.routing_guards import RoutingGuardPolicy
 
 
@@ -218,6 +219,9 @@ def build_candidate_set(
     max_candidates: int,
     qdrant_candidate_count: int = 0,
     meili_candidate_count: int = 0,
+    retrieval_ms: Optional[float] = None,
+    qdrant_available: bool = True,
+    meili_available: bool = True,
 ) -> CandidateSetBuild:
     """Merge, dedupe, apply objective eligibility and the candidate budget.
 
@@ -351,6 +355,22 @@ def build_candidate_set(
         "calendar_candidate_count": len(calendar_entries),
         "qdrant_candidate_count": qdrant_candidate_count,
         "meili_candidate_count": meili_candidate_count,
+        # Wall-clock time for the QnA retrieval leg (Qdrant + Meili) only.
+        # Calendar entries arrive already resolved from search_calendar
+        # upstream, and selector/LLM latency is measured separately.
+        "retrieval_ms": retrieval_ms,
+        # Availability is "could the source be consulted", never "did it
+        # match": a successful empty answer stays available.
+        "qdrant_availability": (
+            SourceAvailability.AVAILABLE.value
+            if qdrant_available
+            else SourceAvailability.UNAVAILABLE.value
+        ),
+        "meili_availability": (
+            SourceAvailability.AVAILABLE.value
+            if meili_available
+            else SourceAvailability.UNAVAILABLE.value
+        ),
         "retrieved_candidate_count": len(calendar_entries) + len(qna_hits),
         "candidate_count_before_eligibility": before_eligibility,
         "candidate_count_after_eligibility": len(eligible),

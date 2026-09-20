@@ -195,7 +195,7 @@ def test_trace_uses_v2_intent_analyzer_schema_without_raw_text(monkeypatch):
     _provider, _queries, _result = _run(monkeypatch, analysis, trace=trace)
     snapshot = trace.to_dict()
     analyzer = snapshot["intent_analyzer"]
-    assert snapshot["schema_version"] == 6
+    assert snapshot["schema_version"] == 7
     assert "splitter" not in snapshot
     assert analyzer["provider"] == "openai"
     assert analyzer["requested_model"] == "gpt-4o-mini"

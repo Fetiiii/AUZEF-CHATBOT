@@ -8,12 +8,57 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
 
 from services.llm_config import EffectiveLLMConfigSet
 from services.llm_types import IntentAnalyzerResult, SelectorResult
 
 logger = logging.getLogger("auzef")
+
+
+class SourceAvailability(str, Enum):
+    """Whether a retrieval source could be consulted — NOT whether it matched.
+
+    The distinction is load-bearing: a source that answered successfully with
+    zero hits is ``AVAILABLE`` with ``candidate_count == 0``. Collapsing that
+    into "unavailable" would make an empty knowledge base look like an outage.
+    """
+
+    #: The source was called and answered (possibly with zero results).
+    AVAILABLE = "available"
+    #: The source was called and failed, or is inside its circuit-breaker
+    #: cooldown after a failure, so it could not be consulted.
+    UNAVAILABLE = "unavailable"
+    #: The source was deliberately not consulted by pipeline policy — e.g.
+    #: calendar for a query the calendar gate judged irrelevant.
+    SKIPPED = "skipped"
+
+
+def calendar_availability_from_snapshot(snapshot: dict) -> SourceAvailability:
+    """Map a Calendar V2 route snapshot onto explicit availability.
+
+    A closed route (the gate judged the query calendar-irrelevant) is
+    ``SKIPPED``: nothing was consulted, and no DB/config lookup happened.
+    A retrieval error is ``UNAVAILABLE``. Anything else — including a route
+    that opened and matched nothing — is ``AVAILABLE``.
+    """
+    if not snapshot.get("calendar_route_opened"):
+        return SourceAvailability.SKIPPED
+    if snapshot.get("calendar_no_match_reason") == "retrieval_error":
+        return SourceAvailability.UNAVAILABLE
+    return SourceAvailability.AVAILABLE
+
+
+def utc_now_iso() -> str:
+    """Timezone-aware UTC ISO-8601, millisecond precision, ``Z`` suffix.
+
+    Naive datetimes are never produced: a trace timestamp that cannot be
+    ordered across hosts is not usable telemetry.
+    """
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
 
 @dataclass
@@ -24,10 +69,15 @@ class DecisionTrace:
     # degraded provenance and capability circuit-breaker state.
     # v6: managed AI config provenance — config version/source/status and
     # per-capability registry model id + qualification.
-    schema_version: int = field(default=6, init=False)
+    # v7: internal-pilot observability — wall-clock UTC timestamp, per-source
+    # availability (available/unavailable/skipped, distinct from result
+    # count) and retrieval_ms on every retrieval entry. Additive only: no v6
+    # field was removed or re-interpreted.
+    schema_version: int = field(default=7, init=False)
     endpoint: str
     conversation_id: Optional[int] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: str = field(default_factory=utc_now_iso)
     started_at: float = field(default_factory=time.perf_counter, repr=False)
     llm_enabled: Optional[bool] = None
     deployment_version: Optional[str] = field(
@@ -61,6 +111,11 @@ class DecisionTrace:
         "execution_mode": None,
         "degraded_reason": None,
         "intents": [],
+    })
+    source_availability: dict = field(default_factory=lambda: {
+        "calendar": None,
+        "meili": None,
+        "qdrant": None,
     })
     circuit: list[dict] = field(default_factory=list)
     degraded: list[dict] = field(default_factory=list)
@@ -159,12 +214,40 @@ class DecisionTrace:
     def record_retrieval(self, snapshot: dict) -> None:
         with self._lock:
             self.retrieval.append(snapshot)
+        # Derived here so every retrieval call site feeds request-level
+        # availability without having to remember to.
+        for source, key in (("qdrant", "qdrant_availability"),
+                            ("meili", "meili_availability")):
+            state = snapshot.get(key)
+            if state is not None:
+                self.record_source_availability(source, state)
+
+    def record_source_availability(self, source: str, state) -> None:
+        """Set one source's availability. Last write wins per request.
+
+        ``UNAVAILABLE`` is sticky against a later ``AVAILABLE`` within the
+        same request: if a source failed even once, the request did not get
+        the full candidate pool, and the trace should say so.
+        """
+        value = getattr(state, "value", state)
+        if value not in {item.value for item in SourceAvailability}:
+            raise ValueError(f"unknown source availability {state!r}")
+        with self._lock:
+            if source not in self.source_availability:
+                raise ValueError(f"unknown retrieval source {source!r}")
+            current = self.source_availability[source]
+            if current == SourceAvailability.UNAVAILABLE.value:
+                return
+            self.source_availability[source] = value
 
     def record_calendar_route(self, snapshot: dict, *, purpose: str) -> None:
         # The snapshot contains only config/status/counts and curated Calendar
         # identifiers; resolved user text and aliases are deliberately absent.
         with self._lock:
             self.calendar_routes.append({**snapshot, "purpose": purpose})
+        self.record_source_availability(
+            "calendar", calendar_availability_from_snapshot(snapshot)
+        )
 
     def record_selector(
         self,
@@ -327,6 +410,7 @@ class DecisionTrace:
                 "request": {
                     "request_id": self.request_id,
                     "conversation_id": self.conversation_id,
+                    "timestamp": self.timestamp,
                     "endpoint": self.endpoint,
                     "llm_enabled": self.llm_enabled,
                     "deployment_version": self.deployment_version,
@@ -339,6 +423,7 @@ class DecisionTrace:
                 "intent_analyzer": self.intent_analyzer,
                 "calendar_routes": list(self.calendar_routes),
                 "retrieval": list(self.retrieval),
+                "source_availability": dict(self.source_availability),
                 "selectors": list(self.selectors),
                 "execution": dict(self.execution),
                 "circuit": list(self.circuit),

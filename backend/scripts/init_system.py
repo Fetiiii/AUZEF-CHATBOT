@@ -5,7 +5,8 @@ Production APP runtime ``uvicorn main:app`` ile doğrudan başlar ve bu modülü
 Uvicorn'dan önce çalıştırır.
 """
 import argparse
-from collections.abc import Sequence
+import os
+from collections.abc import Mapping, Sequence
 
 from core.database import (
     SessionLocal,
@@ -16,20 +17,63 @@ from core.database import (
 from services.ai_registry import bootstrap_ai_registry
 
 
+# Safe public default: a fresh install does NOT enable the LLM by itself.
+# The internal pilot needs the opposite, so the seeded value is configurable
+# via LLM_ENABLED_DEFAULT rather than by changing this constant — a public
+# fresh install that sets nothing keeps the historical behaviour.
+LLM_ENABLED_DEFAULT_ENV = "LLM_ENABLED_DEFAULT"
+LLM_ENABLED_SAFE_DEFAULT = "false"
+
+_TRUE = ("1", "true", "yes", "on")
+_FALSE = ("0", "false", "no", "off")
+
+
+def llm_enabled_default(environ: Mapping[str, str] | None = None) -> str:
+    """Seed value for LLM_ENABLED, as the canonical "true"/"false" string.
+
+    An unparseable value is rejected loudly: silently falling back would seed
+    the opposite of what the operator configured, which is precisely the
+    drift the pilot preflight exists to catch.
+    """
+    env = os.environ if environ is None else environ
+    raw = env.get(LLM_ENABLED_DEFAULT_ENV)
+    if raw is None or not raw.strip():
+        return LLM_ENABLED_SAFE_DEFAULT
+    value = raw.strip().lower()
+    if value in _TRUE:
+        return "true"
+    if value in _FALSE:
+        return "false"
+    allowed = ", ".join((*_TRUE, *_FALSE))
+    raise RuntimeError(
+        f"{LLM_ENABLED_DEFAULT_ENV} bir boolean olmalı ({allowed}), alınan: {raw!r}"
+    )
+
+
+def default_system_config(environ: Mapping[str, str] | None = None) -> dict:
+    return {"LLM_ENABLED": llm_enabled_default(environ)}
+
+
+#: Backwards-compatible view of the historical constant. Callers that need the
+#: configured value must use ``default_system_config()``.
 DEFAULT_SYSTEM_CONFIG = {
-    "LLM_ENABLED": "false",
+    "LLM_ENABLED": LLM_ENABLED_SAFE_DEFAULT,
 }
 
 
 def seed_default_config() -> None:
     """Eksik başlangıç ayarlarını ekle; mevcut operatör değerlerini koru.
 
+    Seed semantiği değişmedi: yalnız satır YOKSA yazılır. Admin'in daha önce
+    kaydettiği değer (ör. emergency off) asla üzerine yazılmaz; yalnız ilk
+    kurulumda yazılacak değer konfigüre edilebilir hale geldi.
+
     AI model registry'si de burada idempotent olarak bootstrap edilir: Phase 0
     varsayılan modelleri (LEGACY_APPROVED) ve — henüz versiyon yoksa — env'in
     bugünkü effective config'iyle birebir aynı ilk config versiyonu."""
     db = SessionLocal()
     try:
-        for key, default_value in DEFAULT_SYSTEM_CONFIG.items():
+        for key, default_value in default_system_config().items():
             row = db.get(SystemConfig, key)
             if row is None:
                 db.add(SystemConfig(key=key, value=default_value))

@@ -31,6 +31,7 @@ from services.internal_pilot_freeze import (  # noqa: E402
     repo_root,
     run_preflight,
 )
+from services.internal_pilot_runtime import run_runtime_preflight  # noqa: E402
 
 MANIFEST_PATH = Path("deploy/internal-pilot/answer-pipeline-freeze.json")
 
@@ -75,6 +76,34 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     else:
         print(payload, end="")
     return 0
+
+
+def _print_report(title: str, report) -> None:
+    print(title)
+    for check in report.checks:
+        mark = "PASS" if check.passed else "FAIL"
+        print(f"  [{mark}] {check.name}")
+        if not check.passed:
+            print(f"         expected: {check.expected}")
+            print(f"         actual:   {check.actual}")
+            if check.detail:
+                print(f"         note:     {check.detail}")
+
+
+def cmd_runtime(args: argparse.Namespace) -> int:
+    """Validate the runtime against the frozen baseline (the 3 blockers)."""
+    report = run_runtime_preflight()
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        _print_report("INTERNAL_PILOT runtime preflight", report)
+        print(f"\nINTERNAL_PILOT_RUNTIME_PREFLIGHT = {report.status}")
+        if report.failures:
+            print(
+                "Configuration was NOT modified. Resolve each mismatch "
+                "explicitly before starting the internal pilot."
+            )
+    return 0 if report.passed else 1
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:
@@ -131,6 +160,12 @@ def main(argv: list[str] | None = None) -> int:
 
     verify = sub.add_parser("verify", help="verify the committed manifest fingerprint")
     verify.set_defaults(func=cmd_verify)
+
+    runtime = sub.add_parser(
+        "runtime", help="validate the runtime against the frozen baseline"
+    )
+    runtime.add_argument("--json", action="store_true")
+    runtime.set_defaults(func=cmd_runtime)
 
     args = parser.parse_args(argv)
     return args.func(args)

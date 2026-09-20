@@ -114,6 +114,12 @@ services:
       OMP_NUM_THREADS: ${OMP_NUM_THREADS:-8}
       MKL_NUM_THREADS: ${MKL_NUM_THREADS:-8}
       TOKENIZERS_PARALLELISM: "true"
+      # Answer Pipeline V2 internal-pilot overrides. Defaults reproduce the
+      # historical public behaviour exactly: the selector serves the original
+      # production prompt and a fresh install does NOT enable the LLM.
+      # The internal pilot sets these via deploy/internal-pilot/pilot.env.
+      SELECTOR_PROMPT_VERSION: ${SELECTOR_PROMPT_VERSION:-production_v2}
+      LLM_ENABLED_DEFAULT: ${LLM_ENABLED_DEFAULT:-false}
     expose:
       - "8000"
     volumes:

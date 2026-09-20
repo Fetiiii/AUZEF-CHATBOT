@@ -419,20 +419,31 @@ def seeded_llm_enabled_default() -> Optional[bool]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError):
         return None
+    # Module-level string constants, so a dict whose values are names (e.g.
+    # {"LLM_ENABLED": LLM_ENABLED_SAFE_DEFAULT}) still resolves.
+    constants: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    constants[target.id] = node.value.value
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
             continue
         names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-        if "DEFAULT_SYSTEM_CONFIG" not in names:
+        if "DEFAULT_SYSTEM_CONFIG" not in names or not isinstance(node.value, ast.Dict):
             continue
-        try:
-            mapping = ast.literal_eval(node.value)
-        except ValueError:
-            return None
-        raw = mapping.get("LLM_ENABLED")
-        if raw is None:
-            return None
-        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+        for key, value in zip(node.value.keys, node.value.values):
+            if not (isinstance(key, ast.Constant) and key.value == "LLM_ENABLED"):
+                continue
+            if isinstance(value, ast.Constant):
+                raw = value.value
+            elif isinstance(value, ast.Name) and value.id in constants:
+                raw = constants[value.id]
+            else:
+                return None
+            return str(raw).strip().lower() in ("1", "true", "yes", "on")
     return None
 
 

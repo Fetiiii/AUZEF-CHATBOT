@@ -9,12 +9,16 @@ This is a **test plan**. Executing it is a separate, explicitly approved
 activity: stages C, E, F and G require a running Docker stack and (for E)
 live OpenRouter calls.
 
-> ### Execute stage A first — it currently FAILs
+> ### Runtime blockers are closed
 >
-> The freeze preflight reports two open blockers against the current runtime:
-> the selector prompt is still `production` (not `variant_a_v1`), and
-> `LLM_ENABLED` seeds to `false`. **Both must be resolved before stages D–G
-> are meaningful.** See §3 of the freeze document.
+> All three original runtime blockers (selector prompt, `LLM_ENABLED` seed,
+> observability gaps) are closed and
+> `INTERNAL_PILOT_RUNTIME_PREFLIGHT = PASS`. See
+> `INTERNAL_PILOT_RUNTIME_PREFLIGHT_REPORT.md`.
+>
+> **Acceptance execution has not started.** Every stage below is still
+> unexecuted: stages C, E, F and G need a running Docker stack and (for E)
+> live OpenRouter calls.
 
 **Never write secret values into any acceptance report.** Record only
 *presence*/*absence* and the variable name.
@@ -31,7 +35,8 @@ the repo-root-relative reads in preflight would resolve above `/app`.
 
 | # | Check | How | Expected |
 | --- | --- | --- | --- |
-| A1 | Freeze preflight | `cd backend && python -m scripts.internal_pilot_preflight preflight` | exit 0, `RESULT: PASS` |
+| A1 | Runtime preflight (3 blockers) | `cd backend && python -m scripts.internal_pilot_preflight runtime` | exit 0, `INTERNAL_PILOT_RUNTIME_PREFLIGHT = PASS` |
+| A1b | Freeze-time preflight (historical) | `cd backend && python -m scripts.internal_pilot_preflight preflight` | Reports the repo *default* configuration; FAIL here is expected and is not a pilot blocker — A1 is the pilot gate |
 | A2 | Manifest fingerprint intact | `cd backend && python -m scripts.internal_pilot_preflight verify` | fingerprint matches |
 | A3 | Env file present | `deploy/production/config/backend.env` derived from `backend.env.example` | present |
 | A4 | Secrets presence | `OPENROUTER_API_KEY`, DB credentials, `MEILI_MASTER_KEY`, admin secrets | **presence only** — never print values |
@@ -39,13 +44,20 @@ the repo-root-relative reads in preflight would resolve above `/app`.
 | A6 | Selector assignment | preflight A1 checks provider/model/reasoning/temperature/max_tokens/config fingerprint | matches freeze |
 | A7 | Intent Analyzer assignment | registry active config version vs manifest `intent_analyzer.config_fingerprint` | `2f1b27bc3430…` or an explicitly approved newer version |
 | A8 | LLM enabled — **live value** | `SystemConfig.LLM_ENABLED` row in the DB | `true` |
-| A8b | LLM enabled — **seeded default** | preflight A1 `llm_enabled_seeded_default`, which AST-reads `DEFAULT_SYSTEM_CONFIG` in `scripts/init_system.py` | `true` |
+| A8b | LLM enabled — **desired seed** | preflight A1 `pilot_fresh_llm_enabled_is_true` (resolves `LLM_ENABLED_DEFAULT` from the pilot config) | `true` |
 | A9 | Service definitions | `docker-compose.yml` services `db`, `meilisearch`, `qdrant`, `backend`, `frontend` | all defined |
 | A10 | DB connectivity config | `DATABASE_URL` / admin + chat DB URLs resolve | reachable host/port |
 | A11 | Meili config | host, index name, master key present | configured |
 | A12 | Qdrant config | host, collection name | configured |
 | A13 | Calendar settings | active academic term / calendar source configured | configured |
 | A14 | Candidate order | preflight A1 `candidate_order_expected` | `production` |
+| A15 | **Pilot vars reach the container** | `SELECTOR_PROMPT_VERSION=variant_a_v1` and `LLM_ENABLED_DEFAULT=true` present in the project-root `.env` (or exported). `pilot.env.example` documents them but the backend reads `env_file: .env` | both set |
+| A16 | **Live resolved prompt** | inside the running backend: resolved selector prompt version + fingerprint | `variant_a_v1` / `1aed5688…` |
+
+> **A15/A16 are the gate that preflight cannot provide.** Preflight validates
+> the declared pilot configuration; only the running stack proves the
+> container actually received it. A preflight PASS with A15 unset would serve
+> `production_v2`.
 
 **Gate:** A1 must exit 0. Any FAIL stops the pilot.
 
@@ -67,8 +79,8 @@ Admin functionality is covered inside the backend suite
 (`test_admin_login_lockout.py`, `test_model_registry.py`, `test_settings.py`,
 `test_roles.py`, `test_audit.py`).
 
-**Reference baseline (this freeze commit): 553 passed before the freeze, 598
-after it — the delta is exactly the new freeze tests.** Report the
+**Reference baseline: 598 passed at the freeze commit; see the runtime
+preflight report for the current count. Report the delta, not an absolute.** Report the
 delta against that number, not an absolute pass count.
 
 **Gate:** no new failures versus the recorded baseline.
@@ -180,26 +192,26 @@ fabricated answer.
 
 ## Stage H — Observability acceptance
 
-> **Four contract fields are not emitted today** — see §8 of the freeze
-> document. They are recorded as gaps with status `MUST_CLOSE_BEFORE_PILOT`,
-> so H1, H3 and H6 cannot pass as written until they are closed. Close them
-> first, or run stage H knowing it is partial and record which.
+**Status: `READY_TO_EXECUTE`.** The four contract gaps are closed in trace
+schema v7 (timestamp, `retrieval_ms`, typed per-source availability;
+conversation correlation was already present). This stage has **not been
+executed** — that needs stages E–G running against a real stack.
 
-For **every** request issued in stages E–G, confirm:
+For **every** request issued in stages E–G, confirm:For **every** request issued in stages E–G, confirm:
 
 | # | Check | Expected | Today |
 | --- | --- | --- | --- |
-| H1 | Correlation | `request_id` + session/conversation id + wall-clock timestamp | ⚠️ `request_id` only — session id and timestamp are **gaps** |
+| H1 | Correlation | `request_id` + conversation id + wall-clock timestamp | ✅ v7 — `request.timestamp` is tz-aware UTC ISO-8601 |
 | H2 | Intent | `execution_mode`, analyzer success/failure, `context_used`, `calendar_relevant` | ✅ emitted |
-| H3 | Retrieval | `candidate_count` + per-source availability | ⚠️ count only; availability is a **gap** (proxies exist) |
+| H3 | Retrieval | `candidate_count` + per-source availability | ✅ v7 — typed available/unavailable/skipped; 0 results stays available |
 | H4 | Selector | decision (ref or `NONE`), provider, requested/actual model, success/failure | ✅ emitted |
 | H5 | Degraded | yes/no + reason | ✅ emitted |
-| H6 | Latency | total, intent, retrieval, selector | ⚠️ retrieval latency is a **gap** |
+| H6 | Latency | total, intent, retrieval, selector | ✅ v7 — `retrieval_ms` on each retrieval entry (QnA leg; calendar separate) |
 | H7 | Errors | provider / parser / timeout / circuit breaker distinguishable | ✅ emitted |
 | H8 | Privacy | **no raw user content is a mandatory telemetry field** | ✅ preserved — closing the gaps must not change this |
 
-**Gate:** every stage-E scenario reconstructable from telemetry alone. This
-gate is currently **unreachable** without closing the H1/H3/H6 gaps.
+**Gate:** every stage-E scenario reconstructable from telemetry alone. The
+schema now supports it; the gate is unmet only because the stage has not run.
 
 ---
 
@@ -214,7 +226,7 @@ gate is currently **unreachable** without closing the H1/H3/H6 gaps.
 | E | no new failure class beyond `IP-KI-1` / `IP-KI-2` |
 | F | all failure paths degrade gracefully |
 | G | G1–G5 pass |
-| H | full telemetry reconstruction — **blocked on the four observability gaps** |
+| H | full telemetry reconstruction (schema v7 ready; not yet executed) |
 
 Passing this plan authorises the **internal pilot only**. It does not
 authorise public production, and it produces no final accuracy claim —

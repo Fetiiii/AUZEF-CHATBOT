@@ -363,7 +363,7 @@ def test_trace_records_config_version_fingerprint_source_and_registry_ids(db, mo
     trace = DecisionTrace(endpoint="test")
     answer_pipeline.answer_question("soru", db, trace=trace)
     request = trace.to_dict()["request"]
-    assert trace.to_dict()["schema_version"] == 6
+    assert trace.to_dict()["schema_version"] == 7
     assert request["ai_config_version"] == 1
     assert request["ai_config_source"] in ("DB", "CACHE")
     assert request["ai_config_status"] == "OK"
