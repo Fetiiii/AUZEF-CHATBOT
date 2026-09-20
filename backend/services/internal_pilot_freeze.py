@@ -1,0 +1,788 @@
+"""INTERNAL_PILOT freeze declaration, manifest and preflight validation.
+
+This module is a *declaration*, not a behaviour change. It records the
+Answer Pipeline V2 configuration the AUZEF internal pilot is meant to run
+and provides a preflight that compares the live runtime against it.
+
+Two deliberate design rules:
+
+1. **Nothing here mutates runtime behaviour.** The frozen selector prompt is
+   ``variant_a_v1``, which currently lives only in
+   ``benchmarks/selector_v2/prompts/`` as a benchmark-only file. The runtime
+   still serves ``services.selector.SELECTOR_SYSTEM_PROMPT`` (the
+   ``production`` prompt). Preflight therefore FAILs today; that gap is the
+   pilot blocker, and closing it is a separate, explicitly approved change.
+   Preflight never rewrites configuration to make itself pass.
+
+2. **The fingerprint is deterministic.** ``created_at`` and the fingerprint
+   field itself are excluded from the hashed payload, so regenerating the
+   manifest on another day yields the same ``freeze_fingerprint``. The hash
+   shape follows the existing convention in ``services.llm_config``:
+   ``json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)``
+   over the canonical subset, then sha256.
+
+Secrets are never read or serialized: the manifest is built from capability
+config identity (provider/model/params) and code-derived fingerprints only.
+API keys live in env/DB and are not consulted.
+"""
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Mapping, Optional, Sequence
+
+from services.llm_config import (
+    LLMCapability,
+    ReasoningEffort,
+    resolve_capability_config,
+)
+
+SCHEMA_VERSION = 1
+MILESTONE = "INTERNAL_PILOT"
+
+# The internal pilot is explicitly NOT the public production milestone.
+NOT_MILESTONE = "PUBLIC_PRODUCTION"
+
+# ── Frozen selector baseline (Phase 7B decision) ────────────────────────────
+# Declared as constants rather than imported from ``benchmarks`` so that the
+# runtime package never depends on benchmark tooling. The values are verified
+# against the benchmark prompt manifest by
+# ``tests/test_internal_pilot_freeze.py`` — if variant_a_v1.md ever changes,
+# that test fails rather than the freeze silently tracking the edit.
+SELECTOR_PROMPT_VERSION = "variant_a_v1"
+SELECTOR_PROMPT_FINGERPRINT = (
+    "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e"
+)
+SELECTOR_PROVIDER = "openrouter"
+SELECTOR_MODEL = "openai/gpt-4o-mini"
+SELECTOR_TEMPERATURE = 0.0
+SELECTOR_MAX_TOKENS = 32
+
+# "reasoning = none" means NO reasoning field is transmitted, i.e.
+# ``reasoning_effort`` is UNSET (None) — not ``ReasoningEffort.NONE``.
+#
+# This distinction is load-bearing. Every validated Variant A run (DEV and
+# HOLDOUT) used config fingerprint ``af9eb2d0…``, which is the UNSET variant.
+# ``ReasoningEffort.NONE`` is a *different* request: since the openrouter
+# entry of ``REASONING_TRANSPORT`` gained "none", that enum would send an
+# explicit ``reasoning.effort="none"`` field and produce config fingerprint
+# ``caa89baa…``, which no benchmark ever measured.
+SELECTOR_REASONING: Optional[ReasoningEffort] = None
+SELECTOR_REASONING_LABEL = "none (unset; no reasoning field transmitted)"
+SELECTOR_CONFIG_FINGERPRINT = (
+    "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e"
+)
+
+# The selector contract (output schema + candidate prompt-view fields +
+# serialized probe payload + parser) is prompt-independent.
+SERIALIZER_CONTRACT_FINGERPRINT = (
+    "d50fbee416ca98783e499454fe840c1fdc2ff41b5fb7445cbac20f6a72c7f5a9"
+)
+
+# ── Frozen pipeline component identities ────────────────────────────────────
+CANDIDATE_ORDER = "production"  # ORIGINAL retrieval order
+BENCHMARK_ONLY_ORDERS = ("neutral", "permute:<seed>")
+
+INTENT_ANALYZER_IDENTITY = {
+    "component": "services.intent_analyzer",
+    "version": "v2",
+    "max_intents": 2,
+    "max_previous_user_turns": 2,
+    "bot_messages_in_context": False,
+    "regex_split_fallback": False,
+    "speculative_selector_call": False,
+    "strict_json": True,
+    # Resolved from configuration, never hardcoded here — see
+    # ``intent_analyzer_config_identity``.
+    "config_resolution": (
+        "DB active config (services.ai_registry.load_active_config), "
+        "bootstrapped from env via services.llm_config.resolve_llm_config_set; "
+        "env fallback LLM_INTENT_ANALYZER_* then LLM_PROVIDER"
+    ),
+}
+
+CALENDAR_IDENTITY = {
+    "component": "services.calendar_retrieval + services.calendar_utils",
+    "version": "v2",
+    "sort_key": "period/event/date then record id (Phase 3 order)",
+    "candidates_precede_qna": True,
+}
+
+CANDIDATE_ELIGIBILITY_IDENTITY = {
+    "component": "services.candidate_eligibility",
+    "version": "v2",
+    "default_max_candidates": 32,
+    "max_candidates_env": "SELECTOR_MAX_CANDIDATES",
+    "retrieval_score_decimals": 5,
+    "order": CANDIDATE_ORDER,
+}
+
+DEGRADED_MODE_IDENTITY = {
+    "component": "services.answer_pipeline.answer_in_degraded_mode",
+    "deterministic": True,
+    "chain": "Calendar -> Meili >=0.90 -> Qdrant >0.75",
+    "llm_generated": False,
+    "entered_only_on": (
+        "provider/model failure",
+        "circuit breaker open",
+        "admin emergency LLM disable",
+    ),
+    "never_entered_on": ("semantic NONE", "NO_ELIGIBLE_CANDIDATES"),
+    "is_normal_pilot_behaviour": False,
+}
+
+CIRCUIT_BREAKER_IDENTITY = {
+    "component": "services.circuit_breaker",
+    "default_failure_threshold": 3,
+    "default_cooldown_seconds": 60.0,
+    "failure_threshold_env": "LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    "cooldown_seconds_env": "LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
+    "invalid_output_is_neutral": True,
+}
+
+REGISTRY_IDENTITY = {
+    "component": "services.ai_registry",
+    "snapshot_schema": 1,
+    "config_versioning": "immutable ai_config_version rows, append-only audit",
+    "optimistic_concurrency": True,
+}
+
+PROVIDER_POLICY = {
+    "inference_provider": "openrouter",
+    "openrouter_only": True,
+    "direct_openai_calls_allowed": False,
+    "direct_gemini_calls_allowed": False,
+    "applies_to": ("selector", "intent_analyzer"),
+}
+
+LLM_DEFAULT_ENABLED = True  # §10: the pilot's normal path runs the LLM.
+
+# ── Known limitations (engineering-facing ids) ──────────────────────────────
+KNOWN_ISSUE_IDS = (
+    "IP-KI-1-generic-vs-specific-qualifier",
+    "IP-KI-2-expected-none-undervalidated",
+    "IP-KI-3-semantic-gold-is-model-adjudicated",
+)
+
+KNOWN_ISSUES = {
+    "IP-KI-1-generic-vs-specific-qualifier": {
+        "summary": (
+            "A generic intent can be routed to a more specific candidate that "
+            "assumes a qualifier the user never stated."
+        ),
+        "class": "general vs specific qualifier",
+        "severity": "known-open",
+        "user_facing_doc": False,
+    },
+    "IP-KI-2-expected-none-undervalidated": {
+        "summary": (
+            "Expected-NONE behaviour is not validated on a sufficiently large "
+            "sample; NONE recall remains unmeasured."
+        ),
+        "class": "expected NONE",
+        "severity": "known-open",
+        "user_facing_doc": True,
+    },
+    "IP-KI-3-semantic-gold-is-model-adjudicated": {
+        "summary": (
+            "Semantic Gold was produced by blind model adjudication "
+            "(adjudicator: GPT-5.6 Sol), not by independent human review."
+        ),
+        "class": "validation provenance",
+        "severity": "blocks-public-production",
+        "user_facing_doc": True,
+    },
+}
+
+# ── Backlog / deferred phases ───────────────────────────────────────────────
+BACKLOG_STATUS = "BACKLOG_POST_INTERNAL_PILOT"
+BACKLOG_PHASES = {
+    "7C": {"name": "Metadata Necessity", "status": BACKLOG_STATUS},
+    "7D": {"name": "Exact Alias Experiment", "status": BACKLOG_STATUS},
+    "7E": {"name": "Candidate Budget", "status": BACKLOG_STATUS},
+    "7F": {"name": "Bot Context Necessity", "status": BACKLOG_STATUS},
+}
+
+PHASE_7G = {
+    "name": "PUBLIC_PRODUCTION_FINAL_FREEZE",
+    "status": "DEFERRED_UNTIL_INTERNAL_PILOT_DATA",
+    "runs_before_internal_pilot": False,
+}
+
+# ── Validation provenance ───────────────────────────────────────────────────
+VALIDATION_PROVENANCE = {
+    "semantic_dev": {
+        "production_4o_mini": "51/77",
+        "variant_a_4o_mini": "64/77",
+        "variant_b_4o_mini": "56/77",
+        "variant_c_4o_mini": "63/77",
+        "variant_c_luna": "64/77",
+    },
+    "variant_a_holdout": {
+        "variant_a": "30/38",
+        "production": "24/38",
+        "only_a_correct": 6,
+        "only_production_correct": 0,
+        "historical_gate_status": "FAIL",
+        "historical_gate_reason": "471/472 hard gate",
+    },
+    "gold_provenance": {
+        "method": "blind model adjudication",
+        "adjudicator": "GPT-5.6 Sol",
+        "independent_human_gold": False,
+    },
+    "luna": {
+        "full_dev": "COMPLETE",
+        "variant_c_luna": "64/77",
+        "m1": "FAIL",
+        "status": "research candidate",
+        "auto_promoted_to_pilot_selector": False,
+    },
+    "selection_rationale": (
+        "strongest validated low-cost baseline",
+        "major false-NONE reduction",
+        "no observed HOLDOUT corruption vs Production",
+        "Luna did not improve aggregate DEV accuracy",
+        "public-production validation deferred to pilot data",
+    ),
+}
+
+OPERATIONAL_NOTES = {
+    "upstream_rate_limit": {
+        "observed": "429 rate_limit_exceeded",
+        "seen_in": "Luna stronger-selector benchmark experiment",
+        "scope": "benchmark tooling only",
+        "benchmark_only_mechanisms": (
+            "benchmarks.selector_v2.model_experiment.PacedBackend "
+            "(inter-call sleep pacing)",
+            "benchmarks.selector_v2.model_experiment.FailFastBackend "
+            "(stop after N consecutive operational errors)",
+            "benchmarks.selector_v2.cli --fail-fast-after / --retry-errors",
+        ),
+        "shared_runtime_retry_surface": (
+            "services.llm_provider: SDK max_retries / timeout passthrough from "
+            "capability config (unchanged by the Luna experiment)"
+        ),
+        "runtime_request_semantics_changed": False,
+        "retry_policy_redesigned_in_this_task": False,
+    }
+}
+
+# ── Observability contract ──────────────────────────────────────────────────
+# Verified against services/decision_trace.py at this commit rather than
+# asserted. "verified" fields are emitted today; "gaps" are required by the
+# pilot observability contract but NOT currently emitted, and must be closed
+# before the pilot rather than assumed.
+OBSERVABILITY_CONTRACT = {
+    "verified_source": "services.decision_trace",
+    "verified": {
+        "correlation": ("request_id",),
+        "intent": (
+            "execution_mode (SINGLE/MULTI)",
+            "intent_analyzer_status (success/failure)",
+            "context_used",
+            "calendar_relevant",
+        ),
+        "retrieval": ("candidate_count",),
+        "selector": (
+            "selected_candidate_ref_or_NONE",
+            "selected_candidate_source",
+            "provider",
+            "requested_model",
+            "actual_model",
+            "status (success/failure)",
+        ),
+        "degraded": ("degraded (list + request summary)", "degraded_reason"),
+        "latency": ("total_latency_ms", "intent latency_ms", "selector latency_ms"),
+        "errors": (
+            "model_error",
+            "timeout",
+            "pipeline_error",
+            "ai_config_error",
+            "circuit (breaker state entries)",
+        ),
+    },
+    "gaps": {
+        "session_correlation": (
+            "decision_trace carries request_id but no session/conversation id. "
+            "conversation_id exists only in routers/chat.py, so request->session "
+            "correlation is not available from telemetry alone."
+        ),
+        "wall_clock_timestamp": (
+            "The trace records elapsed time (started_at / total_latency_ms) but "
+            "no wall-clock timestamp field; it is currently only the log "
+            "record's own timestamp."
+        ),
+        "retrieval_latency": (
+            "No retrieval_ms is recorded. Intent, selector and total latency "
+            "are, so retrieval time is only inferable by subtraction."
+        ),
+        "source_availability": (
+            "Only proxies exist (meili_fallback_used, qdrant_fallback_used, "
+            "selected_source); explicit per-source availability is not emitted."
+        ),
+    },
+    "gap_status": "MUST_CLOSE_BEFORE_PILOT",
+    "privacy": {
+        "raw_user_content_required_in_telemetry": False,
+        "note": (
+            "Existing PII-free request-scoped decision trace is preserved; "
+            "this freeze adds no new mandatory raw-content field. Closing the "
+            "gaps above must not introduce one."
+        ),
+    },
+}
+
+PILOT_DATA_POLICY = {
+    "operational_telemetry": "automatic system metrics; PII-free decision trace",
+    "conversation_history": (
+        "the existing application's permitted chat-history behaviour; "
+        "no new collection system is introduced by this freeze"
+    ),
+    "post_pilot_benchmark_requirements": (
+        "PII anonymization / removal",
+        "deduplication",
+        "sampling",
+        "independent human adjudication",
+    ),
+    "validation_artifact_without_those_steps": "FORBIDDEN",
+}
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _canonical(value) -> str:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+
+
+def _jsonable(value):
+    """Tuples -> lists so the manifest round-trips through JSON unchanged."""
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def intent_analyzer_config_identity(
+    environ: Optional[Mapping[str, str]] = None,
+) -> dict:
+    """Derive the Intent Analyzer identity from configuration.
+
+    Never hardcodes a model: the values come from the same resolver the
+    runtime uses. The DB active config is bootstrapped from exactly this
+    env-effective config, so this is the frozen identity as long as an
+    operator has not created a newer registry version.
+    """
+    env = {"LLM_PROVIDER": PROVIDER_POLICY["inference_provider"]}
+    if environ is not None:
+        env = dict(environ)
+    config = resolve_capability_config(
+        LLMCapability.INTENT_ANALYZER, environ=env
+    )
+    identity = dict(INTENT_ANALYZER_IDENTITY)
+    identity["config"] = config.to_dict()
+    identity["config_fingerprint"] = config.fingerprint
+    return identity
+
+
+def selector_config_identity(
+    environ: Optional[Mapping[str, str]] = None,
+) -> dict:
+    env = {"LLM_PROVIDER": SELECTOR_PROVIDER}
+    if environ is not None:
+        env = dict(environ)
+    config = resolve_capability_config(LLMCapability.SELECTOR, environ=env)
+    return {"config": config.to_dict(), "config_fingerprint": config.fingerprint}
+
+
+def seeded_llm_enabled_default() -> Optional[bool]:
+    """Read DEFAULT_SYSTEM_CONFIG["LLM_ENABLED"] without importing the DB layer.
+
+    ``scripts.init_system`` pulls in ``core.database`` (SQLAlchemy engines), so
+    preflight parses the literal instead — keeping the check runnable with no
+    database and no infrastructure.
+    """
+    path = repo_root() / "backend" / "scripts" / "init_system.py"
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if "DEFAULT_SYSTEM_CONFIG" not in names:
+            continue
+        try:
+            mapping = ast.literal_eval(node.value)
+        except ValueError:
+            return None
+        raw = mapping.get("LLM_ENABLED")
+        if raw is None:
+            return None
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    return None
+
+
+def defines_symbol(path: Path, symbol: str) -> bool:
+    """True if ``path`` defines ``symbol`` at module level, without importing.
+
+    Importing ``services.answer_pipeline`` loads the embedding model, so
+    preflight inspects source instead of executing it.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == symbol:
+                return True
+    return False
+
+
+def benchmark_only_order_names() -> tuple[str, ...]:
+    """Candidate-order names referenced anywhere under ``services/``.
+
+    The pilot must use the ORIGINAL retrieval order; the neutral and permuted
+    orders are benchmark tooling and must not appear in the runtime package.
+    """
+    found: set[str] = set()
+    services_dir = repo_root() / "backend" / "services"
+    for path in sorted(services_dir.glob("*.py")):
+        if path.name == Path(__file__).name:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for marker in ("NEUTRAL_ORDER", "order_candidates", "permute:"):
+            if marker in source:
+                found.add(marker)
+    return tuple(sorted(found))
+
+
+def build_freeze_manifest(
+    *,
+    git_commit: str,
+    created_at: str,
+    environ: Optional[Mapping[str, str]] = None,
+) -> dict:
+    """Assemble the machine-readable freeze manifest.
+
+    Contains no secrets: only component identity, parameters and fingerprints.
+    """
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "milestone": MILESTONE,
+        "not_milestone": NOT_MILESTONE,
+        "milestone_definition": (
+            "Single-server Docker environment in which AUZEF staff exercise "
+            "the chatbot as real users and generate real usage data."
+        ),
+        "git_commit": git_commit,
+        "selector_prompt_version": SELECTOR_PROMPT_VERSION,
+        "selector_prompt_fingerprint": SELECTOR_PROMPT_FINGERPRINT,
+        "selector_provider": SELECTOR_PROVIDER,
+        "selector_model": SELECTOR_MODEL,
+        "selector_reasoning": "none",
+        "selector_reasoning_semantics": SELECTOR_REASONING_LABEL,
+        "selector_temperature": SELECTOR_TEMPERATURE,
+        "selector_max_tokens": SELECTOR_MAX_TOKENS,
+        "selector_config_fingerprint": SELECTOR_CONFIG_FINGERPRINT,
+        "selector_contract_fingerprint": SERIALIZER_CONTRACT_FINGERPRINT,
+        "intent_analyzer": intent_analyzer_config_identity(environ),
+        "calendar": CALENDAR_IDENTITY,
+        "candidate_eligibility": CANDIDATE_ELIGIBILITY_IDENTITY,
+        "candidate_order": CANDIDATE_ORDER,
+        "benchmark_only_orders": BENCHMARK_ONLY_ORDERS,
+        "degraded_mode": DEGRADED_MODE_IDENTITY,
+        "circuit_breaker": CIRCUIT_BREAKER_IDENTITY,
+        "registry": REGISTRY_IDENTITY,
+        "provider_policy": PROVIDER_POLICY,
+        "llm_default_enabled": LLM_DEFAULT_ENABLED,
+        "known_issue_ids": KNOWN_ISSUE_IDS,
+        "known_issues": KNOWN_ISSUES,
+        "backlog_phases": BACKLOG_PHASES,
+        "phase_7g": PHASE_7G,
+        "validation_provenance": VALIDATION_PROVENANCE,
+        "operational_notes": OPERATIONAL_NOTES,
+        "observability_contract": OBSERVABILITY_CONTRACT,
+        "pilot_data_policy": PILOT_DATA_POLICY,
+        "created_at": created_at,
+    }
+    manifest = _jsonable(manifest)
+    manifest["freeze_fingerprint"] = freeze_fingerprint(manifest)
+    return manifest
+
+
+# Excluded from the hashed payload so the fingerprint is reproducible across
+# regenerations. Documented in INTERNAL_PILOT_FREEZE.md.
+#
+# ``git_commit`` is provenance, not configuration: the fingerprint identifies
+# the frozen *behaviour*, so regenerating the manifest from a later commit
+# that changes nothing frozen must yield the same fingerprint. Were it hashed,
+# every commit would silently invalidate the published value.
+FINGERPRINT_EXCLUDED_FIELDS = ("created_at", "git_commit", "freeze_fingerprint")
+
+
+def freeze_fingerprint(manifest: Mapping) -> str:
+    """Deterministic SHA256 over the manifest minus volatile fields."""
+    payload = {
+        key: value
+        for key, value in manifest.items()
+        if key not in FINGERPRINT_EXCLUDED_FIELDS
+    }
+    return _sha256(_canonical(_jsonable(payload)))
+
+
+# ── Preflight ───────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    name: str
+    passed: bool
+    expected: str
+    actual: str
+    detail: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "status": "PASS" if self.passed else "FAIL",
+            "expected": self.expected,
+            "actual": self.actual,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
+class PreflightReport:
+    checks: Sequence[CheckResult] = field(default_factory=tuple)
+
+    @property
+    def failures(self) -> list[CheckResult]:
+        return [check for check in self.checks if not check.passed]
+
+    @property
+    def passed(self) -> bool:
+        return not self.failures
+
+    @property
+    def status(self) -> str:
+        return "PASS" if self.passed else "FAIL"
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "checks": [check.to_dict() for check in self.checks],
+            "failed_checks": [check.name for check in self.failures],
+        }
+
+
+def _normalize_prompt(text: str) -> str:
+    """Same normalization the benchmark prompt contract uses."""
+    lines = [
+        line.rstrip()
+        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    ]
+    return "\n".join(lines).strip("\n")
+
+
+def runtime_selector_prompt_fingerprint() -> str:
+    from services.selector import SELECTOR_SYSTEM_PROMPT
+
+    return _sha256(_normalize_prompt(SELECTOR_SYSTEM_PROMPT))
+
+
+def run_preflight(
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    llm_enabled_default: Optional[bool] = None,
+    selector_prompt_fingerprint: Optional[str] = None,
+) -> PreflightReport:
+    """Compare live runtime configuration against the frozen baseline.
+
+    Never mutates configuration. A mismatch is reported as FAIL; resolving it
+    is an operator decision.
+    """
+    checks: list[CheckResult] = []
+
+    config = None
+    resolve_error = ""
+    try:
+        config = resolve_capability_config(
+            LLMCapability.SELECTOR,
+            environ=dict(environ) if environ is not None else None,
+        )
+    except (ValueError, RuntimeError) as exc:
+        resolve_error = str(exc)
+
+    checks.append(
+        CheckResult(
+            "selector_config_resolvable",
+            config is not None,
+            "resolvable selector capability config",
+            "resolved" if config is not None else f"error: {resolve_error}",
+            detail=(
+                ""
+                if config is not None
+                else "LLM_PROVIDER (or LLM_SELECTOR_PROVIDER) is unset in this "
+                "environment; the config-dependent checks below cannot be "
+                "evaluated. Run preflight on the pilot host with its real env."
+            ),
+        )
+    )
+
+    # A missing provider must not hide the remaining mismatches, so the
+    # config-independent checks always run. Unresolvable config is reported as
+    # "unresolved" per check rather than short-circuiting the whole report.
+    def _config_check(name, ok, expected, actual, detail=""):
+        if config is None:
+            checks.append(
+                CheckResult(name, False, expected, "unresolved", detail=detail)
+            )
+        else:
+            checks.append(CheckResult(name, ok(), expected, actual(), detail=detail))
+
+    _config_check(
+        "selector_provider_matches",
+        lambda: config.provider == SELECTOR_PROVIDER,
+        SELECTOR_PROVIDER,
+        lambda: config.provider,
+    )
+    _config_check(
+        "selector_model_matches",
+        lambda: config.model == SELECTOR_MODEL,
+        SELECTOR_MODEL,
+        lambda: config.model,
+    )
+    _config_check(
+        "selector_reasoning_matches",
+        lambda: config.reasoning_effort is SELECTOR_REASONING,
+        SELECTOR_REASONING_LABEL,
+        lambda: "unset"
+        if config.reasoning_effort is None
+        else config.reasoning_effort.value,
+        detail=(
+            "'none' means no reasoning field is transmitted (unset). "
+            "ReasoningEffort.NONE is a different, unvalidated request."
+        ),
+    )
+    _config_check(
+        "selector_temperature_matches",
+        lambda: float(config.temperature) == SELECTOR_TEMPERATURE,
+        str(SELECTOR_TEMPERATURE),
+        lambda: str(config.temperature),
+    )
+    _config_check(
+        "selector_max_tokens_matches",
+        lambda: int(config.max_tokens) == SELECTOR_MAX_TOKENS,
+        str(SELECTOR_MAX_TOKENS),
+        lambda: str(config.max_tokens),
+    )
+    _config_check(
+        "selector_config_fingerprint_matches",
+        lambda: config.fingerprint == SELECTOR_CONFIG_FINGERPRINT,
+        SELECTOR_CONFIG_FINGERPRINT,
+        lambda: config.fingerprint,
+    )
+
+    actual_prompt_fp = (
+        selector_prompt_fingerprint
+        if selector_prompt_fingerprint is not None
+        else runtime_selector_prompt_fingerprint()
+    )
+    checks.append(
+        CheckResult(
+            "selector_prompt_fingerprint_matches",
+            actual_prompt_fp == SELECTOR_PROMPT_FINGERPRINT,
+            f"{SELECTOR_PROMPT_FINGERPRINT} ({SELECTOR_PROMPT_VERSION})",
+            actual_prompt_fp,
+            detail=(
+                "The runtime still serves the 'production' selector prompt. "
+                "Landing variant_a_v1 in services.selector is a prerequisite "
+                "for the internal pilot and is NOT done by this freeze."
+            ),
+        )
+    )
+
+    enabled = (
+        llm_enabled_default
+        if llm_enabled_default is not None
+        else seeded_llm_enabled_default()
+    )
+    checks.append(
+        CheckResult(
+            "llm_enabled_seeded_default",
+            enabled is True,
+            "true",
+            "unknown" if enabled is None else str(enabled).lower(),
+            detail=(
+                "Reads DEFAULT_SYSTEM_CONFIG['LLM_ENABLED'] in "
+                "scripts/init_system.py — the SEEDED default, not the live "
+                "SystemConfig row. An operator may have enabled the LLM via "
+                "admin while the seed still says false; the acceptance plan "
+                "checks the live value separately (Stage A8). The pilot's "
+                "normal request path runs the LLM; degraded mode is an "
+                "exception path, not the default operating mode."
+            ),
+        )
+    )
+
+    leaked_orders = benchmark_only_order_names()
+    order_is_clean = not leaked_orders
+    checks.append(
+        CheckResult(
+            "candidate_order_expected",
+            order_is_clean,
+            f"{CANDIDATE_ORDER} (ORIGINAL retrieval order); no reordering in services/",
+            "production order preserved"
+            if order_is_clean
+            else f"benchmark reordering leaked into services/: {', '.join(leaked_orders)}",
+            detail=(
+                "Neutral/permuted candidate order exists only in "
+                "benchmarks/selector_v2/contract.py, never in services/."
+            ),
+        )
+    )
+
+    degraded_available = defines_symbol(
+        repo_root() / "backend" / "services" / "answer_pipeline.py",
+        "answer_in_degraded_mode",
+    )
+    checks.append(
+        CheckResult(
+            "degraded_mode_available",
+            degraded_available,
+            "services.answer_pipeline.answer_in_degraded_mode defined",
+            "available" if degraded_available else "missing",
+            detail=(
+                "Checked by source inspection: importing answer_pipeline loads "
+                "the embedding model, which preflight must not do."
+            ),
+        )
+    )
+
+    _config_check(
+        "provider_policy_openrouter_only",
+        lambda: config.provider == PROVIDER_POLICY["inference_provider"],
+        "openrouter",
+        lambda: config.provider,
+        detail="Direct OpenAI/Gemini inference is not permitted in the pilot.",
+    )
+
+    return PreflightReport(tuple(checks))

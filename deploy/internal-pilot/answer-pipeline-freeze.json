@@ -1,0 +1,264 @@
+{
+  "backlog_phases": {
+    "7C": {
+      "name": "Metadata Necessity",
+      "status": "BACKLOG_POST_INTERNAL_PILOT"
+    },
+    "7D": {
+      "name": "Exact Alias Experiment",
+      "status": "BACKLOG_POST_INTERNAL_PILOT"
+    },
+    "7E": {
+      "name": "Candidate Budget",
+      "status": "BACKLOG_POST_INTERNAL_PILOT"
+    },
+    "7F": {
+      "name": "Bot Context Necessity",
+      "status": "BACKLOG_POST_INTERNAL_PILOT"
+    }
+  },
+  "benchmark_only_orders": [
+    "neutral",
+    "permute:<seed>"
+  ],
+  "calendar": {
+    "candidates_precede_qna": true,
+    "component": "services.calendar_retrieval + services.calendar_utils",
+    "sort_key": "period/event/date then record id (Phase 3 order)",
+    "version": "v2"
+  },
+  "candidate_eligibility": {
+    "component": "services.candidate_eligibility",
+    "default_max_candidates": 32,
+    "max_candidates_env": "SELECTOR_MAX_CANDIDATES",
+    "order": "production",
+    "retrieval_score_decimals": 5,
+    "version": "v2"
+  },
+  "candidate_order": "production",
+  "circuit_breaker": {
+    "component": "services.circuit_breaker",
+    "cooldown_seconds_env": "LLM_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
+    "default_cooldown_seconds": 60.0,
+    "default_failure_threshold": 3,
+    "failure_threshold_env": "LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    "invalid_output_is_neutral": true
+  },
+  "created_at": "2026-09-20T08:21:12Z",
+  "degraded_mode": {
+    "chain": "Calendar -> Meili >=0.90 -> Qdrant >0.75",
+    "component": "services.answer_pipeline.answer_in_degraded_mode",
+    "deterministic": true,
+    "entered_only_on": [
+      "provider/model failure",
+      "circuit breaker open",
+      "admin emergency LLM disable"
+    ],
+    "is_normal_pilot_behaviour": false,
+    "llm_generated": false,
+    "never_entered_on": [
+      "semantic NONE",
+      "NO_ELIGIBLE_CANDIDATES"
+    ]
+  },
+  "freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "git_commit": "389d2c01d7ea21f709964c273536479a7c3baa36",
+  "intent_analyzer": {
+    "bot_messages_in_context": false,
+    "component": "services.intent_analyzer",
+    "config": {
+      "capability": "intent_analyzer",
+      "max_retries": null,
+      "max_tokens": 300,
+      "model": "openai/gpt-4o-mini",
+      "provider": "openrouter",
+      "reasoning_effort": null,
+      "structured_output_enabled": false,
+      "temperature": 0.0,
+      "timeout_seconds": null
+    },
+    "config_fingerprint": "2f1b27bc343058f7af2988f241cab07f38404c168de01e4ab93a89cdf8c2b1a6",
+    "config_resolution": "DB active config (services.ai_registry.load_active_config), bootstrapped from env via services.llm_config.resolve_llm_config_set; env fallback LLM_INTENT_ANALYZER_* then LLM_PROVIDER",
+    "max_intents": 2,
+    "max_previous_user_turns": 2,
+    "regex_split_fallback": false,
+    "speculative_selector_call": false,
+    "strict_json": true,
+    "version": "v2"
+  },
+  "known_issue_ids": [
+    "IP-KI-1-generic-vs-specific-qualifier",
+    "IP-KI-2-expected-none-undervalidated",
+    "IP-KI-3-semantic-gold-is-model-adjudicated"
+  ],
+  "known_issues": {
+    "IP-KI-1-generic-vs-specific-qualifier": {
+      "class": "general vs specific qualifier",
+      "severity": "known-open",
+      "summary": "A generic intent can be routed to a more specific candidate that assumes a qualifier the user never stated.",
+      "user_facing_doc": false
+    },
+    "IP-KI-2-expected-none-undervalidated": {
+      "class": "expected NONE",
+      "severity": "known-open",
+      "summary": "Expected-NONE behaviour is not validated on a sufficiently large sample; NONE recall remains unmeasured.",
+      "user_facing_doc": true
+    },
+    "IP-KI-3-semantic-gold-is-model-adjudicated": {
+      "class": "validation provenance",
+      "severity": "blocks-public-production",
+      "summary": "Semantic Gold was produced by blind model adjudication (adjudicator: GPT-5.6 Sol), not by independent human review.",
+      "user_facing_doc": true
+    }
+  },
+  "llm_default_enabled": true,
+  "milestone": "INTERNAL_PILOT",
+  "milestone_definition": "Single-server Docker environment in which AUZEF staff exercise the chatbot as real users and generate real usage data.",
+  "not_milestone": "PUBLIC_PRODUCTION",
+  "observability_contract": {
+    "gap_status": "MUST_CLOSE_BEFORE_PILOT",
+    "gaps": {
+      "retrieval_latency": "No retrieval_ms is recorded. Intent, selector and total latency are, so retrieval time is only inferable by subtraction.",
+      "session_correlation": "decision_trace carries request_id but no session/conversation id. conversation_id exists only in routers/chat.py, so request->session correlation is not available from telemetry alone.",
+      "source_availability": "Only proxies exist (meili_fallback_used, qdrant_fallback_used, selected_source); explicit per-source availability is not emitted.",
+      "wall_clock_timestamp": "The trace records elapsed time (started_at / total_latency_ms) but no wall-clock timestamp field; it is currently only the log record's own timestamp."
+    },
+    "privacy": {
+      "note": "Existing PII-free request-scoped decision trace is preserved; this freeze adds no new mandatory raw-content field. Closing the gaps above must not introduce one.",
+      "raw_user_content_required_in_telemetry": false
+    },
+    "verified": {
+      "correlation": [
+        "request_id"
+      ],
+      "degraded": [
+        "degraded (list + request summary)",
+        "degraded_reason"
+      ],
+      "errors": [
+        "model_error",
+        "timeout",
+        "pipeline_error",
+        "ai_config_error",
+        "circuit (breaker state entries)"
+      ],
+      "intent": [
+        "execution_mode (SINGLE/MULTI)",
+        "intent_analyzer_status (success/failure)",
+        "context_used",
+        "calendar_relevant"
+      ],
+      "latency": [
+        "total_latency_ms",
+        "intent latency_ms",
+        "selector latency_ms"
+      ],
+      "retrieval": [
+        "candidate_count"
+      ],
+      "selector": [
+        "selected_candidate_ref_or_NONE",
+        "selected_candidate_source",
+        "provider",
+        "requested_model",
+        "actual_model",
+        "status (success/failure)"
+      ]
+    },
+    "verified_source": "services.decision_trace"
+  },
+  "operational_notes": {
+    "upstream_rate_limit": {
+      "benchmark_only_mechanisms": [
+        "benchmarks.selector_v2.model_experiment.PacedBackend (inter-call sleep pacing)",
+        "benchmarks.selector_v2.model_experiment.FailFastBackend (stop after N consecutive operational errors)",
+        "benchmarks.selector_v2.cli --fail-fast-after / --retry-errors"
+      ],
+      "observed": "429 rate_limit_exceeded",
+      "retry_policy_redesigned_in_this_task": false,
+      "runtime_request_semantics_changed": false,
+      "scope": "benchmark tooling only",
+      "seen_in": "Luna stronger-selector benchmark experiment",
+      "shared_runtime_retry_surface": "services.llm_provider: SDK max_retries / timeout passthrough from capability config (unchanged by the Luna experiment)"
+    }
+  },
+  "phase_7g": {
+    "name": "PUBLIC_PRODUCTION_FINAL_FREEZE",
+    "runs_before_internal_pilot": false,
+    "status": "DEFERRED_UNTIL_INTERNAL_PILOT_DATA"
+  },
+  "pilot_data_policy": {
+    "conversation_history": "the existing application's permitted chat-history behaviour; no new collection system is introduced by this freeze",
+    "operational_telemetry": "automatic system metrics; PII-free decision trace",
+    "post_pilot_benchmark_requirements": [
+      "PII anonymization / removal",
+      "deduplication",
+      "sampling",
+      "independent human adjudication"
+    ],
+    "validation_artifact_without_those_steps": "FORBIDDEN"
+  },
+  "provider_policy": {
+    "applies_to": [
+      "selector",
+      "intent_analyzer"
+    ],
+    "direct_gemini_calls_allowed": false,
+    "direct_openai_calls_allowed": false,
+    "inference_provider": "openrouter",
+    "openrouter_only": true
+  },
+  "registry": {
+    "component": "services.ai_registry",
+    "config_versioning": "immutable ai_config_version rows, append-only audit",
+    "optimistic_concurrency": true,
+    "snapshot_schema": 1
+  },
+  "schema_version": 1,
+  "selector_config_fingerprint": "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e",
+  "selector_contract_fingerprint": "d50fbee416ca98783e499454fe840c1fdc2ff41b5fb7445cbac20f6a72c7f5a9",
+  "selector_max_tokens": 32,
+  "selector_model": "openai/gpt-4o-mini",
+  "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+  "selector_prompt_version": "variant_a_v1",
+  "selector_provider": "openrouter",
+  "selector_reasoning": "none",
+  "selector_reasoning_semantics": "none (unset; no reasoning field transmitted)",
+  "selector_temperature": 0.0,
+  "validation_provenance": {
+    "gold_provenance": {
+      "adjudicator": "GPT-5.6 Sol",
+      "independent_human_gold": false,
+      "method": "blind model adjudication"
+    },
+    "luna": {
+      "auto_promoted_to_pilot_selector": false,
+      "full_dev": "COMPLETE",
+      "m1": "FAIL",
+      "status": "research candidate",
+      "variant_c_luna": "64/77"
+    },
+    "selection_rationale": [
+      "strongest validated low-cost baseline",
+      "major false-NONE reduction",
+      "no observed HOLDOUT corruption vs Production",
+      "Luna did not improve aggregate DEV accuracy",
+      "public-production validation deferred to pilot data"
+    ],
+    "semantic_dev": {
+      "production_4o_mini": "51/77",
+      "variant_a_4o_mini": "64/77",
+      "variant_b_4o_mini": "56/77",
+      "variant_c_4o_mini": "63/77",
+      "variant_c_luna": "64/77"
+    },
+    "variant_a_holdout": {
+      "historical_gate_reason": "471/472 hard gate",
+      "historical_gate_status": "FAIL",
+      "only_a_correct": 6,
+      "only_production_correct": 0,
+      "production": "24/38",
+      "variant_a": "30/38"
+    }
+  }
+}
