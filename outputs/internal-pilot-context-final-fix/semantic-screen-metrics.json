@@ -1,0 +1,87 @@
+{
+  "probe_plan_identical_to_previous_screen": true,
+  "gates": {
+    "operational": {
+      "valid": "14/14",
+      "invalid": 0,
+      "provider_errors": 0,
+      "timeouts": 0,
+      "required": "14/14 valid, 0 invalid, 0 provider errors, 0 timeouts",
+      "status": "PASS",
+      "previous_screen": "12/14 valid, 2 invalid"
+    },
+    "multi": {
+      "correct": "4/4",
+      "required": "4/4",
+      "previous_screen": "4/4",
+      "status": "PASS"
+    },
+    "context_required": {
+      "correct": "3/4",
+      "self_contained_resolved_text": "3/4",
+      "required": "4/4 context_used=true and 4/4 genuinely self-contained",
+      "previous_screen": "1/4",
+      "status": "FAIL"
+    },
+    "context_controls": {
+      "correct": "4/4",
+      "required": "4/4 context_used=false and verbatim resolved_text",
+      "previous_screen": "4/4",
+      "status": "PASS"
+    },
+    "calendar": {
+      "relevant": "PASS",
+      "irrelevant": "PASS",
+      "status": "PASS"
+    }
+  },
+  "failure_taxonomy": [
+    {
+      "probe": "C3",
+      "failure_mode": "CONTEXT_NOT_DETECTED",
+      "detail": "short reference-dependent question treated as self-contained; context_used stayed false and resolved_text was left unchanged"
+    }
+  ],
+  "resolved_text_samples": [
+    {
+      "probe": "C1",
+      "context_used": [
+        true
+      ],
+      "resolved": [
+        "Yatay geçiş şartları neler?"
+      ]
+    },
+    {
+      "probe": "C2",
+      "context_used": [
+        true
+      ],
+      "resolved": [
+        "Bütünleme sınavı ne zaman yapılıyor?"
+      ]
+    },
+    {
+      "probe": "C3",
+      "context_used": [
+        false
+      ],
+      "resolved": [
+        "Hangi belgeler gerekiyor?"
+      ]
+    },
+    {
+      "probe": "C4",
+      "context_used": [
+        true
+      ],
+      "resolved": [
+        "Mezuniyet işlemleri ne kadar sürüyor?"
+      ]
+    }
+  ],
+  "screen_status": "FAIL",
+  "failure_class_1_CONTEXT_CLAIMED_WITHOUT_RESOLUTION": "FIXED (2 occurrences -> 0)",
+  "failure_class_2_CONTEXT_NOT_DETECTED": "PARTIALLY FIXED (1 occurrence remains: C3)",
+  "interpretation": "Failure class 1 is fully resolved: the operational gate is now clean at 14/14 valid with 0 invalid, and every probe that claims context produces a genuinely self-contained rewrite. Failure class 2 remains on one probe, so the context-required gate misses at 3/4."
+}

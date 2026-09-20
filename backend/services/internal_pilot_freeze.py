@@ -1012,3 +1012,95 @@ def amendment_2_fingerprint(amendment: Mapping) -> str:
     payload = {key: value for key, value in amendment.items()
                if key not in AMENDMENT_2_EXCLUDED_FIELDS}
     return _sha256(_canonical(_jsonable(payload)))
+
+
+# ── Amendment 3: context resolution final fix ───────────────────────────────
+#
+# Amendment 2 restored MULTI (0/3 -> 4/4) but the context branch still failed
+# its screen at 1/4 with two classes:
+#   CONTEXT_CLAIMED_WITHOUT_RESOLUTION - context_used=true while resolved_text
+#       stayed referential, correctly rejected by the strict parser;
+#   CONTEXT_NOT_DETECTED - a short reference-dependent question treated as
+#       self-contained.
+# Fixed in the prompt only: the flag and the rewrite are bound into one
+# decision, and a generic self-contained test describes when a short question
+# is reference-dependent. MULTI wording untouched; anti-over-trigger kept so
+# the 4/4 control result is protected.
+
+AMENDMENT_3_ID = "INTERNAL_PILOT_FREEZE_AMENDMENT_3"
+AMENDMENT_2_FINGERPRINT = (
+    "2c9f2ea99ae9a44f88ae1623a2bb753abf212c17d5a6bef59ec56f81a99fed50"
+)
+
+
+def build_freeze_amendment_3(*, git_commit: str, created_at: str,
+                             live_screen: Optional[Mapping] = None) -> dict:
+    amendment = {
+        "schema_version": SCHEMA_VERSION,
+        "amendment_id": AMENDMENT_3_ID,
+        "milestone": MILESTONE,
+        "parent_amendment_id": AMENDMENT_2_ID,
+        "parent_amendment_fingerprint": AMENDMENT_2_FINGERPRINT,
+        "amendment_1_fingerprint": AMENDMENT_1_FINGERPRINT,
+        "historical_parent_freeze_fingerprint": PARENT_FREEZE_FINGERPRINT,
+        "parents_are_immutable": True,
+        "git_commit": git_commit,
+        "classification": {
+            "intent_analyzer_context_semantic_bug_fix": True,
+            "model_change": False,
+            "selector_change": False,
+            "retrieval_change": False,
+            "calendar_change": False,
+            "parser_contract_change": False,
+            "context_assembly_change": False,
+            "multi_rule_change": False,
+        },
+        "rationale": (
+            "amendment 2 restored MULTI but left context at 1/4 with two "
+            "classes: CONTEXT_CLAIMED_WITHOUT_RESOLUTION (flag set while "
+            "resolved_text stayed referential) and CONTEXT_NOT_DETECTED "
+            "(short reference-dependent question treated as self-contained). "
+            "Prompt-only fix: the flag and the rewrite are one decision, plus "
+            "a generic self-contained test for short questions."
+        ),
+        "changed": {
+            "component": "services.intent_analyzer.build_intent_analyzer_prompt",
+            "what": (
+                "context branch only: flag bound to the rewrite; generic "
+                "reference-dependency test for short questions; "
+                "anti-over-trigger rule retained"
+            ),
+            "intent_analyzer_prompt_fingerprint": intent_analyzer_prompt_fingerprint(),
+            "multi_rules_touched": False,
+            "context_assembly_changed": False,
+        },
+        "preserved": {
+            "analyzer_policy": (
+                "ambiguity -> SINGLE, MULTI max 2, calendar semantics, "
+                "normalization policy, bot exclusion, max 2 previous USER turns"
+            ),
+            "parser_strictness": "strict=True, extra=forbid, Literal[1, 2]",
+            "context_used_false_implies_verbatim_resolved_text": True,
+            "context_used_true_requires_real_resolution": True,
+            "selector_prompt_version": SELECTOR_PROMPT_VERSION,
+            "selector_prompt_fingerprint": SELECTOR_PROMPT_FINGERPRINT,
+            "selector_provider": SELECTOR_PROVIDER,
+            "selector_model": SELECTOR_MODEL,
+            "selector_config_fingerprint": SELECTOR_CONFIG_FINGERPRINT,
+            "candidate_order": CANDIDATE_ORDER,
+        },
+        "live_semantic_screen": dict(live_screen) if live_screen else None,
+        "created_at": created_at,
+    }
+    amendment = _jsonable(amendment)
+    amendment["amendment_fingerprint"] = amendment_3_fingerprint(amendment)
+    return amendment
+
+
+AMENDMENT_3_EXCLUDED_FIELDS = AMENDMENT_2_EXCLUDED_FIELDS
+
+
+def amendment_3_fingerprint(amendment: Mapping) -> str:
+    payload = {key: value for key, value in amendment.items()
+               if key not in AMENDMENT_3_EXCLUDED_FIELDS}
+    return _sha256(_canonical(_jsonable(payload)))

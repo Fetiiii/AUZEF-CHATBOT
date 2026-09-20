@@ -1,0 +1,30 @@
+{
+  "milestone": "INTERNAL_PILOT",
+  "artifact": "context-resolution-final-fix",
+  "git_commit": "f89337d4bdd3be01fa1c0b29102ce6e52cf4e437",
+  "historical_parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "amendment_1_fingerprint": "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485",
+  "amendment_2_fingerprint": "2c9f2ea99ae9a44f88ae1623a2bb753abf212c17d5a6bef59ec56f81a99fed50",
+  "amendment_3_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_3",
+  "amendment_3_fingerprint": "429dc8c0f44f3969a09ef04b6a46363959aa4c37354a3f7394a8896d6511bbce",
+  "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+  "selector_changed": false,
+  "context_assembly_changed": false,
+  "parser_changed": false,
+  "multi_rules_changed": false,
+  "probes_planned": 14,
+  "probes_executed": 14,
+  "valid": 14,
+  "invalid": 0,
+  "multi_correct": 4,
+  "context_required_correct": 3,
+  "context_required_self_contained": 3,
+  "context_controls_correct": 4,
+  "semantic_screen": "FAIL",
+  "full_reacceptance": "BLOCKED",
+  "remaining_blockers": [
+    "CONTEXT_NOT_DETECTED (C3)"
+  ],
+  "contains_secrets": false,
+  "contains_raw_pii": false
+}

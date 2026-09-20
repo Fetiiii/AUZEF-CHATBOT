@@ -387,7 +387,8 @@ def test_prompt_allows_resolved_text_to_differ_when_context_is_used():
 
 def test_prompt_warns_against_using_context_merely_because_it_exists():
     system, _user = build_intent_analyzer_prompt(_TURN, ())
-    assert "yalnız gerçekten gerekliyse kullan" in system
+    assert "AŞIRI TETİKLEME YOK" in system
+    assert "eski konuyu taşıma" in system
 
 
 def test_self_contained_turn_requires_verbatim_resolved_text():
@@ -580,12 +581,15 @@ def test_amendment_2_is_classified_as_an_analyzer_semantic_bug_fix():
         assert c[forbidden] is False
 
 
-def test_amendment_2_tracks_the_live_analyzer_prompt():
+def test_amendment_2_keeps_its_historical_prompt_fingerprint():
+    """Amendment 2 is history once amendment 3 changes the prompt again."""
     from services.internal_pilot_freeze import intent_analyzer_prompt_fingerprint
 
-    assert _amendment2()["changed"]["intent_analyzer_prompt_fingerprint"] == (
-        intent_analyzer_prompt_fingerprint()
+    recorded = _amendment2()["changed"]["intent_analyzer_prompt_fingerprint"]
+    assert recorded == (
+        "112fa46942d8fdff3edf25a6e02ac3ccfbc020b201ac0acbd964ff91a6bdf493"
     )
+    assert recorded != intent_analyzer_prompt_fingerprint()
     assert _amendment2()["changed"]["context_assembly_changed"] is False
 
 
@@ -596,3 +600,192 @@ def test_amendment_2_preserves_selector_and_contract():
     assert preserved["intent_count_must_be_json_integer"] is True
     assert preserved["context_used_false_implies_verbatim_resolved_text"] is True
     assert preserved["candidate_order"] == "production"
+
+
+# ── Context resolution final fix (failure classes 1 and 2) ──────────────────
+
+
+def test_prompt_binds_context_flag_to_the_rewrite():
+    """Failure class 1: the flag and the rewrite must be one decision."""
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "tek bir karardır" in system
+    assert "ayrı ayrı seçilemez" in system
+    assert "context_used = true DEME" in system
+
+
+def test_prompt_states_the_self_contained_test_for_short_questions():
+    """Failure class 2: reference-dependent short questions."""
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "SELF-CONTAINED DEĞİLDİR TESTİ" in system
+    for referent in ("belge", "tarih", "ücre", "süre"):
+        assert referent in system
+    assert "peki" in system.lower()
+
+
+def test_prompt_keeps_the_anti_over_trigger_rule():
+    """§7: short does not automatically mean context-dependent."""
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "AŞIRI TETİKLEME YOK" in system
+    assert "Kısa olmak tek başına context-dependent olmak" in system
+
+
+def test_prompt_resolution_criterion_is_semantic_not_mechanical():
+    """§5: no meaningless 'must always differ' rule."""
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "Ölçüt mekanik değil semantiktir" in system
+    assert "her zaman farklı olmalıdır" not in system
+
+
+def test_prompt_never_contains_the_frozen_probe_texts():
+    """The screen must not be gamed: probe sentences stay out of the prompt."""
+    from services.internal_pilot_freeze import repo_root
+
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    plan = json.loads(
+        (repo_root() / "outputs/internal-pilot-intent-semantic-fix/"
+         "prelive-probe-plan.json").read_text(encoding="utf-8"))
+    for probe in plan["probes"]:
+        assert probe["current"] not in system
+        for previous in probe["previous"]:
+            assert previous not in system
+
+
+def test_context_used_true_without_resolution_stays_rejected():
+    """Failure class 1, enforced by the unchanged strict parser."""
+    turn = "Hangi belgeler gerekiyor?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": turn, "normalized_text": turn, "resolved_text": turn,
+        "context_used": True, "calendar_relevant": False}]}
+    with pytest.raises(ValueError, match="context_used does not reflect"):
+        _parse(json.dumps(payload, ensure_ascii=False), turn=turn,
+               previous=("İkinci üniversite kaydı yaptırmak istiyorum",))
+
+
+@pytest.mark.parametrize("previous,current,resolved", [
+    ("Staj başvurusu yapmak istiyorum", "Nereden yapılıyor?",
+     "Staj başvurusu nereden yapılıyor?"),
+    ("Askerlik erteleme işlemi yapmak istiyorum", "Hangi belgeler gerekiyor?",
+     "Askerlik erteleme işlemi hangi belgeler gerekiyor?"),
+    ("Bütünleme sınavı hakkında soru soracaktım", "Peki ne zaman?",
+     "Peki bütünleme sınavı ne zaman?"),
+])
+def test_reference_dependent_turn_with_resolution_is_accepted(previous, current, resolved):
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": current, "normalized_text": current,
+        "resolved_text": resolved, "context_used": True,
+        "calendar_relevant": False}]}
+    analysis = _parse(json.dumps(payload, ensure_ascii=False), turn=current,
+                      previous=(previous,))
+    assert analysis.intents[0].context_used is True
+    assert analysis.intents[0].resolved_text != analysis.intents[0].normalized_text
+
+
+def test_short_message_without_resolvable_context_must_not_invent_one():
+    """No previous turn -> context cannot be claimed at all."""
+    turn = "Hangi belgeler gerekiyor?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": turn, "normalized_text": turn,
+        "resolved_text": "Yatay geçiş için hangi belgeler gerekiyor?",
+        "context_used": True, "calendar_relevant": False}]}
+    with pytest.raises(ValueError):
+        _parse(json.dumps(payload, ensure_ascii=False), turn=turn, previous=())
+
+
+def test_self_contained_short_question_keeps_context_false():
+    turn = "Harç ne kadar?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": turn, "normalized_text": turn, "resolved_text": turn,
+        "context_used": False, "calendar_relevant": False}]}
+    analysis = _parse(json.dumps(payload, ensure_ascii=False), turn=turn,
+                      previous=("Ders seçimi ne zaman?",))
+    assert analysis.intents[0].context_used is False
+    assert analysis.intents[0].resolved_text == analysis.intents[0].normalized_text
+
+
+def test_bot_only_information_cannot_resolve_a_reference():
+    """Bot turns never reach the analyzer, so they can never support resolution."""
+    from services.answer_pipeline import _previous_user_turns
+
+    mixed = ({"role": "bot", "content": "Yatay geçiş başvuruları AKSİS üzerinden yapılır"},)
+    assert _previous_user_turns(mixed) == ()
+
+    current = "Hangi belgeler gerekiyor?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": current, "normalized_text": current,
+        "resolved_text": "AKSİS için hangi belgeler gerekiyor?",
+        "context_used": True, "calendar_relevant": False}]}
+    with pytest.raises(ValueError):
+        _parse(json.dumps(payload, ensure_ascii=False), turn=current,
+               previous=_previous_user_turns(mixed))
+
+
+# ── MULTI must survive the context-only change ──────────────────────────────
+
+
+def test_multi_rules_are_untouched_by_the_context_fix():
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "INTENT SAYISI KURALI" in system
+    assert "HİÇBİR İLGİSİ YOKTUR" in system
+    assert "metin hiç değişmese de intent_count 2 olabilir" in system
+    assert "Belirsizlikte SINGLE üret" in system
+    assert "en fazla 2 intent" in system
+
+
+# ── Freeze amendment 3 ──────────────────────────────────────────────────────
+
+AMENDMENT_3_PARTS = ("deploy", "internal-pilot", "answer-pipeline-freeze-amendment-3.json")
+AMENDMENT_2_FP = "2c9f2ea99ae9a44f88ae1623a2bb753abf212c17d5a6bef59ec56f81a99fed50"
+
+
+def _amendment3():
+    from services.internal_pilot_freeze import repo_root
+
+    return json.loads(repo_root().joinpath(*AMENDMENT_3_PARTS).read_text(encoding="utf-8"))
+
+
+def test_amendment_3_chains_to_immutable_parents():
+    a3 = _amendment3()
+    assert a3["parent_amendment_fingerprint"] == AMENDMENT_2_FP
+    assert a3["amendment_1_fingerprint"] == AMENDMENT_1_FP
+    assert a3["historical_parent_freeze_fingerprint"] == PARENT_FP
+    assert a3["parents_are_immutable"] is True
+    assert _amendment2()["amendment_fingerprint"] == AMENDMENT_2_FP
+
+
+def test_amendment_3_fingerprint_is_deterministic_and_matches_the_file():
+    from services.internal_pilot_freeze import amendment_3_fingerprint, build_freeze_amendment_3
+
+    stored = _amendment3()
+    assert amendment_3_fingerprint(stored) == stored["amendment_fingerprint"]
+    first = build_freeze_amendment_3(git_commit="a" * 40, created_at="2026-01-01T00:00:00Z")
+    second = build_freeze_amendment_3(git_commit="b" * 40, created_at="2027-12-31T23:59:59Z",
+                                      live_screen={"probes": 14})
+    assert first["amendment_fingerprint"] == second["amendment_fingerprint"]
+    assert first["amendment_fingerprint"] not in (AMENDMENT_2_FP, AMENDMENT_1_FP, PARENT_FP)
+
+
+def test_amendment_3_is_a_context_only_bug_fix():
+    c = _amendment3()["classification"]
+    assert c["intent_analyzer_context_semantic_bug_fix"] is True
+    for forbidden in ("model_change", "selector_change", "retrieval_change",
+                      "calendar_change", "parser_contract_change",
+                      "context_assembly_change", "multi_rule_change"):
+        assert c[forbidden] is False
+    assert _amendment3()["changed"]["multi_rules_touched"] is False
+
+
+def test_amendment_3_tracks_the_live_analyzer_prompt():
+    from services.internal_pilot_freeze import intent_analyzer_prompt_fingerprint
+
+    assert _amendment3()["changed"]["intent_analyzer_prompt_fingerprint"] == (
+        intent_analyzer_prompt_fingerprint()
+    )
+
+
+def test_amendment_3_preserves_selector_and_contract():
+    p = _amendment3()["preserved"]
+    assert p["selector_prompt_fingerprint"] == SELECTOR_FP
+    assert p["parser_strictness"] == "strict=True, extra=forbid, Literal[1, 2]"
+    assert p["context_used_false_implies_verbatim_resolved_text"] is True
+    assert p["context_used_true_requires_real_resolution"] is True
+    assert p["candidate_order"] == "production"

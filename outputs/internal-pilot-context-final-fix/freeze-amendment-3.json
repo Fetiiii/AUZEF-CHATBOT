@@ -1,0 +1,44 @@
+{
+  "amendment_1_fingerprint": "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485",
+  "amendment_fingerprint": "429dc8c0f44f3969a09ef04b6a46363959aa4c37354a3f7394a8896d6511bbce",
+  "amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_3",
+  "changed": {
+    "component": "services.intent_analyzer.build_intent_analyzer_prompt",
+    "context_assembly_changed": false,
+    "intent_analyzer_prompt_fingerprint": "4e1583f8c06c8369eeda08dd1025bbb0db8f50977e4b902873fd07fcd174cecf",
+    "multi_rules_touched": false,
+    "what": "context branch only: flag bound to the rewrite; generic reference-dependency test for short questions; anti-over-trigger rule retained"
+  },
+  "classification": {
+    "calendar_change": false,
+    "context_assembly_change": false,
+    "intent_analyzer_context_semantic_bug_fix": true,
+    "model_change": false,
+    "multi_rule_change": false,
+    "parser_contract_change": false,
+    "retrieval_change": false,
+    "selector_change": false
+  },
+  "created_at": "2026-09-20T15:10:00Z",
+  "git_commit": "f89337d4bdd3be01fa1c0b29102ce6e52cf4e437",
+  "historical_parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "live_semantic_screen": null,
+  "milestone": "INTERNAL_PILOT",
+  "parent_amendment_fingerprint": "2c9f2ea99ae9a44f88ae1623a2bb753abf212c17d5a6bef59ec56f81a99fed50",
+  "parent_amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_2",
+  "parents_are_immutable": true,
+  "preserved": {
+    "analyzer_policy": "ambiguity -> SINGLE, MULTI max 2, calendar semantics, normalization policy, bot exclusion, max 2 previous USER turns",
+    "candidate_order": "production",
+    "context_used_false_implies_verbatim_resolved_text": true,
+    "context_used_true_requires_real_resolution": true,
+    "parser_strictness": "strict=True, extra=forbid, Literal[1, 2]",
+    "selector_config_fingerprint": "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e",
+    "selector_model": "openai/gpt-4o-mini",
+    "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+    "selector_prompt_version": "variant_a_v1",
+    "selector_provider": "openrouter"
+  },
+  "rationale": "amendment 2 restored MULTI but left context at 1/4 with two classes: CONTEXT_CLAIMED_WITHOUT_RESOLUTION (flag set while resolved_text stayed referential) and CONTEXT_NOT_DETECTED (short reference-dependent question treated as self-contained). Prompt-only fix: the flag and the rewrite are one decision, plus a generic self-contained test for short questions.",
+  "schema_version": 1
+}
