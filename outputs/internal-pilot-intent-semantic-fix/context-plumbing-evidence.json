@@ -1,0 +1,59 @@
+{
+  "chat_context_enabled": true,
+  "chat_context_max_messages": 4,
+  "max_previous_user_turns": 2,
+  "conversations": [
+    {
+      "conversation_id": 3895,
+      "stored_messages_roles_in_order": [
+        "user",
+        "bot",
+        "user",
+        "bot"
+      ],
+      "stored_message_count": 4,
+      "loader_returned_roles": [
+        "user",
+        "user"
+      ],
+      "loader_returned_count": 2,
+      "bot_messages_in_loader_output": false,
+      "previous_user_turns_supplied": 2,
+      "within_max_two": true,
+      "analyzer_payload_previous_count": 2,
+      "analyzer_payload_has_current_turn": true,
+      "chronological_order_oldest_first": true,
+      "previous_turn_previews": [
+        "Yatay gecis hakkinda bilgi alabilir miyim?",
+        "Peki basvuru icin hangi belgeler lazim?"
+      ],
+      "current_turn_preview": "Peki basvuru icin hangi belgeler lazim?"
+    },
+    {
+      "conversation_id": 3889,
+      "stored_messages_roles_in_order": [
+        "user",
+        "bot",
+        "user",
+        "bot"
+      ],
+      "stored_message_count": 4,
+      "loader_returned_roles": [
+        "user",
+        "user"
+      ],
+      "loader_returned_count": 2,
+      "bot_messages_in_loader_output": false,
+      "previous_user_turns_supplied": 2,
+      "within_max_two": true,
+      "analyzer_payload_previous_count": 2,
+      "analyzer_payload_has_current_turn": true,
+      "chronological_order_oldest_first": true,
+      "previous_turn_previews": [
+        "Bütünleme sınavı ne zaman?",
+        "Peki nereden gireceğim?"
+      ],
+      "current_turn_preview": "Peki basvuru icin hangi belgeler lazim?"
+    }
+  ]
+}

@@ -309,12 +309,19 @@ def test_amendment_records_the_acceptance_rationale():
     assert "integer" in rationale
 
 
-def test_amendment_tracks_the_live_analyzer_prompt():
+def test_amendment_1_keeps_its_historical_prompt_fingerprint():
+    """Amendment 1 is history: it records the prompt as it was at that time.
+
+    Amendment 2 changed the analyzer prompt again, so amendment 1 must NOT
+    track the live value — that is exactly what makes it a record.
+    """
     from services.internal_pilot_freeze import intent_analyzer_prompt_fingerprint
 
-    assert _amendment()["changed"]["intent_analyzer_prompt_fingerprint"] == (
-        intent_analyzer_prompt_fingerprint()
+    recorded = _amendment()["changed"]["intent_analyzer_prompt_fingerprint"]
+    assert recorded == (
+        "b5f3f8b3da978042f9e6cee13c0f204a1d502100849d3127cfaf99c325a2d25f"
     )
+    assert recorded != intent_analyzer_prompt_fingerprint()
 
 
 # ── Selector must be untouched by this fix ──────────────────────────────────
@@ -349,3 +356,243 @@ def test_selector_contract_fingerprint_is_unchanged():
     assert _amendment()["unchanged"]["selector_contract_fingerprint"] == (
         SERIALIZER_CONTRACT_FINGERPRINT
     )
+
+
+# ── Context decision rules (re-acceptance blocker: context_used never true) ──
+
+
+def test_prompt_states_the_context_decision_order():
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "CONTEXT KARAR SIRASI" in system
+    for marker in ("1)", "2)", "3)", "4)"):
+        assert marker in system
+
+
+def test_verbatim_equality_is_scoped_to_context_used_false():
+    """The re-acceptance root cause: an unscoped verbatim rule killed context.
+
+    Verbatim equality must be stated as mandatory ONLY when context_used is
+    false, and explicitly NOT mandatory when context is genuinely needed.
+    """
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "YALNIZ context_used = false iken zorunludur" in system
+    assert "zorunlu DEĞİLDİR" in system
+
+
+def test_prompt_allows_resolved_text_to_differ_when_context_is_used():
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "context_used = true" in system
+    assert "self-contained" in system
+
+
+def test_prompt_warns_against_using_context_merely_because_it_exists():
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "yalnız gerçekten gerekliyse kullan" in system
+
+
+def test_self_contained_turn_requires_verbatim_resolved_text():
+    turn = "Harç ne kadar?"
+    ok = {"intent_count": 1, "intents": [{
+        "source_text": turn, "normalized_text": turn, "resolved_text": turn,
+        "context_used": False, "calendar_relevant": False}]}
+    assert _parse(json.dumps(ok, ensure_ascii=False)).intents[0].context_used is False
+
+    drifted = json.loads(json.dumps(ok))
+    drifted["intents"][0]["resolved_text"] = "Harç ücreti ne kadar?"
+    with pytest.raises(ValueError, match="resolved intent changed without context"):
+        _parse(json.dumps(drifted, ensure_ascii=False))
+
+
+def test_context_resolved_intent_is_accepted():
+    """Reference resolved from a previous USER turn must validate."""
+    previous = ("Kütüphane hakkında bilgi almak istiyorum",)
+    current = "Saatleri nedir?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": current, "normalized_text": current,
+        "resolved_text": "Kütüphane saatleri nedir?",
+        "context_used": True, "calendar_relevant": False}]}
+    analysis = _parse(json.dumps(payload, ensure_ascii=False), turn=current,
+                      previous=previous)
+    assert analysis.intents[0].context_used is True
+    assert analysis.intents[0].resolved_text != analysis.intents[0].normalized_text
+
+
+def test_context_used_true_without_any_resolution_is_rejected():
+    turn = "Saatleri nedir?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": turn, "normalized_text": turn, "resolved_text": turn,
+        "context_used": True, "calendar_relevant": False}]}
+    with pytest.raises(ValueError, match="context_used does not reflect"):
+        _parse(json.dumps(payload, ensure_ascii=False), turn=turn,
+               previous=("Kütüphane hakkında bilgi almak istiyorum",))
+
+
+def test_context_used_true_with_unsupported_expansion_is_rejected():
+    previous = ("Kütüphane hakkında bilgi almak istiyorum",)
+    current = "Saatleri nedir?"
+    payload = {"intent_count": 1, "intents": [{
+        "source_text": current, "normalized_text": current,
+        "resolved_text": "Merkez kampüs kütüphane saatleri nedir?",
+        "context_used": True, "calendar_relevant": False}]}
+    with pytest.raises(ValueError):
+        _parse(json.dumps(payload, ensure_ascii=False), turn=current, previous=previous)
+
+
+def test_only_the_last_two_previous_user_turns_are_supplied():
+    payload = _user_payload(previous=("bir", "iki", "üç", "dört"))
+    assert payload["previous_user_turns"] == ["üç", "dört"]
+
+
+def test_bot_messages_are_never_part_of_the_analyzer_input():
+    """Only USER turns reach the analyzer; the router filters bot messages."""
+    import inspect
+
+    from routers import chat
+
+    source = inspect.getsource(chat._load_recent_context)
+    assert 'ConversationMessage.role == "user"' in source
+
+    from services.answer_pipeline import _previous_user_turns
+
+    mixed = ({"role": "user", "content": "soru bir"},
+             {"role": "bot", "content": "bot cevabı"},
+             {"role": "user", "content": "soru iki"})
+    assert _previous_user_turns(mixed) == ("soru bir", "soru iki")
+
+
+# ── MULTI decision rules (re-acceptance blocker: MULTI never produced) ───────
+
+
+def test_prompt_decouples_intent_count_from_text_change():
+    """§10: goal count decides MULTI, not whether normalized/resolved changed."""
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "INTENT SAYISI KURALI" in system
+    assert "HİÇBİR İLGİSİ YOKTUR" in system
+    assert "metin hiç değişmese de intent_count 2 olabilir" in system
+
+
+def test_prompt_lists_the_single_boundaries():
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    for marker in ("aynı hedefin iki kez", "niteleyici", "belirsizse",
+                   "Belirsizlikte SINGLE üret", "en fazla 2 intent"):
+        assert marker in system
+
+
+def test_prompt_examples_are_synthetic_not_benchmark_cases():
+    """§12: no benchmark text may leak into the prompt."""
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    catalog = json.loads(
+        (__import__("services.internal_pilot_freeze", fromlist=["repo_root"]).repo_root()
+         / "tests/e2e/internal_pilot/scenarios.json").read_text(encoding="utf-8"))
+    for scenario in catalog["scenarios"]:
+        for message in scenario["turns"]:
+            assert message not in system
+    for forbidden in ("471", "472", "IP-E2E"):
+        assert forbidden not in system
+
+
+def test_multi_payload_with_two_independent_goals_is_accepted():
+    turn = "Kütüphane saatleri nedir ve spor salonu nerede?"
+    payload = {"intent_count": 2, "intents": [
+        {"source_text": "Kütüphane saatleri nedir",
+         "normalized_text": "Kütüphane saatleri nedir",
+         "resolved_text": "Kütüphane saatleri nedir",
+         "context_used": False, "calendar_relevant": False},
+        {"source_text": "spor salonu nerede",
+         "normalized_text": "spor salonu nerede",
+         "resolved_text": "spor salonu nerede",
+         "context_used": False, "calendar_relevant": False}]}
+    analysis = _parse(json.dumps(payload, ensure_ascii=False), turn=turn)
+    assert analysis.intent_count == 2
+
+
+def test_multi_segments_must_come_from_the_current_turn():
+    turn = "Kütüphane saatleri nedir ve spor salonu nerede?"
+    payload = {"intent_count": 2, "intents": [
+        {"source_text": "Kütüphane saatleri nedir",
+         "normalized_text": "Kütüphane saatleri nedir",
+         "resolved_text": "Kütüphane saatleri nedir",
+         "context_used": False, "calendar_relevant": False},
+        {"source_text": "yemekhane nerede", "normalized_text": "yemekhane nerede",
+         "resolved_text": "yemekhane nerede",
+         "context_used": False, "calendar_relevant": False}]}
+    with pytest.raises(ValueError, match="multi intent source"):
+        _parse(json.dumps(payload, ensure_ascii=False), turn=turn)
+
+
+def test_more_than_two_intents_is_rejected_by_the_contract():
+    item = {"source_text": "x", "normalized_text": "x", "resolved_text": "x",
+            "context_used": False, "calendar_relevant": False}
+    with pytest.raises(ValidationError):
+        IntentAnalysis.model_validate({"intent_count": 3, "intents": [dict(item)] * 3})
+
+
+def test_analyzer_policy_survives_the_semantic_fix():
+    """Frozen policy must be intact after the clarification."""
+    from services.intent_analyzer import MAX_PREVIOUS_USER_TURNS
+
+    assert MAX_PREVIOUS_USER_TURNS == 2
+    system, _user = build_intent_analyzer_prompt(_TURN, ())
+    assert "Belirsizlikte SINGLE üret" in system
+    assert "en fazla 2 intent" in system
+    assert "calendar_relevant" in system
+    assert "salt kayıt/sınav/dönem kelimesi yetmez" in system
+
+
+# ── Freeze amendment 2 ──────────────────────────────────────────────────────
+
+AMENDMENT_2_PARTS = ("deploy", "internal-pilot", "answer-pipeline-freeze-amendment-2.json")
+AMENDMENT_1_FP = "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485"
+
+
+def _amendment2():
+    from services.internal_pilot_freeze import repo_root
+
+    return json.loads(repo_root().joinpath(*AMENDMENT_2_PARTS).read_text(encoding="utf-8"))
+
+
+def test_amendment_2_chains_to_immutable_parents():
+    a2 = _amendment2()
+    assert a2["parent_amendment_fingerprint"] == AMENDMENT_1_FP
+    assert a2["historical_parent_freeze_fingerprint"] == PARENT_FP
+    assert a2["parents_are_immutable"] is True
+    assert _amendment()["amendment_fingerprint"] == AMENDMENT_1_FP
+
+
+def test_amendment_2_fingerprint_is_deterministic_and_matches_the_file():
+    from services.internal_pilot_freeze import amendment_2_fingerprint, build_freeze_amendment_2
+
+    stored = _amendment2()
+    assert amendment_2_fingerprint(stored) == stored["amendment_fingerprint"]
+    first = build_freeze_amendment_2(git_commit="a" * 40, created_at="2026-01-01T00:00:00Z")
+    second = build_freeze_amendment_2(git_commit="b" * 40, created_at="2027-12-31T23:59:59Z",
+                                      live_screen={"probes": 14})
+    assert first["amendment_fingerprint"] == second["amendment_fingerprint"]
+    assert first["amendment_fingerprint"] not in (AMENDMENT_1_FP, PARENT_FP)
+
+
+def test_amendment_2_is_classified_as_an_analyzer_semantic_bug_fix():
+    c = _amendment2()["classification"]
+    assert c["intent_analyzer_semantic_bug_fix"] is True
+    for forbidden in ("selector_change", "model_change", "retrieval_change",
+                      "calendar_policy_change", "parser_contract_change",
+                      "analyzer_policy_change"):
+        assert c[forbidden] is False
+
+
+def test_amendment_2_tracks_the_live_analyzer_prompt():
+    from services.internal_pilot_freeze import intent_analyzer_prompt_fingerprint
+
+    assert _amendment2()["changed"]["intent_analyzer_prompt_fingerprint"] == (
+        intent_analyzer_prompt_fingerprint()
+    )
+    assert _amendment2()["changed"]["context_assembly_changed"] is False
+
+
+def test_amendment_2_preserves_selector_and_contract():
+    preserved = _amendment2()["preserved"]
+    assert preserved["selector_prompt_fingerprint"] == SELECTOR_FP
+    assert preserved["parser_strictness"] == "strict=True, extra=forbid, Literal[1, 2]"
+    assert preserved["intent_count_must_be_json_integer"] is True
+    assert preserved["context_used_false_implies_verbatim_resolved_text"] is True
+    assert preserved["candidate_order"] == "production"

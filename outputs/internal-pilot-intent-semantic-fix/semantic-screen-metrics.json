@@ -1,0 +1,53 @@
+{
+  "gates": {
+    "operational": {
+      "valid_output": "12/14",
+      "invalid_output": 2,
+      "provider_errors": 0,
+      "timeouts": 0,
+      "required": "14/14 valid, 0 invalid, 0 provider errors, 0 timeouts",
+      "status": "FAIL"
+    },
+    "multi": {
+      "correct": "4/4",
+      "required": "4/4 intent_count=2",
+      "status": "PASS",
+      "historical": "0/3 at re-acceptance"
+    },
+    "context_required": {
+      "correct": "1/4",
+      "required": "4/4 context_used=true with self-contained resolved_text",
+      "status": "FAIL",
+      "historical": "0/44 turns at re-acceptance"
+    },
+    "context_controls": {
+      "correct": "4/4",
+      "required": "4/4 context_used=false and resolved_text==normalized_text",
+      "status": "PASS"
+    },
+    "calendar": {
+      "relevant_control": "PASS",
+      "irrelevant_control": "PASS",
+      "status": "PASS"
+    }
+  },
+  "failure_taxonomy": [
+    {
+      "probe": "C2",
+      "failure_mode": "CONTEXT_CLAIMED_WITHOUT_RESOLUTION",
+      "detail": "the model set context_used=true but left resolved_text equal to normalized_text, so the strict parser rejected the output"
+    },
+    {
+      "probe": "C3",
+      "failure_mode": "CONTEXT_NOT_DETECTED",
+      "detail": "the elliptical current turn was treated as self-contained; context_used stayed false"
+    },
+    {
+      "probe": "C4",
+      "failure_mode": "CONTEXT_CLAIMED_WITHOUT_RESOLUTION",
+      "detail": "the model set context_used=true but left resolved_text equal to normalized_text, so the strict parser rejected the output"
+    }
+  ],
+  "screen_status": "FAIL",
+  "interpretation": "MULTI is fully restored (0/3 -> 4/4) and the context suppression is partially lifted — the model now attempts context resolution where it previously never did. The screen still fails its hard gates: two probes claim context without actually resolving the reference, and one does not detect the ellipsis at all."
+}

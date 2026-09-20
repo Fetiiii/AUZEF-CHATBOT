@@ -916,3 +916,99 @@ def amendment_fingerprint(amendment: Mapping) -> str:
         if key not in AMENDMENT_EXCLUDED_FIELDS
     }
     return _sha256(_canonical(_jsonable(payload)))
+
+
+# ── Amendment 2: MULTI + context semantic restoration ───────────────────────
+#
+# Re-acceptance measured two capabilities as systematically dead in live
+# traffic: MULTI 0/44 and context_used 0/44. Context input plumbing was
+# proven correct first (previous USER turns are supplied, bot messages
+# excluded, max 2, chronological), so the cause was prompt instruction
+# behaviour, not assembly.
+#
+# Amendment 1's fix for the resolved_text contract had added an emphatic
+# "copy normalized_text verbatim" instruction. Unscoped, it read as
+# unconditional and suppressed the context branch; "ambiguity -> SINGLE" led
+# the prompt and suppressed MULTI. Both are clarified here. No policy, no
+# parser strictness and no contract changed.
+
+AMENDMENT_2_ID = "INTERNAL_PILOT_FREEZE_AMENDMENT_2"
+AMENDMENT_1_FINGERPRINT = (
+    "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485"
+)
+
+
+def build_freeze_amendment_2(*, git_commit: str, created_at: str,
+                             live_screen: Optional[Mapping] = None) -> dict:
+    amendment = {
+        "schema_version": SCHEMA_VERSION,
+        "amendment_id": AMENDMENT_2_ID,
+        "milestone": MILESTONE,
+        "parent_amendment_id": AMENDMENT_ID,
+        "parent_amendment_fingerprint": AMENDMENT_1_FINGERPRINT,
+        "historical_parent_freeze_fingerprint": PARENT_FREEZE_FINGERPRINT,
+        "parents_are_immutable": True,
+        "git_commit": git_commit,
+        "classification": {
+            "intent_analyzer_semantic_bug_fix": True,
+            "selector_change": False,
+            "model_change": False,
+            "retrieval_change": False,
+            "calendar_policy_change": False,
+            "parser_contract_change": False,
+            "analyzer_policy_change": False,
+        },
+        "rationale": (
+            "re-acceptance measured MULTI 0/44 and context_used 0/44. Context "
+            "input plumbing was proven correct first, so the cause was prompt "
+            "instruction behaviour: amendment 1's verbatim-copy rule was "
+            "unscoped and suppressed the context branch, and 'ambiguity -> "
+            "SINGLE' led the prompt and suppressed MULTI. Both clarified; the "
+            "strict contract and the frozen policy are untouched."
+        ),
+        "changed": {
+            "component": "services.intent_analyzer.build_intent_analyzer_prompt",
+            "what": (
+                "explicit context decision order; verbatim equality scoped to "
+                "context_used=false; intent_count decoupled from whether the "
+                "text changed; SINGLE boundaries enumerated"
+            ),
+            "intent_analyzer_prompt_fingerprint": intent_analyzer_prompt_fingerprint(),
+            "context_assembly_changed": False,
+        },
+        "preserved": {
+            "analyzer_policy": (
+                "SINGLE/MULTI, max 2 intents, MULTI only for genuinely "
+                "independent goals, ambiguity -> SINGLE, current USER message "
+                "plus max 2 previous USER turns, bot messages excluded"
+            ),
+            "parser_strictness": "strict=True, extra=forbid, Literal[1, 2]",
+            "intent_count_must_be_json_integer": True,
+            "context_used_false_implies_verbatim_resolved_text": True,
+            "selector_prompt_version": SELECTOR_PROMPT_VERSION,
+            "selector_prompt_fingerprint": SELECTOR_PROMPT_FINGERPRINT,
+            "selector_provider": SELECTOR_PROVIDER,
+            "selector_model": SELECTOR_MODEL,
+            "selector_temperature": SELECTOR_TEMPERATURE,
+            "selector_max_tokens": SELECTOR_MAX_TOKENS,
+            "selector_reasoning": "none (unset)",
+            "selector_config_fingerprint": SELECTOR_CONFIG_FINGERPRINT,
+            "candidate_order": CANDIDATE_ORDER,
+        },
+        "live_semantic_screen": dict(live_screen) if live_screen else None,
+        "created_at": created_at,
+    }
+    amendment = _jsonable(amendment)
+    amendment["amendment_fingerprint"] = amendment_2_fingerprint(amendment)
+    return amendment
+
+
+AMENDMENT_2_EXCLUDED_FIELDS = ("created_at", "git_commit", "amendment_fingerprint",
+                               "live_semantic_screen")
+
+
+def amendment_2_fingerprint(amendment: Mapping) -> str:
+    """Fingerprint the frozen declaration, not the measurement that validated it."""
+    payload = {key: value for key, value in amendment.items()
+               if key not in AMENDMENT_2_EXCLUDED_FIELDS}
+    return _sha256(_canonical(_jsonable(payload)))

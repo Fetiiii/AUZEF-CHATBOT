@@ -1,0 +1,157 @@
+{
+  "frozen_before_results": true,
+  "total": 14,
+  "distribution": {
+    "clear_multi": 4,
+    "context_required": 4,
+    "self_contained_single": 2,
+    "context_not_required": 2,
+    "calendar_relevant": 1,
+    "calendar_irrelevant": 1
+  },
+  "provider": "openrouter",
+  "model": "openai/gpt-4o-mini",
+  "texts_source": "fresh realistic AUZEF language; not copied from the E2E catalog",
+  "probes": [
+    {
+      "id": "M1",
+      "group": "clear_multi",
+      "previous": [],
+      "current": "Harç ne kadar ve öğrenci belgesini nereden alabilirim?",
+      "expect": {
+        "intent_count": 2
+      }
+    },
+    {
+      "id": "M2",
+      "group": "clear_multi",
+      "previous": [],
+      "current": "Kayıt yenileme nasıl yapılır, bir de mezuniyet için kaç kredi gerekiyor?",
+      "expect": {
+        "intent_count": 2
+      }
+    },
+    {
+      "id": "M3",
+      "group": "clear_multi",
+      "previous": [],
+      "current": "Sınav sonuçları nereden öğrenilir? Ayrıca kayıt dondurma nasıl yapılır?",
+      "expect": {
+        "intent_count": 2
+      }
+    },
+    {
+      "id": "M4",
+      "group": "clear_multi",
+      "previous": [],
+      "current": "Ders materyallerine nasıl ulaşırım ve staj zorunlu mu?",
+      "expect": {
+        "intent_count": 2
+      }
+    },
+    {
+      "id": "C1",
+      "group": "context_required",
+      "previous": [
+        "Yatay geçiş hakkında bilgi almak istiyorum"
+      ],
+      "current": "Şartları neler?",
+      "expect": {
+        "context_used": true
+      }
+    },
+    {
+      "id": "C2",
+      "group": "context_required",
+      "previous": [
+        "Bütünleme sınavı hakkında soru soracaktım"
+      ],
+      "current": "Ne zaman yapılıyor?",
+      "expect": {
+        "context_used": true
+      }
+    },
+    {
+      "id": "C3",
+      "group": "context_required",
+      "previous": [
+        "İkinci üniversite kaydı yaptırmak istiyorum"
+      ],
+      "current": "Hangi belgeler gerekiyor?",
+      "expect": {
+        "context_used": true
+      }
+    },
+    {
+      "id": "C4",
+      "group": "context_required",
+      "previous": [
+        "Mezuniyet işlemleri hakkında bilgi almak istiyorum"
+      ],
+      "current": "Ne kadar sürüyor?",
+      "expect": {
+        "context_used": true
+      }
+    },
+    {
+      "id": "S1",
+      "group": "self_contained_single",
+      "previous": [],
+      "current": "Kayıt yenileme işlemini nasıl yaparım?",
+      "expect": {
+        "intent_count": 1,
+        "context_used": false
+      }
+    },
+    {
+      "id": "S2",
+      "group": "self_contained_single",
+      "previous": [],
+      "current": "Öğrenci belgesi nereden alınır?",
+      "expect": {
+        "intent_count": 1,
+        "context_used": false
+      }
+    },
+    {
+      "id": "N1",
+      "group": "context_not_required",
+      "previous": [
+        "Harç ücreti ne kadar?"
+      ],
+      "current": "Öğrenci belgesi nereden alınır?",
+      "expect": {
+        "context_used": false
+      }
+    },
+    {
+      "id": "N2",
+      "group": "context_not_required",
+      "previous": [
+        "Ders seçimi ne zaman?"
+      ],
+      "current": "Kayıt dondurma nasıl yapılır?",
+      "expect": {
+        "context_used": false
+      }
+    },
+    {
+      "id": "K1",
+      "group": "calendar_relevant",
+      "previous": [],
+      "current": "Güz dönemi final sınavları ne zaman yapılacak?",
+      "expect": {
+        "calendar_relevant": true
+      }
+    },
+    {
+      "id": "K2",
+      "group": "calendar_irrelevant",
+      "previous": [],
+      "current": "Final sınavına nasıl hazırlanmalıyım?",
+      "expect": {
+        "calendar_relevant": false
+      }
+    }
+  ]
+}

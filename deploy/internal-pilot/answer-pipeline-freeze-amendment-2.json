@@ -1,0 +1,44 @@
+{
+  "amendment_fingerprint": "2c9f2ea99ae9a44f88ae1623a2bb753abf212c17d5a6bef59ec56f81a99fed50",
+  "amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_2",
+  "changed": {
+    "component": "services.intent_analyzer.build_intent_analyzer_prompt",
+    "context_assembly_changed": false,
+    "intent_analyzer_prompt_fingerprint": "112fa46942d8fdff3edf25a6e02ac3ccfbc020b201ac0acbd964ff91a6bdf493",
+    "what": "explicit context decision order; verbatim equality scoped to context_used=false; intent_count decoupled from whether the text changed; SINGLE boundaries enumerated"
+  },
+  "classification": {
+    "analyzer_policy_change": false,
+    "calendar_policy_change": false,
+    "intent_analyzer_semantic_bug_fix": true,
+    "model_change": false,
+    "parser_contract_change": false,
+    "retrieval_change": false,
+    "selector_change": false
+  },
+  "created_at": "2026-09-20T14:30:00Z",
+  "git_commit": "31ff28d54c2bb73c7ff98591b170a39247312e51",
+  "historical_parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "live_semantic_screen": null,
+  "milestone": "INTERNAL_PILOT",
+  "parent_amendment_fingerprint": "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485",
+  "parent_amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_1",
+  "parents_are_immutable": true,
+  "preserved": {
+    "analyzer_policy": "SINGLE/MULTI, max 2 intents, MULTI only for genuinely independent goals, ambiguity -> SINGLE, current USER message plus max 2 previous USER turns, bot messages excluded",
+    "candidate_order": "production",
+    "context_used_false_implies_verbatim_resolved_text": true,
+    "intent_count_must_be_json_integer": true,
+    "parser_strictness": "strict=True, extra=forbid, Literal[1, 2]",
+    "selector_config_fingerprint": "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e",
+    "selector_max_tokens": 32,
+    "selector_model": "openai/gpt-4o-mini",
+    "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+    "selector_prompt_version": "variant_a_v1",
+    "selector_provider": "openrouter",
+    "selector_reasoning": "none (unset)",
+    "selector_temperature": 0.0
+  },
+  "rationale": "re-acceptance measured MULTI 0/44 and context_used 0/44. Context input plumbing was proven correct first, so the cause was prompt instruction behaviour: amendment 1's verbatim-copy rule was unscoped and suppressed the context branch, and 'ambiguity -> SINGLE' led the prompt and suppressed MULTI. Both clarified; the strict contract and the frozen policy are untouched.",
+  "schema_version": 1
+}

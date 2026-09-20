@@ -1,0 +1,31 @@
+{
+  "milestone": "INTERNAL_PILOT",
+  "artifact": "intent-analyzer-semantic-blocker-fix",
+  "git_commit": "31ff28d54c2bb73c7ff98591b170a39247312e51",
+  "historical_parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "parent_amendment_fingerprint": "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485",
+  "amendment_2_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_2",
+  "amendment_2_fingerprint": "2c9f2ea99ae9a44f88ae1623a2bb753abf212c17d5a6bef59ec56f81a99fed50",
+  "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+  "selector_changed": false,
+  "context_input_plumbing": "PASS",
+  "root_cause": "prompt instruction behaviour (plumbing proven correct first)",
+  "probes_planned": 14,
+  "probes_executed": 14,
+  "valid_outputs": 12,
+  "invalid_outputs": 2,
+  "multi_correct": 4,
+  "context_required_correct": 1,
+  "context_controls_correct": 4,
+  "semantic_screen": "FAIL",
+  "full_reacceptance": "BLOCKED",
+  "remaining_blockers": [
+    "CONTEXT_CLAIMED_WITHOUT_RESOLUTION (2/4 context probes)",
+    "CONTEXT_NOT_DETECTED (1/4 context probes)"
+  ],
+  "resolved_blockers": [
+    "MULTI_NEVER_PRODUCED (now 4/4)"
+  ],
+  "contains_secrets": false,
+  "contains_raw_pii": false
+}
