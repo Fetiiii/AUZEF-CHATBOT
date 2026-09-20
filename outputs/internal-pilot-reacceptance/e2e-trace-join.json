@@ -1,0 +1,1638 @@
+{
+  "stats": {
+    "turns": 44,
+    "ia_valid": 42,
+    "ia_invalid": 2,
+    "single": 44,
+    "multi": 0,
+    "context_used_true": 0,
+    "calendar_relevant_true": 1,
+    "selector_invoked": 42,
+    "select": 35,
+    "none": 7,
+    "selector_errors": 0,
+    "degraded_turns": 2,
+    "provider_errors": 0,
+    "parser_errors": 2,
+    "timeouts": 0,
+    "http_5xx": 0,
+    "normal_llm": 42
+  },
+  "scenarios": [
+    {
+      "id": "IP-E2E-001",
+      "category": "single_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            11
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            32
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 6045.228
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-002",
+      "category": "single_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            10
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            84
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3525.927
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-003",
+      "category": "single_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "REQUEST_DEGRADED",
+          "degraded_reason": "intent_analyzer_invalid_output",
+          "ia_outcome": "invalid_output",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 0,
+          "selector_decision": [],
+          "candidate_count": [],
+          "final_outcome": "answer",
+          "final_source": "qdrant_vector",
+          "final_qna_ids": [
+            142
+          ],
+          "source_availability": {
+            "calendar": null,
+            "meili": null,
+            "qdrant": null
+          },
+          "total_latency_ms": 2302.406
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-004",
+      "category": "single_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            12
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            181
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3832.686
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-005",
+      "category": "short_noisy_language",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            19
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3073.273
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-006",
+      "category": "short_noisy_language",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            8
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            82
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 2821.801
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-007",
+      "category": "short_noisy_language",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            11
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            168
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3850.568
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-008",
+      "category": "short_noisy_language",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            13
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            209
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3383.336
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-009",
+      "category": "near_qna",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            8
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            126
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4506.292
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-010",
+      "category": "near_qna",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            306
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3670.214
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-011",
+      "category": "near_qna",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            12
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            221
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3696.388
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-012",
+      "category": "general_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            7
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            64
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4185.968
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-013",
+      "category": "general_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            12
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            67
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3604.843
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-014",
+      "category": "general_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": true,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            11
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            341
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3877.871
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-015",
+      "category": "explicit_specific_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            10
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            18
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4334.015
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-016",
+      "category": "explicit_specific_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            342
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3665.003
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-017",
+      "category": "explicit_specific_intent",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "REQUEST_DEGRADED",
+          "degraded_reason": "intent_analyzer_invalid_output",
+          "ia_outcome": "invalid_output",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 0,
+          "selector_decision": [],
+          "candidate_count": [],
+          "final_outcome": "answer",
+          "final_source": "qdrant_vector",
+          "final_qna_ids": [
+            318
+          ],
+          "source_availability": {
+            "calendar": null,
+            "meili": null,
+            "qdrant": null
+          },
+          "total_latency_ms": 2243.335
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-018",
+      "category": "generic_vs_specific_qualifier",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-1-generic-vs-specific-qualifier",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            8
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            342
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3327.022
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-019",
+      "category": "generic_vs_specific_qualifier",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-1-generic-vs-specific-qualifier",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "NONE"
+          ],
+          "candidate_count": [
+            12
+          ],
+          "final_outcome": "no_answer",
+          "final_source": "none",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3572.925
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-020",
+      "category": "generic_vs_specific_qualifier",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-1-generic-vs-specific-qualifier",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            11
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            142
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3656.991
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-021",
+      "category": "generic_vs_specific_qualifier",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-1-generic-vs-specific-qualifier",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            12
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            94
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3447.281
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-022",
+      "category": "explicit_qualifier",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            19
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3534.496
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-023",
+      "category": "explicit_qualifier",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": true,
+      "critical": true,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "NONE"
+          ],
+          "candidate_count": [
+            10
+          ],
+          "final_outcome": "suggestions",
+          "final_source": "none",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3838.679
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-024",
+      "category": "explicit_qualifier",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            15
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            209
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3791.334
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-025",
+      "category": "valid_none",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "NONE",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-2-expected-none-undervalidated",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "NONE"
+          ],
+          "candidate_count": [
+            20
+          ],
+          "final_outcome": "suggestions",
+          "final_source": "none",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3571.054
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-026",
+      "category": "valid_none",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "NONE",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-2-expected-none-undervalidated",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "NONE"
+          ],
+          "candidate_count": [
+            15
+          ],
+          "final_outcome": "suggestions",
+          "final_source": "none",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 2640.801
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-027",
+      "category": "valid_none",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "NONE",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-2-expected-none-undervalidated",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            8
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            93
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3082.12
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-028",
+      "category": "valid_none",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "NONE",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": "IP-KI-2-expected-none-undervalidated",
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "NONE"
+          ],
+          "candidate_count": [
+            11
+          ],
+          "final_outcome": "no_answer",
+          "final_source": "none",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3416.247
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-029",
+      "category": "calendar_relevant",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": true,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            9
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4078.742
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-030",
+      "category": "calendar_relevant",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": true,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            310
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4305.722
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-031",
+      "category": "calendar_relevant",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": true,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": true,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            17
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "available",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3475.736
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-032",
+      "category": "calendar_relevant",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": true,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            253
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3928.034
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-033",
+      "category": "calendar_irrelevant",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "ANY",
+      "expected_calendar_relevant": false,
+      "critical": true,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "NONE"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "suggestions",
+          "final_source": "none",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3624.908
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-034",
+      "category": "calendar_irrelevant",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            7
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            25
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3676.894
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-035",
+      "category": "calendar_irrelevant",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            209
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4018.506
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-036",
+      "category": "multi_intent",
+      "expected_intent_mode": "MULTI",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            9
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            226
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4072.471
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-037",
+      "category": "multi_intent",
+      "expected_intent_mode": "MULTI",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": true,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            14
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            4
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3776.96
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-038",
+      "category": "multi_intent",
+      "expected_intent_mode": "MULTI",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            7
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            241
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 4048.219
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-039",
+      "category": "conversation_context",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            6
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            129
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3816.833
+        },
+        {
+          "turn": 2,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            8
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            24
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3968.902
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-040",
+      "category": "conversation_context",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            10
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            9
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3335.591
+        },
+        {
+          "turn": 2,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            10
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            399
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3251.166
+        }
+      ]
+    },
+    {
+      "id": "IP-E2E-041",
+      "category": "conversation_context",
+      "expected_intent_mode": "SINGLE",
+      "expected_selector_decision": "SELECT",
+      "expected_calendar_relevant": false,
+      "critical": false,
+      "known_issue_id": null,
+      "turns": [
+        {
+          "turn": 1,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "NONE"
+          ],
+          "candidate_count": [
+            20
+          ],
+          "final_outcome": "suggestions",
+          "final_source": "none",
+          "final_qna_ids": [],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 2915.156
+        },
+        {
+          "turn": 2,
+          "execution_mode": "NORMAL_LLM",
+          "degraded_reason": null,
+          "ia_outcome": "success",
+          "intent_count": 1,
+          "context_used": false,
+          "calendar_relevant": false,
+          "selector_called": 1,
+          "selector_decision": [
+            "SELECT"
+          ],
+          "candidate_count": [
+            11
+          ],
+          "final_outcome": "answer",
+          "final_source": "llm",
+          "final_qna_ids": [
+            2
+          ],
+          "source_availability": {
+            "calendar": "skipped",
+            "meili": "available",
+            "qdrant": "available"
+          },
+          "total_latency_ms": 3450.374
+        }
+      ]
+    }
+  ]
+}

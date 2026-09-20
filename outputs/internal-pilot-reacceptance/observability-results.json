@@ -1,0 +1,34 @@
+{
+  "traces_joined": 44,
+  "schema_versions": [
+    7
+  ],
+  "field_presence": {
+    "request_id": 44,
+    "conversation_id": 44,
+    "timestamp": 44,
+    "llm_enabled": 44,
+    "schema_version": 44,
+    "source_availability": 44,
+    "retrieval": 44,
+    "selectors": 44,
+    "execution": 44,
+    "intent_analyzer": 44,
+    "final": 44
+  },
+  "all_required_fields_present": true,
+  "availability_states_observed": {
+    "calendar": [
+      "available",
+      "skipped"
+    ],
+    "meili": [
+      "available"
+    ],
+    "qdrant": [
+      "available"
+    ]
+  },
+  "zero_results_still_available_observations": 5,
+  "note": "small internal sample on a developer host; not production SLA figures"
+}

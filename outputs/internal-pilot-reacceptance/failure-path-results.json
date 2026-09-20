@@ -1,0 +1,75 @@
+{
+  "F1_admin_llm_off": {
+    "http_status": 200,
+    "latency_ms": 26.9,
+    "answered": true,
+    "trace": {
+      "execution_mode": "ADMIN_DEGRADED",
+      "degraded_reason": "llm_disabled_or_unavailable",
+      "selectors": 0,
+      "source_availability": {
+        "calendar": null,
+        "meili": null,
+        "qdrant": null
+      },
+      "final_outcome": "answer",
+      "final_source": "meilisearch"
+    },
+    "restored": true
+  },
+  "F3_meili_unavailable": {
+    "http_status": 200,
+    "latency_ms": 7104.4,
+    "answered": true,
+    "trace": {
+      "execution_mode": "NORMAL_LLM",
+      "degraded_reason": null,
+      "selectors": 1,
+      "source_availability": {
+        "calendar": "skipped",
+        "meili": "unavailable",
+        "qdrant": "available"
+      },
+      "final_outcome": "answer",
+      "final_source": "llm"
+    },
+    "restored": true
+  },
+  "F4_qdrant_unavailable": {
+    "http_status": 200,
+    "latency_ms": 5755.3,
+    "answered": true,
+    "trace": {
+      "execution_mode": "NORMAL_LLM",
+      "degraded_reason": null,
+      "selectors": 1,
+      "source_availability": {
+        "calendar": "skipped",
+        "meili": "unavailable",
+        "qdrant": "unavailable"
+      },
+      "final_outcome": "suggestions",
+      "final_source": "none"
+    },
+    "restored": true
+  },
+  "F2_openrouter_failure": {
+    "http_status": 200,
+    "latency_ms": 805.7,
+    "answered": true,
+    "user_saw_stacktrace": false,
+    "trace": {
+      "execution_mode": "REQUEST_DEGRADED",
+      "degraded_reason": "intent_analyzer_model_error",
+      "selectors": 0,
+      "source_availability": {
+        "calendar": null,
+        "meili": null,
+        "qdrant": null
+      },
+      "final_outcome": "suggestions",
+      "final_source": "none"
+    },
+    "restored": true
+  }
+}

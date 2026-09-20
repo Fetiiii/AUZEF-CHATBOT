@@ -1,0 +1,57 @@
+{
+  "primary_data_present": true,
+  "total_records": 19,
+  "academic_years_present": [
+    "2026-2027"
+  ],
+  "records_by_term": {
+    "BAHAR": 8,
+    "GENERAL": 1,
+    "GUZ": 10
+  },
+  "configured_current_year": "2026-2027",
+  "configured_current_term": "GUZ",
+  "current_period_matches_data": true,
+  "reference_date": "2026-09-20",
+  "calendar_v2_retrieval_verified": true,
+  "retrieval_examples": [
+    {
+      "query": "Guz donemi final sinavlari ne zaman?",
+      "candidates": 1,
+      "no_match_reason": null,
+      "events": [
+        "Bitirme Sınavı (Final)"
+      ]
+    },
+    {
+      "query": "Ders secim islemleri hangi tarihlerde?",
+      "candidates": 2,
+      "no_match_reason": null,
+      "events": [
+        "Ders Seçim İşlemleri",
+        "Ders Seçim İşlemleri Tarihleri"
+      ]
+    }
+  ],
+  "aliases_populated": 0,
+  "alias_status": "intentionally pending",
+  "alias_owner": "authorized AUZEF staff",
+  "alias_is_blocker": false,
+  "alias_note": "Calendar aliases were deliberately left empty by the data owner and will be enriched by authorized AUZEF staff. Nothing was generated, guessed or backfilled. This is a non-blocking operational follow-up.",
+  "data_modified_by_this_run": false,
+  "date_format_observations": {
+    "non_zero_padded_day_count": 1,
+    "records": [
+      {
+        "id": 15,
+        "event": "Egitim-Ogretim Yili Sonu",
+        "start_date": "4.06.2027",
+        "end_date": "4.06.2027"
+      }
+    ],
+    "functional_impact": "none - renders correctly; Calendar V2 filters on year/term/event, not on parsed dates",
+    "classification": "cosmetic quality observation for the owner, not a blocker",
+    "not_modified_by_this_run": true
+  },
+  "records_render_correctly": true
+}

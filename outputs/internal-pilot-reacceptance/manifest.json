@@ -1,0 +1,55 @@
+{
+  "milestone": "INTERNAL_PILOT",
+  "artifact": "reacceptance-execution",
+  "git_commit": "8481b6d9e81f2d6830bfb2278aa34cc6e5847897",
+  "parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "amendment_fingerprint": "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485",
+  "selector_prompt_version": "variant_a_v1",
+  "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+  "provider": "openrouter",
+  "model": "openai/gpt-4o-mini",
+  "e2e": {
+    "scenarios_planned": 41,
+    "scenarios_executed": 41,
+    "logical_user_turns": 44,
+    "intent_analyzer_valid": 42,
+    "intent_analyzer_invalid": 2,
+    "single": 44,
+    "multi": 0,
+    "context_used_true": 0,
+    "calendar_relevant_true": 1,
+    "selector_invoked": 42,
+    "select": 35,
+    "none": 7,
+    "selector_errors": 0,
+    "normal_llm_turns": 42,
+    "degraded_turns": 2,
+    "http_5xx": 0
+  },
+  "stage_status": {
+    "A_runtime_config": "PASS",
+    "B_automated_regression": "PASS",
+    "C_docker_services": "PASS",
+    "D_offline_regression": "PASS",
+    "E_live_e2e": "FAIL",
+    "F_failure_paths": "PASS",
+    "G_ui": "MANUAL_REQUIRED",
+    "H_observability": "PASS"
+  },
+  "hard_blockers": [
+    "SEMANTIC_ACCEPTANCE_ISSUE_MULTI_NEVER_PRODUCED",
+    "SEMANTIC_ACCEPTANCE_ISSUE_CONTEXT_NEVER_USED"
+  ],
+  "non_blocking_followups": [
+    "Calendar alias enrichment (owner: authorized AUZEF staff)",
+    "Stage G manual UI verification",
+    "calendar_relevant routing frequency (1/4)",
+    "residual analyzer invalid output 2/44",
+    "IP-KI-1 generic vs specific qualifier",
+    "IP-KI-2 expected-NONE coverage"
+  ],
+  "reacceptance": "FAIL",
+  "release_candidate": "BLOCKED",
+  "contains_secrets": false,
+  "contains_raw_pii": false
+}

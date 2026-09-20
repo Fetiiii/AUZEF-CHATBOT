@@ -1,0 +1,41 @@
+{
+  "A_runtime_config": {
+    "status": "PASS",
+    "evidence": "in-container: variant_a_v1 / 1aed5688…, openrouter, openai/gpt-4o-mini, temp 0, max_tokens 32, reasoning unset, reasoning_fields {}, LLM_ENABLED true, calendar 2026-2027/GUZ"
+  },
+  "B_automated_regression": {
+    "status": "PASS",
+    "note": "see manifest test counts"
+  },
+  "C_docker_services": {
+    "status": "PASS",
+    "evidence": "5/5 services up, db+backend healthy, no restart loops, Meili 326 docs and Qdrant 3020 points both searchable"
+  },
+  "D_offline_regression": {
+    "status": "PASS",
+    "evidence": "frozen prompt/contract assertions pass inside the suite; freeze, amendment and Variant A fingerprints unchanged; no new benchmark call"
+  },
+  "E_live_e2e": {
+    "status": "FAIL",
+    "reason": "systematic semantic capability failures (see semantic_issues)",
+    "infrastructure": "healthy — 41/41 scenarios executed, 44 turns, 0 5xx, 42/44 reached the selector, 0 selector errors",
+    "semantic_issues": [
+      "MULTI never produced: 0/3 multi_intent scenarios and 0/44 turns returned intent_count=2",
+      "context never used: 0/44 turns set context_used=true, including all 3 dedicated multi-turn follow-up scenarios",
+      "calendar routing rarely triggered: 1/4 calendar_relevant scenarios set calendar_relevant=true"
+    ],
+    "residual_analyzer_invalid_output": "2/44 turns (IP-E2E-003, IP-E2E-017)"
+  },
+  "F_failure_paths": {
+    "status": "PASS",
+    "detail": "see failure-path-results.json; all four injections graceful, all state restored"
+  },
+  "G_ui": {
+    "status": "MANUAL_REQUIRED",
+    "evidence": "angular.json defines only build and serve; no test target, no *.spec.ts, no karma/jasmine/playwright/cypress. No framework was installed."
+  },
+  "H_observability": {
+    "status": "PASS",
+    "evidence": "all required fields present in 44/44 joined traces; schema v7; availability states available/unavailable/skipped all observed live; 0 results != unavailable confirmed 5 times"
+  }
+}

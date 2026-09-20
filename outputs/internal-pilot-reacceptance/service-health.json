@@ -1,0 +1,57 @@
+{
+  "services": [
+    {
+      "name": "auzef_backend",
+      "image": "auzefchatbot-backend",
+      "status": "Up About a minute (healthy)",
+      "health": "healthy",
+      "restart_count": 0,
+      "running": true
+    },
+    {
+      "name": "auzef_frontend",
+      "image": "auzefchatbot-frontend",
+      "status": "Up 11 minutes",
+      "health": "no-healthcheck",
+      "restart_count": 0,
+      "running": true
+    },
+    {
+      "name": "auzef_db",
+      "image": "postgres:15",
+      "status": "Up 11 minutes (healthy)",
+      "health": "healthy",
+      "restart_count": 0,
+      "running": true
+    },
+    {
+      "name": "auzef_qdrant",
+      "image": "qdrant/qdrant:v1.13.2",
+      "status": "Up About a minute",
+      "health": "no-healthcheck",
+      "restart_count": 0,
+      "running": true
+    },
+    {
+      "name": "auzef_meili",
+      "image": "getmeili/meilisearch:v1.12",
+      "status": "Up 2 minutes",
+      "health": "no-healthcheck",
+      "restart_count": 0,
+      "running": true
+    }
+  ],
+  "expected": [
+    "auzef_db",
+    "auzef_meili",
+    "auzef_qdrant",
+    "auzef_backend",
+    "auzef_frontend"
+  ],
+  "all_running": true,
+  "restart_loops": [],
+  "meili_documents": 326,
+  "qdrant_points": 3020,
+  "qna_rows": 326,
+  "alias_rows": 2695
+}
