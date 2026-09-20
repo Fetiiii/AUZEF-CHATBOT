@@ -78,6 +78,9 @@ STATUS: FAIL (qualifier-improvement and 471/472 checks); FINAL VALIDATION BLOCKE
 Phase 7B-Model Capability Experiment (variant_c_v1 × openai/gpt-5.6-luna)
 STATUS: M1 SCREEN FAIL (38 calls; qualifier 3 > 2, specific regressions 320/422; 471/472 correct); M2 NOT RUN; FINAL VALIDATION BLOCKED
 
+Phase 7B-Luna Full DEV Exploratory Comparison
+STATUS: COMPLETE (no gate; Luna 64/77 = Variant A; M1 FAIL unchanged; pilot baseline unchanged)
+
 Phase 7B-Live Stage B — Full Reference Validation
 STATUS: NOT_STARTED
 
@@ -780,3 +783,28 @@ Detailed evidence: [`PHASE_7B_MODEL_CAPABILITY_EXPERIMENT.md`](PHASE_7B_MODEL_CA
       - 471 and 472 are now correct (qna:129).
       - Operational: 0 errors.
       - M2 was not run; final validation stays BLOCKED.
+
+## Phase 7B-Luna Full DEV Exploratory Comparison record
+
+- [x] **59 new logical calls** (variant_c_v1 × openai/gpt-5.6-luna), plus the
+      reused 36 M1 DEV outputs and the 2 reused diagnostics: 95 DEV, 0
+      missing, 0 duplicate.
+      - OpenRouter upstream 429 rate limiting forced paced retries: 102
+        transport attempts for the 59 cases, plus 1 diagnostic probe that
+        captured the error body.
+      - Final state: 0 invalid, 0 model error, 0 timeout.
+- [x] **Ungated by design:** a separate `m2-plan.json` (`gated: false`) and an
+      explicit `--exploratory` flag; the gated M2 path still refuses.
+- [x] **Results (77 semantic-evaluable):** production 51, A 64, B 56,
+      C/4o-mini 63, **C/Luna 64**, first candidate 46.
+      - A vs Luna: 6 / 6, net 0, p = 1.0.
+      - C/4o-mini vs Luna: net +1, p = 1.0.
+      - Luna: 0 NONE outputs, unstated-qualifier cases 412, 466, 473.
+      - 471 and 472 correct (M1 outputs, not re-called).
+- [x] **Unchanged:** M1 FAIL and its artifacts (lock file + test), internal
+      pilot baseline (variant_a_v1 / gpt-4o-mini), production assignments,
+      KB, aliases, candidate order, Semantic Gold.
+- [ ] **Final validation:** deferred to internal-pilot data; the new
+      production-like set still needs independent human review.
+
+Detailed evidence: [`PHASE_7B_LUNA_FULL_DEV_COMPARISON.md`](PHASE_7B_LUNA_FULL_DEV_COMPARISON.md).

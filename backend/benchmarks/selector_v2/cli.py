@@ -2006,6 +2006,29 @@ def cmd_model_exp_prep(args) -> None:
                          for n, r in baseline["runs"].items()}})
 
 
+def cmd_model_exp_m2_plan(args) -> None:
+    """Exploratory plan for the remaining DEV cases (explicitly not gated)."""
+    from benchmarks.selector_v2 import model_experiment as me
+
+    with no_live_calls():
+        ctx = _model_exp_inputs(args)
+        out = Path(args.out)
+        baseline = me.verify_baseline(out / "prelive-baselines.json")
+        m1_gate = json.loads((out / "m1-gate.json").read_text(encoding="utf-8"))
+        plan = me.build_m2_plan(config=ctx["config"], omitted=ctx["request"]["omitted_request_params"],
+                                prompt=ctx["prompt"], split=ctx["split"], baseline=baseline,
+                                snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+                                serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"],
+                                capability_sha256=ctx["capability_sha256"], m1_gate=m1_gate)
+        path = out / "m2-plan.json"
+        if path.exists() and json.loads(path.read_text())["plan_fingerprint"] != plan["plan_fingerprint"]:
+            raise SystemExit("a different exploratory plan exists")
+        _dump(plan, path)
+    _dump({"plan_fingerprint": plan["plan_fingerprint"], "calls": plan["calls"],
+           "m1_gate_passed": plan["m1_gate_passed"], "gated": plan["gated"],
+           "first_ids": plan["dev_case_ids_remaining"][:5]})
+
+
 def cmd_model_exp_run(args) -> None:
     from benchmarks.selector_v2 import model_experiment as me
     from benchmarks.selector_v2 import semantic_holdout as sh
@@ -2019,20 +2042,25 @@ def cmd_model_exp_run(args) -> None:
         out = Path(args.out)
         baseline = me.verify_baseline(out / "prelive-baselines.json")
         case_ids = me.stage_ids(baseline, args.stage, args.scope)
-        if args.stage == "m2":
+        if args.stage == "m2" and not args.exploratory:
             gate = json.loads((out / "m1-gate.json").read_text(encoding="utf-8"))
             if not gate["gate"]["passed"] or gate["baseline_fingerprint"] != baseline["baseline_fingerprint"]:
-                raise SystemExit("M2 refused: the M1 gate did not pass")
+                raise SystemExit("M2 refused: the M1 gate did not pass "
+                                 "(an explicitly approved exploratory run uses --exploratory)")
         omitted = tuple(ctx["request"]["omitted_request_params"])
         if args.live:
             config = ctx["config"]
             if (args.provider, args.model) != (config.provider, config.model):
                 raise SystemExit("provider/model differ from the experiment config")
-            plan = json.loads((out / "m1-plan.json").read_text(encoding="utf-8"))
-            me.validate_plan(plan, args.approve_plan_fingerprint, config=config, omitted=omitted,
-                             prompt=ctx["prompt"], split=ctx["split"], baseline=baseline,
-                             snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
-                             serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"])
+            guard = dict(config=config, omitted=omitted, prompt=ctx["prompt"], split=ctx["split"],
+                         baseline=baseline, snapshot_fp=ctx["manifest"]["snapshot_fingerprint"],
+                         serializer_fp=ctx["serializer_fp"], gold_fp=ctx["gold_fp"])
+            if args.exploratory:
+                plan = json.loads((out / "m2-plan.json").read_text(encoding="utf-8"))
+                me.validate_m2_plan(plan, args.approve_plan_fingerprint, **guard)
+            else:
+                plan = json.loads((out / "m1-plan.json").read_text(encoding="utf-8"))
+                me.validate_plan(plan, args.approve_plan_fingerprint, **guard)
             inner, mode = LiveSelectorBackend(config, prompt=ctx["prompt"], omit_request_params=omitted), "LIVE"
         else:
             config = selector_config(provider=FAKE_PROVIDER, model=f"fake-{args.fake_policy}", max_tokens=32)
@@ -2050,13 +2078,33 @@ def cmd_model_exp_run(args) -> None:
                         if d.is_dir()) if (out / "diagnostics/runs").exists() else 0
         already = ResultStore(root / "runs" / identity.run_id, identity).load().by_case
         todo = [i for i in case_ids if i not in already]
-        if dev_done + diag_done + len(todo) > me.MAX_CALLS:
-            raise SystemExit("total call budget (97) would be exceeded")
-        backend = sh.BudgetedBackend(me.FailFastBackend(inner), len(todo), set(todo))
+        if args.retry_errors:   # never-attempted first; previously attempted cases last
+            skipped = [i for i in case_ids if i in already
+                       and already[i].error_type in me.SKIPPED_ERROR_TYPES]
+            attempted = [i for i in case_ids if i in already and i not in set(skipped)
+                         and already[i].outcome.value in ("MODEL_ERROR", "TIMEOUT")]
+            todo = todo + skipped + attempted
+        if args.max_new_calls is not None:
+            todo = todo[:args.max_new_calls]
+        stored, attempts = set(), 0
+        for base in ((out / "runs"), (out / "diagnostics" / "runs")):
+            for d in (base.iterdir() if base.exists() else ()):
+                if d.is_dir():
+                    loaded = ResultStore(d, identity if d.parent == root / "runs" else identity).load()
+                    stored |= set(loaded.by_case)
+                    attempts += me.spent_attempts(loaded.by_case)
+        # Budget is LOGICAL: one selector invocation per case. Transport retries
+        # after an upstream rate limit do not consume new logical calls.
+        if len(stored | set(todo)) > me.MAX_CALLS:
+            raise SystemExit(f"logical call budget: {len(stored)} cases already run, "
+                             f"{len(todo)} more would exceed {me.MAX_CALLS}")
+        paced = me.PacedBackend(inner, args.call_interval_ms)
+        backend = sh.BudgetedBackend(me.FailFastBackend(paced, args.fail_fast_after), len(todo), set(todo))
 
     def execute():
         return run_benchmark(ctx["snapshots"], backend, identity, root, concurrency=1,
-                             max_cases=len(todo), retry_errors=False, primary_only=True, case_ids=set(todo))
+                             max_cases=len(todo), retry_errors=bool(args.retry_errors),
+                             primary_only=True, case_ids=set(todo))
 
     if args.live:
         with no_live_calls([LIVE_PROVIDERS[config.provider]], block_sdks=False):
@@ -2066,8 +2114,17 @@ def cmd_model_exp_run(args) -> None:
             summary = execute()
     sent_keys = getattr(getattr(inner, "provider", None), "client", None)
     accounting = {"stage": args.stage, "scope": args.scope, "run_id": identity.run_id, "run_mode": mode,
+                  "exploratory_override": bool(args.exploratory),
+                  "gate_status_at_run": "M1 FAIL (historical, unchanged)" if args.exploratory else "gated",
                   "logical_calls": backend.calls, "refused_by_budget_guard": backend.refused,
+                  "provider_attempts": backend.backend.attempts,
+                  "provider_errors": backend.backend.errors,
                   "fail_fast_tripped_on": backend.backend.tripped,
+                  "fail_fast_max_consecutive_errors": backend.backend.max_consecutive_errors,
+                  "logical_cases_before_this_run": len(stored),
+                  "transport_attempts_before_this_run": attempts,
+                  "call_interval_ms": args.call_interval_ms,
+                  "retry_errors": bool(args.retry_errors),
                   "request_param_keys_sent": sorted({tuple(k) for k in getattr(sent_keys, "sent_param_keys", [])}),
                   "omitted_request_params": list(omitted) if args.live else [],
                   "summary": summary.__dict__}
@@ -2101,7 +2158,41 @@ def cmd_model_exp_eval(args) -> None:
         dev, diag = loaded["dev"].by_case, loaded["diagnostic"].by_case
         integrity = {s: {"unique": len(l.by_case), "superseded": l.superseded, "corrupt": l.corrupt_lines}
                      for s, l in loaded.items()}
-        if args.stage == "m1":
+        if args.stage == "exploratory":
+            from benchmarks.selector_v2.challenge import load_challenge
+
+            _cm, cases = load_challenge(Path(args.challenge), ctx["manifest"])
+            membership = {c["case_id"]: c["membership"] for c in cases}
+            c4o_dir = Path(args.c_dir) / "runs"
+            (c4o_run,) = [d for d in c4o_dir.iterdir() if d.is_dir()]
+            c4o_dev = load_results(c4o_run / RESULTS_FILE).by_case
+            m = me.evaluate_exploratory(baseline=baseline, sem=ctx["sem"], dev=dev, diagnostics=diag,
+                                        membership=membership, c4o_dev=c4o_dev)
+            scored = m.pop("scored_rows")
+            m.update({"integrity": integrity, "call_accounting": accounts})
+            m1_ids = set(baseline["stage_case_ids"]["m1_dev"])
+            new_rows = [l for l in raw["dev"].splitlines()
+                        if l.strip() and json.loads(l)["case_id"] not in m1_ids]
+            files = {"m2-responses.jsonl": "\n".join(new_rows) + "\n",
+                     "all-dev-responses.jsonl": raw["dev"],
+                     "semantic-scores.jsonl": "".join(json.dumps(r, sort_keys=True) + "\n" for r in scored),
+                     "paired-c4o-vs-luna.json": json.dumps(
+                         m["paired"]["variant_c_v1_4o_mini vs variant_c_v1_5_6_luna"], indent=2,
+                         sort_keys=True) + "\n",
+                     "paired-a-vs-luna.json": json.dumps(
+                         m["paired"]["variant_a_v1 vs variant_c_v1_5_6_luna"], indent=2, sort_keys=True) + "\n",
+                     "qualifier-analysis-full.json": json.dumps({n: {k: r[k] for k in (
+                         "unstated_qualifier_assumed_dev", "unstated_qualifier_assumed_slice",
+                         "unstated_ids_dev", "compliance_dev", "compliance_slice")}
+                         for n, r in m["runs"].items()}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                     "metrics-full.json": json.dumps(m, ensure_ascii=False, indent=2, sort_keys=True,
+                                                     default=str) + "\n"}
+            result = {"mode": m["mode"], "dev_total": m["dev_total"], "missing": m["missing"],
+                      "duplicates": m["duplicates"], "dev_evaluable": m["dev_evaluable"],
+                      "exact": {n: r["exact"] for n, r in m["runs"].items()},
+                      "paired": m["paired"], "case_diffs": m["case_diffs"], "slices": m["slices"],
+                      "operational": m["operational"], "integrity": integrity}
+        elif args.stage == "m1":
             m = me.evaluate_m1(baseline=baseline, sem=ctx["sem"], dev=dev, diagnostics=diag)
             m.update({"integrity": integrity, "call_accounting": accounts})
             files = {"m1-responses.jsonl": raw["dev"] + raw["diagnostic"],
@@ -2493,6 +2584,15 @@ def build_parser() -> argparse.ArgumentParser:
     model_exp_args(p)
     p.add_argument("--stage", required=True, choices=["m1", "m2"])
     p.add_argument("--scope", required=True, choices=["dev", "diagnostic"])
+    p.add_argument("--exploratory", action="store_true",
+                   help="run the remaining DEV cases under the ungated exploratory m2 plan")
+    p.add_argument("--retry-errors", action="store_true",
+                   help="also retry cases whose stored result is MODEL_ERROR/TIMEOUT")
+    p.add_argument("--max-new-calls", type=int, default=None)
+    p.add_argument("--call-interval-ms", type=int, default=0,
+                   help="pause before each provider call (upstream rate limiting)")
+    p.add_argument("--fail-fast-after", type=int, default=3,
+                   help="stop after N consecutive operational errors")
     p.add_argument("--live", action="store_true")
     p.add_argument(CONFIRM_FLAG, dest="confirm_live_provider_calls", action="store_true")
     p.add_argument("--provider")
@@ -2501,9 +2601,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fake-policy", default="oracle")
     p.set_defaults(func=cmd_model_exp_run)
 
+    p = sub.add_parser("model-exp-m2-plan", help="exploratory (ungated) plan for the remaining DEV cases")
+    model_exp_args(p)
+    p.set_defaults(func=cmd_model_exp_m2_plan)
+
     p = sub.add_parser("model-exp-eval", help="score model experiment stage m1 or full DEV")
     model_exp_args(p)
-    p.add_argument("--stage", required=True, choices=["m1", "full"])
+    p.add_argument("--stage", required=True, choices=["m1", "full", "exploratory"])
     p.set_defaults(func=cmd_model_exp_eval)
 
     p = sub.add_parser("semantic-holdout-eval", help="score variant_a_v1 HOLDOUT on Semantic Gold")

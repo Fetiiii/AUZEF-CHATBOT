@@ -169,23 +169,75 @@ def test_post_run_integrity(world):
         assert ident["omitted_request_params"] == ["temperature"]
         assert ident["config"]["reasoning_effort"] == "none"
         loaded[scope] = load_results(run_dir / RESULTS_FILE)
-        assert loaded[scope].superseded == 0 and loaded[scope].corrupt_lines == 0
+        # retries after an upstream 429 supersede earlier attempts; the latest
+        # attempt per case is what counts and must be usable
+        assert loaded[scope].corrupt_lines == 0
+        assert all(r.outcome.value not in ("INVALID_OUTPUT", "MODEL_ERROR", "TIMEOUT")
+                   for r in loaded[scope].by_case.values())
         accounts += [json.loads(l) for l in (run_dir / "call-accounting.jsonl").read_text().splitlines() if l.strip()]
     assert sorted(loaded["diagnostic"].by_case) == ["471", "472"]
     dev = set(loaded["dev"].by_case)
     m1 = set(world["baseline"]["qualifier_slice_ids"])
     assert dev == m1 or dev == set(world["split"]["dev"])
-    total = sum(a["logical_calls"] for a in accounts)
-    assert total == len(dev) + 2 <= 97 and all(a["refused_by_budget_guard"] == 0 for a in accounts)
+    assert all(a["refused_by_budget_guard"] == 0 for a in accounts)
+    assert len(dev) + len(loaded["diagnostic"].by_case) <= 97      # logical calls: one per case
     for a in accounts:
         for keys in a["request_param_keys_sent"]:
             assert "temperature" not in keys and "extra_body" in keys
+    # M1's stored rows are the first 36 lines of the results file, byte-identical
+    (dev_dir,) = [d for d in (EXP / "runs").iterdir() if d.is_dir()]
+    live_head = (dev_dir / RESULTS_FILE).read_text().splitlines()[:36]
+    assert live_head == (EXP / "m1-responses.jsonl").read_text().splitlines()[:36]
     gate = json.loads((EXP / "m1-gate.json").read_text())
-    m1_metrics = me.evaluate_m1(baseline=world["baseline"], sem=_sem(),
-                                dev=loaded["dev"].by_case, diagnostics=loaded["diagnostic"].by_case)
-    assert m1_metrics["gate"] == gate["gate"]                          # deterministic
-    if dev != m1:
-        assert gate["gate"]["passed"]                                   # M2 only after an M1 pass
+    if dev == m1:
+        m1_metrics = me.evaluate_m1(baseline=world["baseline"], sem=_sem(),
+                                    dev=loaded["dev"].by_case, diagnostics=loaded["diagnostic"].by_case)
+        assert m1_metrics["gate"] == gate["gate"]                      # deterministic
+    else:
+        # the remaining DEV cases ran only under the explicit ungated exploratory plan
+        assert gate["gate"]["passed"] or any(a.get("exploratory_override") for a in accounts)
+
+
+def test_exploratory_plan_is_ungated_and_disjoint_from_m1(world):
+    if not (EXP / "m2-plan.json").exists():
+        pytest.skip("exploratory plan not built")
+    plan = json.loads((EXP / "m2-plan.json").read_text())
+    b = world["baseline"]
+    assert plan["gated"] is False and plan["m1_gate_passed"] is False
+    assert plan["calls"] == plan["max_logical_calls"] == 59
+    assert plan["dev_case_ids_remaining"] == b["stage_case_ids"]["m2_dev"]
+    assert not set(plan["dev_case_ids_remaining"]) & set(b["qualifier_slice_ids"])
+    assert set(plan["dev_case_ids_remaining"]) | set(b["qualifier_slice_ids"]) == set(world["split"]["dev"])
+    assert not any(plan["other_calls"].values())
+    assert plan["other_calls"]["diagnostics_471_472"] == 0
+    guard = dict(omitted=("temperature",), prompt=load_prompt("variant_c_v1"), split=world["split"],
+                 baseline=b, snapshot_fp=world["manifest"]["snapshot_fingerprint"],
+                 serializer_fp=serializer_contract_fingerprint(), gold_fp=GOLD11_FP)
+    me.validate_m2_plan(plan, plan["plan_fingerprint"], config=_config(), **guard)
+    with pytest.raises(PlanApprovalError, match="model differs"):
+        me.validate_m2_plan(plan, plan["plan_fingerprint"],
+                            config=selector_config(provider="openrouter", model="openai/gpt-4o-mini",
+                                                   reasoning_effort="none"), **guard)
+    bad = {**plan, "dev_case_ids_remaining": world["split"]["dev"]}
+    bad["plan_fingerprint"] = px.plan_fingerprint(bad)
+    with pytest.raises(PlanApprovalError, match="case ids|budget"):
+        me.validate_m2_plan(bad, bad["plan_fingerprint"], config=_config(), **guard)
+    # the M1 plan is not accepted for the exploratory run and vice versa
+    with pytest.raises(PlanApprovalError, match="plan kind"):
+        me.validate_m2_plan(world["plan"], world["plan"]["plan_fingerprint"], config=_config(), **guard)
+
+
+def test_m1_artifacts_and_saved_4o_outputs_unchanged():
+    record = EXP / "m1-artifacts-lock.json"
+    if not record.exists():
+        pytest.skip("no pre-run artifact record")
+    import hashlib
+
+    before = json.loads(record.read_text())
+    for name, digest in before.items():
+        if name.startswith("_"):
+            continue
+        assert hashlib.new("sha256", (EXP / name).read_bytes()).hexdigest() == digest, name
 
 
 def _sem():
