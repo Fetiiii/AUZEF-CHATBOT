@@ -1,0 +1,27 @@
+{
+  "blocker": "BLOCKER_TEST_ENV_ISOLATION",
+  "status": "CLOSED",
+  "root_cause": "main.py, core/database.py and services/llm_provider.py call load_dotenv() at import time. pytest_configure runs BEFORE those imports, so variables it clears are re-SET from the project .env when the app is imported (load_dotenv sets keys absent from the environment). Test outcomes therefore depended on the developer's .env file.",
+  "evidence_before": {
+    "with_pilot_env": "6 failed, 698 passed",
+    "with_env_pinned_on_the_command_line": "110 passed, 0 failed",
+    "failing_tests": [
+      "test_selector_prompt_experiment::test_production_prompt_and_contract_unchanged",
+      "test_selector_prompt_experiment::test_override_changes_only_system_prompt",
+      "test_selector_postmortem::test_prompt_variants_are_generic_and_production_prompt_unchanged",
+      "test_selector_qualifier_postmortem::test_holdout_prompt_gold_and_production_unchanged",
+      "test_internal_pilot_runtime::test_build_selector_prompt_follows_the_configured_version",
+      "test_initialization::test_db_command_is_idempotent_and_preserves_existing_config"
+    ]
+  },
+  "fix": "backend/tests/conftest.py disables dotenv.load_dotenv for the test process only. Runtime semantics are untouched: Docker/production still use env_file: .env and the real load_dotenv().",
+  "fix_level": "test fixture (conftest), not a command-line pin",
+  "mode_a_pilot_env_present": "PASS",
+  "mode_b_no_pilot_overrides": "PASS",
+  "guard_tests": [
+    "test_dotenv_is_disabled_inside_the_test_process",
+    "test_pilot_env_values_do_not_leak_from_the_host_file",
+    "test_selector_prompt_resolves_to_the_default_without_explicit_config",
+    "test_llm_enabled_seed_default_is_deterministic_without_host_env"
+  ]
+}

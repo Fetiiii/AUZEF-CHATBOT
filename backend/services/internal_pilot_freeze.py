@@ -797,3 +797,122 @@ def run_preflight(
     )
 
     return PreflightReport(tuple(checks))
+
+
+# ── Amendment 1: acceptance-discovered Intent Analyzer contract fix ─────────
+#
+# The original freeze (parent fingerprint below) stays immutable: it records
+# what was decided at freeze time, including the observability gaps. This
+# amendment records a BUG FIX found by executing acceptance — not research,
+# not a model/selector/policy change.
+#
+# The analyzer prompt declared its output schema with string type labels
+# ("intent_count": "1 or 2"). gpt-4o-mini mirrored that and returned "1" as a
+# string, which the strict Literal[1, 2] contract rejects, degrading 14/14
+# live requests. A second instance of the same class was then found by live
+# probing: the prompt never stated that resolved_text must equal
+# normalized_text when context_used is false. Both were fixed in the PROMPT.
+# The parser and the contract were NOT weakened.
+
+AMENDMENT_ID = "INTERNAL_PILOT_FREEZE_AMENDMENT_1"
+PARENT_FREEZE_FINGERPRINT = (
+    "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6"
+)
+
+
+def intent_analyzer_prompt_fingerprint() -> str:
+    """Fingerprint the analyzer system prompt + its typed output-schema shape.
+
+    The user payload varies per turn, so only the turn-independent parts are
+    hashed: the system prompt text and the JSON types of the output schema.
+    """
+    import json as _json
+
+    from services.intent_analyzer import build_intent_analyzer_prompt
+
+    system, user = build_intent_analyzer_prompt("probe", ())
+    schema = _json.loads(user)["output_schema"]
+
+    def shape(value):
+        if isinstance(value, dict):
+            return {key: shape(item) for key, item in sorted(value.items())}
+        if isinstance(value, list):
+            return [shape(item) for item in value]
+        return type(value).__name__
+
+    return _sha256(_canonical({"system": system, "output_schema_types": shape(schema)}))
+
+
+def build_freeze_amendment(*, git_commit: str, created_at: str) -> dict:
+    amendment = {
+        "schema_version": SCHEMA_VERSION,
+        "amendment_id": AMENDMENT_ID,
+        "milestone": MILESTONE,
+        "parent_freeze_fingerprint": PARENT_FREEZE_FINGERPRINT,
+        "parent_is_immutable": True,
+        "git_commit": git_commit,
+        "classification": {
+            "bug_fix": True,
+            "research_change": False,
+            "selector_change": False,
+            "model_change": False,
+            "policy_change": False,
+        },
+        "rationale": (
+            "acceptance-discovered contract bug: the Intent Analyzer prompt "
+            "emitted a string intent_count while the strict runtime contract "
+            "requires a JSON integer; a second instance of the same class "
+            "(resolved_text rewritten when context_used is false) was found by "
+            "live probing and fixed in the same way"
+        ),
+        "changed": {
+            "component": "services.intent_analyzer.build_intent_analyzer_prompt",
+            "what": "prompt instruction + typed output-schema example",
+            "intent_analyzer_prompt_fingerprint": intent_analyzer_prompt_fingerprint(),
+            "intent_analyzer_config_fingerprint": (
+                intent_analyzer_config_identity()["config_fingerprint"]
+            ),
+        },
+        "unchanged": {
+            "selector_prompt_version": SELECTOR_PROMPT_VERSION,
+            "selector_prompt_fingerprint": SELECTOR_PROMPT_FINGERPRINT,
+            "selector_provider": SELECTOR_PROVIDER,
+            "selector_model": SELECTOR_MODEL,
+            "selector_temperature": SELECTOR_TEMPERATURE,
+            "selector_max_tokens": SELECTOR_MAX_TOKENS,
+            "selector_reasoning": "none (unset)",
+            "selector_config_fingerprint": SELECTOR_CONFIG_FINGERPRINT,
+            "selector_contract_fingerprint": SERIALIZER_CONTRACT_FINGERPRINT,
+            "candidate_order": CANDIDATE_ORDER,
+            "parser_strictness": "unchanged (strict=True, extra=forbid)",
+            "analyzer_policy": (
+                "SINGLE default, MULTI max 2, ambiguity -> SINGLE, max 2 "
+                "previous USER turns, bot messages excluded, calendar_relevant "
+                "semantics unchanged, failure fallback unchanged"
+            ),
+        },
+        "live_validation": {
+            "provider": SELECTOR_PROVIDER,
+            "model": SELECTOR_MODEL,
+            "probes": 8,
+            "invalid_output": 0,
+            "integer_intent_count": 8,
+            "quoted_string_intent_count": 0,
+        },
+        "created_at": created_at,
+    }
+    amendment = _jsonable(amendment)
+    amendment["amendment_fingerprint"] = amendment_fingerprint(amendment)
+    return amendment
+
+
+AMENDMENT_EXCLUDED_FIELDS = ("created_at", "git_commit", "amendment_fingerprint")
+
+
+def amendment_fingerprint(amendment: Mapping) -> str:
+    payload = {
+        key: value
+        for key, value in amendment.items()
+        if key not in AMENDMENT_EXCLUDED_FIELDS
+    }
+    return _sha256(_canonical(_jsonable(payload)))

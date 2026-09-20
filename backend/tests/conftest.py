@@ -20,7 +20,32 @@ import sys
 import time
 import types
 
+import dotenv
 import pytest
+
+# ── Test ortamı .env'den YALITILIR ───────────────────────────────────────────
+# ``main``, ``core.database`` ve ``services.llm_provider`` import anında
+# ``load_dotenv()`` çağırıyor. Bu, proje kökündeki ``.env``'i test sürecine
+# sızdırır: pytest_configure'da temizlenen değişkenler bile uygulama import
+# edilirken geri gelir (load_dotenv var olmayan anahtarları SET eder).
+#
+# Bunun somut bedeli ölçüldü: internal-pilot ayarları (SELECTOR_PROMPT_VERSION,
+# LLM_ENABLED_DEFAULT) ``.env``'e eklenince ALTI test kırıldı — kod değişmeden,
+# yalnız host dosyası yüzünden. Test sonucu geliştiricinin ``.env``'ine
+# bağlı olmamalı.
+#
+# Çözüm test seviyesinde ve en küçük olanı: test sürecinde ``load_dotenv``
+# etkisiz kılınır. Runtime semantiği DEĞİŞMEZ — Docker/production hâlâ
+# ``env_file: .env`` ve gerçek ``load_dotenv()`` ile çalışır. Testler ortamı
+# ``pytest_configure`` ve monkeypatch ile açıkça kurar.
+_REAL_LOAD_DOTENV = dotenv.load_dotenv
+
+
+def _no_dotenv_in_tests(*_args, **_kwargs) -> bool:
+    return False
+
+
+dotenv.load_dotenv = _no_dotenv_in_tests
 
 _PG_CONTAINER = "auzef_pytest_pg"
 _PG_PORT = "55440"

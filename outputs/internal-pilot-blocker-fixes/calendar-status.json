@@ -1,0 +1,59 @@
+{
+  "blocker": "BLOCKER_CALENDAR_SOURCE",
+  "status": "OPEN",
+  "searched": [
+    "data/ (all files)",
+    "backend/data/ (empty)",
+    "outputs/",
+    "backend/scripts/importer.py",
+    "backend/scripts/import_etiya_history.py",
+    "repo-wide grep for 2026-2027 / 2026-27 / 2026/2027"
+  ],
+  "found": {
+    "file": "data/auzef_akademik_takvim_2025_2026_guncel.csv",
+    "academic_year": "2025-2026",
+    "rows": 19,
+    "header": "Donem,Etkinlik,Baslangic_Tarihi,Bitis_Tarihi"
+  },
+  "matches_for_2026_2027": "only test fixtures, a UI placeholder and a docs example — no real data",
+  "current_pilot_period_required": "2026-2027",
+  "nothing_was_invented": true,
+  "required_input": {
+    "what": "AUZEF 2026-2027 academic calendar as a CSV file",
+    "format": "CSV, comma or semicolon delimited, UTF-8",
+    "required_columns": [
+      "Donem",
+      "Etkinlik",
+      "Baslangic_Tarihi",
+      "Bitis_Tarihi"
+    ],
+    "optional_columns": [
+      "Akademik_Yil",
+      "Term",
+      "Aliases (pipe-separated)"
+    ],
+    "english_aliases_accepted": [
+      "period",
+      "event",
+      "start_date",
+      "end_date",
+      "academic_year",
+      "term",
+      "aliases"
+    ],
+    "date_format": "DD.MM.YYYY (as in the existing 2025-2026 file)",
+    "term_values": [
+      "GUZ",
+      "BAHAR",
+      "GENERAL"
+    ],
+    "import_via": "POST /api/academic-calendar/import (multipart CSV, max 5MB, auth required)",
+    "then_set": {
+      "endpoint": "PUT /api/settings/calendar",
+      "ACADEMIC_CALENDAR_CURRENT_YEAR": "2026-2027",
+      "ACADEMIC_CALENDAR_CURRENT_TERM": "GUZ"
+    },
+    "writes_to_table": "academic_calendar"
+  },
+  "consequence": "the internal pilot must not open until a current calendar is loaded"
+}

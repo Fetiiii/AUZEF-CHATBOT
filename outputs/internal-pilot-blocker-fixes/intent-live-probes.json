@@ -1,0 +1,165 @@
+{
+  "probes_planned": 8,
+  "probes_executed": 8,
+  "invalid_output_count": 0,
+  "quoted_string_intent_count_count": 0,
+  "integer_intent_count_count": 8,
+  "provider": "openrouter",
+  "model": "openai/gpt-4o-mini",
+  "config_fingerprint": "2f1b27bc343058f7af2988f241cab07f38404c168de01e4ab93a89cdf8c2b1a6",
+  "reasoning_effort": null,
+  "results": [
+    {
+      "probe": "simple_single",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 2498.833836999438
+    },
+    {
+      "probe": "short_noisy_single",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 1515.9898069996416
+    },
+    {
+      "probe": "calendar_single",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 2052.7251840003373
+    },
+    {
+      "probe": "clear_multi",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 1608.1473440008267
+    },
+    {
+      "probe": "long_but_single",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 2887.947073999385
+    },
+    {
+      "probe": "context_followup",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 1644.8661919994265
+    },
+    {
+      "probe": "valid_none_shape",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 1820.3447400001096
+    },
+    {
+      "probe": "explicit_qualifier",
+      "transport_status": "LLMOutcomeStatus.SUCCESS",
+      "intent_count_token": "\"intent_count\":1",
+      "intent_count_is_quoted_string": false,
+      "parsed_ok": true,
+      "parse_error": null,
+      "intent_count": 1,
+      "analysis": {
+        "mode": "SINGLE",
+        "context_used": [
+          false
+        ],
+        "calendar_relevant": [
+          false
+        ]
+      },
+      "latency_ms": 2012.8758309992918
+    }
+  ]
+}

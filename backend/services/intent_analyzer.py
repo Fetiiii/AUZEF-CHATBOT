@@ -56,20 +56,36 @@ def build_intent_analyzer_prompt(
         "bilgisine ihtiyaç duyuyorsa true olur; salt kayıt/sınav/dönem kelimesi yetmez. "
         "Current turn 3 veya daha fazla bağımsız hedef içeriyorsa hiçbirini keyfi "
         "atmadan current turn'ü tek intent olarak koru. Yalnız strict JSON object döndür; "
-        "markdown, açıklama veya ek alan kullanma."
+        "markdown, açıklama veya ek alan kullanma. "
+        "intent_count bir JSON integer olmalıdır: 1 ya da 2. Tırnak içinde string "
+        "gönderme (\"1\" YANLIŞ, 1 DOĞRU). intent_count her zaman intents "
+        "dizisinin uzunluğuna eşittir: SINGLE için 1, MULTI için 2. "
+        "context_used ve calendar_relevant JSON boolean olmalıdır (true/false). "
+        "context_used false ise resolved_text, normalized_text ile BİREBİR AYNI "
+        "olmalıdır: normalized_text'i aynen kopyala. Yeniden ifade etme, "
+        "özetleme, soruyu cümleye çevirme ya da 'bilgi almak istiyorsunuz' gibi "
+        "açıklama üretme. "
+        "context_used true ise resolved_text normalized_text'ten farklı olmalı ve "
+        "eksik referansı YALNIZ previous_user_turns'teki kelimeleri kullanarak "
+        "açmalıdır; bu iki kaynakta geçmeyen hiçbir kelimeyi ekleme."
     )
+    # output_schema is a typed *example*: every value is a real instance of the
+    # JSON type the field must carry. It previously used string type labels
+    # ("intent_count": "1 or 2"), which the model mirrored literally and
+    # returned "1" as a string — rejected by the strict Literal[1, 2] contract,
+    # degrading every live request. Keep these values typed, never labels.
     payload = {
         "previous_user_turns": previous,
         "current_user_turn": current_user_turn.strip(),
         "output_schema": {
-            "intent_count": "1 or 2",
+            "intent_count": 1,
             "intents": [
                 {
                     "source_text": "non-empty string",
                     "normalized_text": "non-empty string",
                     "resolved_text": "non-empty string",
-                    "context_used": "boolean",
-                    "calendar_relevant": "boolean",
+                    "context_used": False,
+                    "calendar_relevant": False,
                 }
             ],
         },

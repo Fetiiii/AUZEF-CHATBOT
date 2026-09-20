@@ -1,0 +1,25 @@
+{
+  "milestone": "INTERNAL_PILOT",
+  "artifact": "acceptance-blocker-fixes",
+  "git_commit": "f4cb55cdceb13a9aa2478e140ef93548d6f6a581",
+  "parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_1",
+  "amendment_fingerprint": "9d221c3cf94ffd5039670e74b6272b078106f793c06f98fe649557ca21ec8485",
+  "blockers": {
+    "intent_analyzer_contract": "CLOSED",
+    "test_env_isolation": "CLOSED",
+    "calendar_source": "OPEN"
+  },
+  "live_probes": {
+    "planned": 8,
+    "executed": 8,
+    "invalid_output": 0,
+    "integer_intent_count": 8,
+    "quoted_string_intent_count": 0
+  },
+  "selector_unchanged": true,
+  "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+  "reacceptance": "BLOCKED_ON_CALENDAR_DATA",
+  "contains_secrets": false,
+  "contains_raw_pii": false
+}
