@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from core.database import Conversation, ConversationMessage, utcnow
+from core.database import Conversation, ConversationMessage, SessionLocal, utcnow
 from core.deps import (
     MAX_MESSAGE_LEN,
     get_db,
@@ -84,17 +84,32 @@ def _get_or_create_conversation(db: Session, conversation_id: Optional[int], tok
             return conv
     conv = Conversation(ip_address=ip, client_token=secrets.token_urlsafe(24))
     db.add(conv)
-    db.commit()
-    db.refresh(conv)
+    db.flush()
     return conv
 
 
 def _store_message(db: Session, conversation_id: int, role: str, content: str, source: Optional[str] = None) -> ConversationMessage:
     msg = ConversationMessage(conversation_id=conversation_id, role=role, content=content, source=source)
     db.add(msg)
-    db.commit()
-    db.refresh(msg)
+    db.flush()
     return msg
+
+
+def _persist_user_turn(body: WidgetChatRequest, ip: Optional[str], question: str) -> tuple[Optional[int], Optional[str], tuple[dict, ...]]:
+    """Own the conversation write phase and return only detached plain values."""
+    with SessionLocal() as db:
+        try:
+            conv = _get_or_create_conversation(
+                db, body.conversation_id, body.conversation_token, ip
+            )
+            conversation_id, conversation_token = int(conv.id), str(conv.client_token)
+            context = _load_recent_context(db, conversation_id) if CHAT_CONTEXT_ENABLED else ()
+            _store_message(db, conversation_id, "user", question)
+            db.commit()
+            return conversation_id, conversation_token, context
+        except Exception:
+            db.rollback()
+            raise
 
 
 def _load_recent_context(db: Session, conversation_id: int) -> tuple[dict, ...]:
@@ -126,25 +141,27 @@ def _load_recent_context(db: Session, conversation_id: int) -> tuple[dict, ...]:
     return tuple(reversed(newest_first))
 
 
-def _widget_reply(db: Session, conv: Optional[Conversation], answer: str, source: str, suggestions: Optional[list] = None) -> dict:
+def _widget_reply(conversation_id: Optional[int], conversation_token: Optional[str], answer: str, source: str, suggestions: Optional[list] = None) -> dict:
     """Bot cevabını (mümkünse) kaydedip yanıtı döner.
 
     Kayıt best-effort'tur: bir hata olursa cevabın kullanıcıya dönmesini
     engellemez (yalnızca o mesaj için conversation_id/message_id dönmez).
     """
     resp = {"answer": answer}
-    if conv is not None:
-        try:
-            msg = _store_message(db, conv.id, "bot", answer, source=source)
-            resp["conversation_id"] = conv.id
-            resp["conversation_token"] = conv.client_token
-            resp["message_id"] = msg.id
-        except Exception as e:
-            logger.error(f"Bot mesajı kaydedilemedi (yanıt yolu etkilenmez): {e}")
+    if conversation_id is not None:
+        with SessionLocal() as db:
             try:
-                db.rollback()
-            except Exception:
-                pass
+                message_id = int(_store_message(db, conversation_id, "bot", answer, source=source).id)
+                db.commit()
+                resp["conversation_id"] = conversation_id
+                resp["conversation_token"] = conversation_token
+                resp["message_id"] = message_id
+            except Exception as exc:
+                logger.error("Bot mesajı kaydedilemedi (yanıt yolu etkilenmez): %s", type(exc).__name__)
+                try:
+                    db.rollback()
+                except Exception as rollback_exc:
+                    logger.error("Bot mesajı rollback başarısız: %s", type(rollback_exc).__name__)
     if suggestions:
         resp["suggestions"] = suggestions
     return resp
@@ -161,12 +178,13 @@ def _widget_reply(db: Session, conv: Optional[Conversation], answer: str, source
 
 
 @router.post("/widget-chat")
-def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: BackgroundTasks):
     """Embed widget için basit adapter: {message} → {answer}"""
     # İlk kalıcı/pahalı işlemden önce DB-ADMIN'deki ortak state'i oku. DB
     # erişimi başarısızsa kritik dependency kaybında pipeline'ı başlatma.
     try:
-        maintenance_enabled = is_maintenance_enabled(db)
+        with SessionLocal() as db:
+            maintenance_enabled = is_maintenance_enabled(db)
     except Exception:
         logger.exception("Widget merkezi bakım durumu okunamadı")
         raise HTTPException(status_code=503, detail="service unavailable") from None
@@ -185,24 +203,17 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     # İlk mesajda conversation oluştur, kullanıcı mesajını kaydet.
     # Best-effort: kayıt başarısız olursa (ör. tablo henüz yoksa) cevap yolu
     # etkilenmez; sadece bu sohbet loglanmaz.
-    conv = None
+    conversation_id = None
+    conversation_token = None
     conversation_context = ()
     try:
-        conv = _get_or_create_conversation(db, body.conversation_id, body.conversation_token, ip)
-        if CHAT_CONTEXT_ENABLED:
-            conversation_context = _load_recent_context(db, conv.id)
-        _store_message(db, conv.id, "user", q)
-    except Exception as e:
-        logger.error(f"Conversation kaydı yapılamadı (yanıt yolu etkilenmez): {e}")
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        conv = None
+        conversation_id, conversation_token, conversation_context = _persist_user_turn(body, ip, q)
+    except Exception as exc:
+        logger.error("Conversation kaydı yapılamadı (yanıt yolu etkilenmez): %s", type(exc).__name__)
 
     trace = DecisionTrace(
         endpoint="widget_chat",
-        conversation_id=conv.id if conv is not None else None,
+        conversation_id=conversation_id,
     )
     trace.set_context(enabled=CHAT_CONTEXT_ENABLED, messages=conversation_context)
 
@@ -210,7 +221,7 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     # + eşik yedeği. Takvim artık ön kapı değil, havuzdaki bir aday.
     try:
         answer, source = _answer_question(
-            q, db, conversation_context=conversation_context, trace=trace
+            q, None, conversation_context=conversation_context, trace=trace
         )
     except Exception:
         trace.finalize(outcome="error", source="none", qna_ids=[], answer_count=0)
@@ -223,17 +234,17 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
             answer_count=None,  # pipeline already recorded the real count
         )
         emit_decision_trace(trace)
-        return _widget_reply(db, conv, answer, source)
+        return _widget_reply(conversation_id, conversation_token, answer, source)
 
     # Öneriler: cevap DEĞİL; guard/aktiflik kurallarına uyan başlıklar.
     try:
-        suggestions = guard_safe_suggestions(q, db, limit=20, trace=trace)
+        suggestions = guard_safe_suggestions(q, None, limit=20, trace=trace)
         if suggestions:
             background_tasks.add_task(_log_query, "none", "suggest", ip)
             trace.finalize(outcome="suggestions", source="none", qna_ids=[], answer_count=0)
             emit_decision_trace(trace)
             return _widget_reply(
-                db, conv,
+                conversation_id, conversation_token,
                 "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
                 "none", suggestions=suggestions
             )
@@ -243,7 +254,7 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     background_tasks.add_task(_log_query, "none", "suggest", ip)
     trace.finalize(outcome="no_answer", source="none", qna_ids=[], answer_count=0)
     emit_decision_trace(trace)
-    return _widget_reply(db, conv, "Bu konuda bilgim bulunmuyor.", "none")
+    return _widget_reply(conversation_id, conversation_token, "Bu konuda bilgim bulunmuyor.", "none")
 
 
 @router.post("/api/messages/{message_id}/rating")
@@ -284,7 +295,7 @@ def set_talep_status(conversation_id: int, body: TalepRequest, db: Session = Dep
 
 
 @router.get("/api/search")
-def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(..., min_length=2, max_length=1000), db: Session = Depends(get_db)):
+def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(..., min_length=2, max_length=1000)):
     ip = request.client.host if request.client else None
     trace = DecisionTrace(endpoint="api_search")
     trace.set_context(enabled=False, messages=())
@@ -292,7 +303,7 @@ def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(.
     try:
         # Cevap üret: LLM seçici ana yol (birleşik QnA + takvim havuzu, çoklu
         # soru) + eşik yedeği. Takvim artık ön kapı değil, havuzdaki bir aday.
-        answer, source = _answer_question(q, db, trace=trace)
+        answer, source = _answer_question(q, None, trace=trace)
         if answer:
             background_tasks.add_task(_log_query, source, "success", ip)
             trace.finalize(
@@ -310,7 +321,7 @@ def search(request: Request, background_tasks: BackgroundTasks, q: str = Query(.
         # Cevap yok → öneriler
         suggestions = []
         try:
-            suggestions = guard_safe_suggestions(q, db, limit=20, trace=trace)
+            suggestions = guard_safe_suggestions(q, None, limit=20, trace=trace)
         except Exception:
             pass
 

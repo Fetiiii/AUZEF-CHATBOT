@@ -20,6 +20,7 @@ Altyapı hataları capability/config bazlı circuit breaker'a yazılır.
 import os
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import Optional
 
@@ -28,17 +29,20 @@ from sqlalchemy.orm import Session
 from services.calendar_utils import format_calendar_answer
 from services.calendar_retrieval import (
     failed_calendar_result,
+    DEFAULT_CALENDAR_CANDIDATE_LIMIT,
+    load_calendar_snapshot,
     normalize_calendar_text,
     retrieve_calendar_candidates,
     skipped_calendar_result,
 )
-from core.database import QnA
+from core.database import QnA, SessionLocal
 from core.deps import (
     MEILI_PROVIDER,
     QDRANT_PROVIDER,
     get_llm_provider,
     is_llm_enabled,
     llm_config_problem,
+    resolve_llm_request_state,
     meili_is_available,
     meili_search_safe,
 )
@@ -69,6 +73,36 @@ from services.llm_types import (
 )
 
 logger = logging.getLogger("auzef")
+
+
+@contextmanager
+def _db_read(db: Session | None):
+    """Own production reads; never change a caller-owned session's transaction."""
+    if db is not None:
+        yield db
+        return
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        # A SELECT starts an implicit transaction. End it before any provider call.
+        try:
+            session.rollback()
+        finally:
+            session.close()
+
+
+def _calendar_candidates(
+    query: str, db: Session | None, *, limit: int = DEFAULT_CALENDAR_CANDIDATE_LIMIT
+):
+    # A real caller-owned Session may contain unrelated pending work. Read the
+    # calendar in our own transaction instead of rolling that Session back.
+    calendar_db = None if isinstance(db, Session) else db
+    with _db_read(calendar_db) as session:
+        snapshot = load_calendar_snapshot(session)
+    if limit == DEFAULT_CALENDAR_CANDIDATE_LIMIT:
+        return retrieve_calendar_candidates(query, snapshot)
+    return retrieve_calendar_candidates(query, snapshot, limit=limit)
 
 
 @dataclass(frozen=True)
@@ -203,13 +237,13 @@ def is_date_query(query: str) -> bool:
 
 def _degraded_calendar(
     query: str,
-    db: Session,
+    db: Session | None,
     trace: DecisionTrace | None = None,
     purpose: str = "fallback",
 ) -> tuple[Optional[str], Optional[int]]:
     """Deterministic Calendar V2 lookup (year/term/event safety, limit 1)."""
     try:
-        result = retrieve_calendar_candidates(query, db, limit=1)
+        result = _calendar_candidates(query, db, limit=1)
     except Exception:
         logger.exception("Calendar V2 retrieval hatası")
         result = failed_calendar_result()
@@ -240,17 +274,18 @@ def search_calendar(
     return answer
 
 
-def _active_qna_lookup(db: Session):
+def _active_qna_lookup(db: Session | None):
     """Bounded activity check: ids that exist with ``status=1``."""
     def lookup(qna_ids) -> set[int]:
         ids = sorted({int(value) for value in qna_ids})
         if not ids:
             return set()
-        rows = (
-            db.query(QnA.id)
-            .filter(QnA.id.in_(ids), QnA.status == 1)
-            .all()
-        )
+        with _db_read(db) as session:
+            rows = (
+                session.query(QnA.id)
+                .filter(QnA.id.in_(ids), QnA.status == 1)
+                .all()
+            )
         return {int(row[0]) for row in rows}
 
     return lookup
@@ -533,17 +568,21 @@ def _compose(
 
 def _llm_answer(
     query: str,
-    db: Session,
+    db: Session | None,
     conversation_context: tuple[dict, ...] = (),
     routing_policy: RoutingGuardPolicy | None = None,
     trace: DecisionTrace | None = None,
+    provider=None,
 ) -> LLMAnswerResult:
     """Analyze the current turn, then run eligibility + Selector V2 per intent.
 
     Context is consumed only by the analyzer. Each intent is independent: a
     NONE is final for that intent only, and a selector failure degrades only
     that intent (using its own ``resolved_text``)."""
-    prov = get_llm_provider(db)
+    if provider is None:
+        with _db_read(db) as session:
+            provider = get_llm_provider(session)
+    prov = provider
     if prov is None:
         raise RuntimeError("LLM sağlayıcısı yok (anahtar DB'de/env'de bulunamadı)")
     if trace is not None:
@@ -620,10 +659,7 @@ def _llm_answer(
         purpose = f"intent_{position}"
         if intent.calendar_relevant:
             try:
-                calendar_result = retrieve_calendar_candidates(
-                    intent.resolved_text,
-                    db,
-                )
+                calendar_result = _calendar_candidates(intent.resolved_text, db)
             except Exception:
                 logger.exception("Calendar V2 intent retrieval hatası")
                 calendar_result = failed_calendar_result()
@@ -884,7 +920,7 @@ def _fallback_answer(
 
 def answer_question(
     query: str,
-    db: Session,
+    db: Session | None = None,
     conversation_context: tuple[dict, ...] = (),
     trace: DecisionTrace | None = None,
 ) -> tuple:
@@ -898,7 +934,8 @@ def answer_question(
     - ADMIN_DEGRADED: admin LLM OFF ya da sağlayıcı yok; LLM çağrısı yok.
     Tek istek hatası DB'deki LLM_ENABLED ayarını asla değiştirmez."""
     try:
-        routing_policy = RoutingGuardPolicy.load(db)
+        with _db_read(db) as session:
+            routing_policy = RoutingGuardPolicy.load(session)
     except Exception:
         # Guard deposu okunamazken kontrollü bir QnA'yı yanlışlıkla guardsız
         # döndürmektense tüm QnA yollarını fail-closed kapat.
@@ -908,17 +945,27 @@ def answer_question(
             trace.finalize(outcome="guard_store_error", source="none", qna_ids=[])
         return None, "none"
 
-    llm_enabled = is_llm_enabled(db)
+    if db is None:
+        with _db_read(None) as session:
+            llm_enabled, provider, config_problem = resolve_llm_request_state(session)
+    else:
+        # Keep the direct service API used by existing callers and test doubles.
+        with _db_read(db) as session:
+            llm_enabled = is_llm_enabled(session)
+            provider = get_llm_provider(session) if llm_enabled else None
+        config_problem = None
     # Admin OFF → ON (explicit operator action) resets this node's breakers.
     LLM_ADMIN_MODE_TRACKER.observe(llm_enabled, LLM_CIRCUIT_BREAKER)
     if trace is not None:
         trace.set_llm(enabled=llm_enabled, configs=None)
     if not llm_enabled:
-        try:
-            config_problem = llm_config_problem(db)
-        except Exception:
-            logger.exception("AI config durumu okunamadı")
-            config_problem = "config_unavailable"
+        if db is not None:
+            try:
+                with _db_read(db) as session:
+                    config_problem = llm_config_problem(session)
+            except Exception:
+                logger.exception("AI config durumu okunamadı")
+                config_problem = "config_unavailable"
         # Admin ON but managed config invalid/unavailable: a typed config
         # failure (never semantic NONE, never a guessed model).
         result = _degraded_request(
@@ -932,7 +979,8 @@ def answer_question(
     else:
         try:
             result = _llm_answer(
-                query, db, conversation_context, routing_policy, trace
+                query, db, conversation_context, routing_policy, trace,
+                provider=provider,
             )
         except Exception as e:
             # Pipeline hatası (ör. sağlayıcı kurulamadı): request-level degraded.
@@ -977,7 +1025,7 @@ def answer_question(
 
 def guard_safe_suggestions(
     query: str,
-    db: Session,
+    db: Session | None = None,
     *,
     limit: int = 20,
     trace: DecisionTrace | None = None,
@@ -1000,7 +1048,8 @@ def guard_safe_suggestions(
         reasons[reason] = reasons.get(reason, 0) + 1
 
     try:
-        policy = RoutingGuardPolicy.load(db)
+        with _db_read(db) as session:
+            policy = RoutingGuardPolicy.load(session)
     except Exception:
         logger.exception("Routing guard deposu okunamadı; öneriler bloke edildi")
         policy = None

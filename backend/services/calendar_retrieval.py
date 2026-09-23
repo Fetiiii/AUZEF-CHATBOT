@@ -55,8 +55,41 @@ class CalendarRuntimeConfig:
 
 @dataclass(frozen=True)
 class CalendarRetrievalResult:
-    candidates: tuple[AcademicCalendar, ...]
+    candidates: tuple[AcademicCalendar | CalendarRowSnapshot, ...]
     trace_snapshot: dict
+
+
+@dataclass(frozen=True)
+class CalendarRowSnapshot:
+    id: int
+    period: str
+    event: str
+    start_date: str
+    end_date: str
+    academic_year: Optional[str]
+    term: Optional[str]
+    aliases: str
+
+
+@dataclass(frozen=True)
+class CalendarDataSnapshot:
+    config: CalendarRuntimeConfig
+    rows: tuple[CalendarRowSnapshot, ...]
+
+
+def load_calendar_snapshot(db: Session) -> CalendarDataSnapshot:
+    """Copy all fields used by calendar matching while the DB phase is open."""
+    config = resolve_calendar_runtime_config(db)
+    if not config.current_academic_year:
+        return CalendarDataSnapshot(config, ())
+    rows = db.query(AcademicCalendar).order_by(AcademicCalendar.id).all()
+    return CalendarDataSnapshot(config, tuple(
+        CalendarRowSnapshot(
+            id=int(row.id), period=row.period, event=row.event,
+            start_date=row.start_date, end_date=row.end_date,
+            academic_year=row.academic_year, term=row.term, aliases=row.aliases,
+        ) for row in rows
+    ))
 
 
 _ACADEMIC_YEAR_RE = re.compile(
@@ -319,14 +352,15 @@ def failed_calendar_result() -> CalendarRetrievalResult:
 
 def retrieve_calendar_candidates(
     resolved_intent: str,
-    db: Session,
+    db: Session | CalendarDataSnapshot,
     *,
     limit: int = DEFAULT_CALENDAR_CANDIDATE_LIMIT,
 ) -> CalendarRetrievalResult:
     """Retrieve small, deterministic current-calendar candidate set."""
     started = time.perf_counter()
     limit = max(1, min(int(limit), MAX_CALENDAR_CANDIDATE_LIMIT))
-    config = resolve_calendar_runtime_config(db)
+    snapshot_data = db if isinstance(db, CalendarDataSnapshot) else None
+    config = snapshot_data.config if snapshot_data is not None else resolve_calendar_runtime_config(db)
     explicit_year, invalid_year = extract_explicit_academic_year(resolved_intent)
     explicit_term, ambiguous_term = extract_explicit_term(resolved_intent)
 
@@ -377,7 +411,8 @@ def retrieve_calendar_candidates(
     if explicit_term is None and config.current_term is None:
         return finish(CalendarNoMatchReason.NO_CURRENT_TERM_CONFIG)
 
-    rows = db.query(AcademicCalendar).order_by(AcademicCalendar.id).all()
+    rows = (snapshot_data.rows if snapshot_data is not None
+            else db.query(AcademicCalendar).order_by(AcademicCalendar.id).all())
     snapshot["calendar_total_rows"] = len(rows)
     year_eligible = [
         row for row in rows

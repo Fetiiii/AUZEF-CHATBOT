@@ -35,6 +35,17 @@ class GuardDecision:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class RoutingGuardSnapshot:
+    qna_id: int
+    selector_mode: str
+    valid_from: date | None
+    valid_until: date | None
+    content_mode: str
+    exact_bypass_enabled: int
+    on_expiry: str
+
+
 class RoutingGuardPolicy:
     """Tek request için guard snapshot'ı.
 
@@ -43,14 +54,20 @@ class RoutingGuardPolicy:
     yalnız LLM seçici havuzuna girebilir ve doğrudan fallback cevabı olamaz.
     """
 
-    def __init__(self, guards: dict[int, QnARoutingGuard], *, today: date | None = None):
+    def __init__(self, guards: dict[int, RoutingGuardSnapshot], *, today: date | None = None):
         self.guards = guards
         self.today = today or _today()
 
     @classmethod
     def load(cls, db: Session, *, today: date | None = None) -> "RoutingGuardPolicy":
         rows = db.query(QnARoutingGuard).all()
-        return cls({int(row.qna_id): row for row in rows}, today=today)
+        return cls({int(row.qna_id): RoutingGuardSnapshot(
+            qna_id=int(row.qna_id), selector_mode=row.selector_mode,
+            valid_from=row.valid_from, valid_until=row.valid_until,
+            content_mode=row.content_mode,
+            exact_bypass_enabled=row.exact_bypass_enabled,
+            on_expiry=row.on_expiry,
+        ) for row in rows}, today=today)
 
     @classmethod
     def empty(cls, *, today: date | None = None) -> "RoutingGuardPolicy":

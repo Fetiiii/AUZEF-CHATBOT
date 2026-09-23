@@ -260,6 +260,20 @@ def is_llm_enabled(db: Session) -> bool:
     return _admin_llm_flag(db)
 
 
+def resolve_llm_request_state(db: Session):
+    """Resolve one provider/config snapshot in a short request DB phase."""
+    provider = get_llm_provider(db)
+    enabled = provider is not None and _admin_llm_flag(db)
+    problem = None
+    if not enabled:
+        try:
+            problem = llm_config_problem(db)
+        except Exception:
+            logger.exception("AI config durumu okunamadı")
+            problem = "config_unavailable"
+    return enabled, provider if enabled else None, problem
+
+
 # ── DB oturumu (FastAPI dependency) ──────────────────────────────────────────
 def get_db():
     db = SessionLocal()
