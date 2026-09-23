@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+"""Controlled, client-side /widget-chat load test through the Nginx front door.
+
+No application imports, retries, redirects, raw response logging, or credentials.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import http.client
+import json
+import math
+import os
+from pathlib import Path
+import socket
+import ssl
+import statistics
+import sys
+import tempfile
+import threading
+import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
+from urllib.parse import SplitResult, urlsplit
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_QUESTIONS = SCRIPT_DIR / "questions.txt"
+DEFAULT_RUNS_ROOT = (
+    Path(os.environ.get("AUZEF_LOAD_STATE_DIR", str(Path(tempfile.gettempdir()) / f"auzef-load-test-{os.getuid()}")))
+    / "runs"
+)
+
+
+class LoadArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(3, f"configuration error: {message}\n")
+
+
+@dataclass(frozen=True)
+class RequestResult:
+    request_index: int
+    question_index: int
+    start_monotonic: Optional[float]
+    latency_ms: Optional[float]
+    http_status: Optional[int]
+    error_category: str
+    valid_json: bool
+    answer_present: bool
+    message_id_present: bool
+
+
+def nearest_rank(values: list[float], percentile: int) -> float:
+    """Nearest-rank percentile: sorted[ceil(p/100 * n) - 1]."""
+    if not values or not 0 < percentile <= 100:
+        raise ValueError("nonempty values and percentile 1..100 required")
+    ordered = sorted(values)
+    return ordered[math.ceil(percentile * len(ordered) / 100) - 1]
+
+
+def latency_stats(values: list[float]) -> Optional[dict[str, float]]:
+    if not values:
+        return None
+    return {
+        "min": round(min(values), 2),
+        "mean": round(statistics.mean(values), 2),
+        "p50": round(nearest_rank(values, 50), 2),
+        "p95": round(nearest_rank(values, 95), 2),
+        "p99": round(nearest_rank(values, 99), 2),
+        "max": round(max(values), 2),
+    }
+
+
+def parse_target(url: str) -> SplitResult:
+    try:
+        target = urlsplit(url)
+        hostname = target.hostname
+        _ = target.port
+    except ValueError as exc:
+        raise ValueError("invalid target URL") from exc
+    if target.scheme not in ("http", "https") or not hostname:
+        raise ValueError("target must be an absolute HTTP(S) URL")
+    if target.username is not None or target.password is not None or "@" in target.netloc:
+        raise ValueError("target URL must not contain credentials")
+    if hostname.lower() in ("backend", "auzef_backend") or target.port == 8000:
+        raise ValueError("target must be the Nginx front door, not the backend container port")
+    if target.path != "/widget-chat" or target.query or target.fragment:
+        raise ValueError("target must be exactly /widget-chat with no query or fragment")
+    return target
+
+
+def load_questions(path: Path) -> list[str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("questions file cannot be read as UTF-8") from exc
+    questions = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    if not questions:
+        raise ValueError("questions file contains no questions")
+    return questions
+
+
+def parser() -> LoadArgumentParser:
+    command = LoadArgumentParser(description="Controlled /widget-chat load through Nginx")
+    command.add_argument("--url", default=os.environ.get("AUZEF_LOAD_URL"))
+    command.add_argument("--concurrency", type=int, required=True)
+    command.add_argument("--requests", type=int, required=True)
+    command.add_argument("--timeout", type=float, default=130.0, help="per-request seconds (default: 130)")
+    command.add_argument("--questions", type=Path, default=DEFAULT_QUESTIONS)
+    command.add_argument("--output-root", type=Path, default=Path(os.environ.get("AUZEF_LOAD_RUNS_ROOT", DEFAULT_RUNS_ROOT)))
+    command.add_argument("--confirm-load-test", action="store_true", help="required explicit authorization for traffic")
+    command.add_argument("--allow-over-30", action="store_true", help="explicitly override the concurrency safety limit")
+    command.add_argument("--insecure", action="store_true", help="disable TLS certificate verification; test environments only")
+    return command
+
+
+def validate_args(command: LoadArgumentParser, args: argparse.Namespace) -> tuple[SplitResult, list[str]]:
+    if not args.confirm_load_test:
+        command.error("--confirm-load-test is required")
+    if not args.url:
+        command.error("--url or AUZEF_LOAD_URL is required")
+    if args.concurrency < 1 or args.requests < 1:
+        command.error("--concurrency and --requests must be positive")
+    if args.concurrency > 30 and not args.allow_over_30:
+        command.error("concurrency >30 requires --allow-over-30")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        command.error("--timeout must be a positive finite number")
+    try:
+        target = parse_target(args.url)
+        if args.insecure and target.scheme != "https":
+            command.error("--insecure applies only to HTTPS targets")
+        return target, load_questions(args.questions)
+    except ValueError as exc:
+        command.error(str(exc))
+    raise AssertionError("unreachable")
+
+
+def target_label(target: SplitResult) -> str:
+    host = target.hostname or ""
+    if ":" in host:  # IPv6 literal
+        host = f"[{host}]"
+    return f"{target.scheme}://{host}{(':' + str(target.port)) if target.port else ''}"
+
+
+def send_one(
+    request_index: int,
+    question_index: int,
+    question: str,
+    target: SplitResult,
+    timeout: float,
+    tls_context: Optional[ssl.SSLContext],
+) -> RequestResult:
+    started = time.perf_counter()
+    connection: Optional[http.client.HTTPConnection] = None
+    status: Optional[int] = None
+    category = ""
+    valid_json = answer_present = message_id_present = False
+    try:
+        if target.scheme == "https":
+            connection = http.client.HTTPSConnection(
+                target.hostname, target.port, timeout=timeout, context=tls_context
+            )
+        else:
+            connection = http.client.HTTPConnection(target.hostname, target.port, timeout=timeout)
+        payload = json.dumps({"message": question}, ensure_ascii=False).encode("utf-8")
+        connection.request(
+            "POST", target.path, body=payload,
+            headers={"Content-Type": "application/json", "Accept": "application/json", "Connection": "close"},
+        )
+        response = connection.getresponse()
+        status = response.status
+        body = response.read()  # end-to-end latency includes the entire response
+        if status == 200:
+            try:
+                document = json.loads(body)
+                valid_json = True
+                if isinstance(document, dict):
+                    answer = document.get("answer")
+                    message_id = document.get("message_id")
+                    answer_present = isinstance(answer, str) and bool(answer.strip())
+                    message_id_present = type(message_id) is int and message_id > 0
+                if not answer_present:
+                    category = "missing_answer"
+                elif not message_id_present:
+                    category = "missing_message_id"
+            except (ValueError, UnicodeError):
+                category = "malformed_json"
+    except (socket.timeout, TimeoutError):
+        category = "transport_timeout"
+    except (OSError, http.client.HTTPException):
+        category = "transport_error"
+    finally:
+        if connection is not None:
+            connection.close()
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    return RequestResult(
+        request_index, question_index, started, round(elapsed_ms, 2), status,
+        category, valid_json, answer_present, message_id_present,
+    )
+
+
+def run_requests(
+    target: SplitResult, questions: list[str], concurrency: int, total: int,
+    timeout: float, tls_context: Optional[ssl.SSLContext],
+) -> tuple[list[RequestResult], float, float]:
+    wave_size = min(concurrency, total)
+    gate = threading.Event()
+    aborted = threading.Event()
+    ready = threading.Condition()
+    ready_count = 0
+
+    def task(index: int) -> RequestResult:
+        nonlocal ready_count
+        question_index = index % len(questions) + 1
+        if index < wave_size:
+            with ready:
+                ready_count += 1
+                ready.notify_all()
+            gate.wait()
+        if aborted.is_set():
+            return RequestResult(index + 1, question_index, None, None, None, "launch_error", False, False, False)
+        return send_one(index + 1, question_index, questions[question_index - 1], target, timeout, tls_context)
+
+    started = time.perf_counter()
+    results: list[RequestResult] = []
+    with ThreadPoolExecutor(max_workers=wave_size) as executor:
+        futures = {executor.submit(task, index): index for index in range(total)}
+        with ready:
+            if not ready.wait_for(lambda: ready_count == wave_size, timeout=30):
+                aborted.set()
+        started = time.perf_counter()
+        gate.set()  # first wave begins together; later requests use freed workers
+        for future in as_completed(futures):
+            try:
+                results.append(future.result())
+            except Exception:
+                index = futures[future]
+                results.append(RequestResult(index + 1, index % len(questions) + 1, None, None, None, "generator_error", False, False, False))
+    wall_ms = (time.perf_counter() - started) * 1000
+    results.sort(key=lambda result: result.request_index)
+    first_wave_starts = [result.start_monotonic for result in results[:wave_size] if result.start_monotonic is not None]
+    skew_ms = (max(first_wave_starts) - min(first_wave_starts)) * 1000 if first_wave_starts else 0.0
+    return results, round(skew_ms, 2), round(wall_ms, 2)
+
+
+def classify(results: list[RequestResult], expected: int) -> tuple[str, int]:
+    failures = any(
+        result.http_status not in (200, 429)
+        or (result.http_status == 200 and not (result.valid_json and result.answer_present and result.message_id_present))
+        for result in results
+    ) or len(results) != expected
+    if failures:
+        return "FAIL", 1
+    if any(result.http_status == 429 for result in results):
+        return "RATE_LIMITED", 2
+    return "PASS", 0
+
+
+def summarize(
+    run_id: str, target: SplitResult, questions: list[str], args: argparse.Namespace,
+    results: list[RequestResult], skew_ms: float, wall_ms: float,
+) -> tuple[dict, int]:
+    counts = Counter(result.http_status for result in results if result.http_status is not None)
+    successes = [result for result in results if result.http_status == 200]
+    latencies = [result.latency_ms for result in successes if result.latency_ms is not None]
+    result_label, exit_code = classify(results, args.requests)
+    summary = {
+        "run_id": run_id,
+        "target_host": target_label(target),
+        "target_path": target.path,
+        "concurrency": args.concurrency,
+        "requests": args.requests,
+        "questions": len(questions),
+        "timeout_seconds": args.timeout,
+        "tls_verification": (not args.insecure) if target.scheme == "https" else None,
+        "completed_requests": len(results),
+        "http_responses": sum(counts.values()),
+        "status_counts": {str(status): counts[status] for status in sorted(counts)},
+        "transport_timeouts": sum(result.error_category == "transport_timeout" for result in results),
+        "transport_errors": sum(result.error_category in ("transport_error", "launch_error", "generator_error") for result in results),
+        "valid_json": sum(result.valid_json for result in successes),
+        "answer_present": sum(result.answer_present for result in successes),
+        "message_id_present": sum(result.message_id_present for result in successes),
+        "http_200_malformed": sum(not result.valid_json for result in successes),
+        "http_200_missing_answer": sum(result.valid_json and not result.answer_present for result in successes),
+        "http_200_missing_message_id": sum(result.valid_json and not result.message_id_present for result in successes),
+        "latency_200_ms": latency_stats(latencies),
+        "launch_skew_ms": skew_ms,
+        "wall_time_ms": wall_ms,
+        "requests_per_second": round(len(results) / (wall_ms / 1000), 2) if wall_ms > 0 else 0.0,
+        "result": result_label,
+    }
+    return summary, exit_code
+
+
+def save_results(root: Path, summary: dict, results: list[RequestResult]) -> Path:
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    run_dir = root / summary["run_id"]
+    run_dir.mkdir(mode=0o700, exist_ok=True)  # created uniquely by mkdtemp
+    with (run_dir / "summary.json").open("x", encoding="utf-8") as output:
+        json.dump(summary, output, ensure_ascii=False, indent=2)
+        output.write("\n")
+    with (run_dir / "requests.csv").open("x", encoding="utf-8", newline="") as output:
+        writer = csv.writer(output)
+        writer.writerow(("request_index", "question_index", "latency_ms", "http_status", "error_category", "valid_json", "answer_present", "message_id_present"))
+        for result in results:
+            writer.writerow((
+                result.request_index, result.question_index,
+                "" if result.latency_ms is None else result.latency_ms,
+                "" if result.http_status is None else result.http_status,
+                result.error_category, result.valid_json, result.answer_present,
+                result.message_id_present,
+            ))
+    return run_dir
+
+
+def print_summary(summary: dict, output_dir: Path) -> None:
+    counts = {int(code): count for code, count in summary["status_counts"].items()}
+    other_4xx = sum(count for code, count in counts.items() if 400 <= code < 500 and code not in (400, 401, 403, 404, 429))
+    other_5xx = sum(count for code, count in counts.items() if 500 <= code < 600 and code not in (500, 502, 503, 504))
+    redirects = sum(count for code, count in counts.items() if code in (301, 302, 307, 308))
+    print("\nAUZEF LOAD TEST")
+    print(f"Run ID        {summary['run_id']}")
+    print(f"Target        {summary['target_host']}{summary['target_path']}")
+    print(f"Concurrency   {summary['concurrency']}    Requests {summary['requests']}    Questions {summary['questions']}")
+    print(f"Launch skew   {summary['launch_skew_ms']:.2f} ms")
+    print(f"Wall time     {summary['wall_time_ms'] / 1000:.2f} s    Throughput {summary['requests_per_second']:.2f} req/s")
+    print("\nHTTP / TRANSPORT")
+    print(f"Completed {summary['completed_requests']}    HTTP responses {summary['http_responses']}    200 {counts.get(200, 0)}    429 {counts.get(429, 0)}    5xx {sum(v for k, v in counts.items() if 500 <= k < 600)}")
+    print(f"Redirects 301/302/307/308 {redirects}    Other 2xx {sum(v for k, v in counts.items() if 200 <= k < 300 and k != 200)}")
+    print(f"400 {counts.get(400, 0)}  401 {counts.get(401, 0)}  403 {counts.get(403, 0)}  404 {counts.get(404, 0)}  Other 4xx {other_4xx}")
+    print(f"500 {counts.get(500, 0)}  502 {counts.get(502, 0)}  503 {counts.get(503, 0)}  504 {counts.get(504, 0)}  Other 5xx {other_5xx}")
+    print(f"Transport timeout {summary['transport_timeouts']}    Transport error {summary['transport_errors']}")
+    print("\nRESPONSE CONTRACT (HTTP 200 only)")
+    total_200 = counts.get(200, 0)
+    print(f"Valid JSON {summary['valid_json']}/{total_200}    Answer {summary['answer_present']}/{total_200}    Message ID {summary['message_id_present']}/{total_200}")
+    print(f"Malformed {summary['http_200_malformed']}    Missing answer {summary['http_200_missing_answer']}    Missing message ID {summary['http_200_missing_message_id']}")
+    latency = summary["latency_200_ms"]
+    if latency is None:
+        print("\nLATENCY (HTTP 200): N/A")
+    else:
+        print("\nLATENCY (HTTP 200, ms)")
+        print("  min {min:.2f}  mean {mean:.2f}  p50 {p50:.2f}  p95 {p95:.2f}  p99 {p99:.2f}  max {max:.2f}".format(**latency))
+    print(f"\nRESULT: {summary['result']}")
+    print(f"Results: {output_dir}")
+    print("Before next stage: wait >= 5 seconds and verify auzef-load-watch remains OK.")
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    command = parser()
+    args = command.parse_args(argv)
+    target, questions = validate_args(command, args)
+    if args.allow_over_30 and args.concurrency > 30:
+        print("WARNING: concurrency >30 explicitly enabled; Nginx rate limiting may dominate.", file=sys.stderr)
+    if args.insecure:
+        print("WARNING: TLS certificate verification disabled; test environments only.", file=sys.stderr)
+    if target.scheme == "http":
+        print("WARNING: HTTP target uses plaintext; use the HTTPS front-door URL for the server test.", file=sys.stderr)
+    print(f"Target host   {target_label(target)}")
+    print(f"Target path   {target.path}")
+    print(f"Concurrency  {args.concurrency}    Requests {args.requests}    Timeout {args.timeout:g}s    Questions {len(questions)}")
+    os.umask(0o077)
+    run_prefix = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + f"-c{args.concurrency}-"
+    try:
+        args.output_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        run_id = Path(tempfile.mkdtemp(prefix=run_prefix, dir=args.output_root)).name
+    except OSError:
+        print("configuration error: results directory cannot be created; no traffic sent", file=sys.stderr)
+        return 3
+    print(f"Run ID        {run_id}")
+    context = ssl._create_unverified_context() if args.insecure else ssl.create_default_context()
+    results, skew_ms, wall_ms = run_requests(target, questions, args.concurrency, args.requests, args.timeout, context)
+    summary, exit_code = summarize(run_id, target, questions, args, results, skew_ms, wall_ms)
+    try:
+        output_dir = save_results(args.output_root, summary, results)
+    except OSError:
+        print("FAIL: results could not be saved to the output directory", file=sys.stderr)
+        return 1
+    print_summary(summary, output_dir)
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,17 @@
+# Synthetic AUZEF questions for repeatable load tests; no real student data.
+AUZEF'e yeni kayıt işlemleri nasıl yapılır?
+Kayıt yenileme tarihlerini nereden öğrenebilirim?
+Ders seçimi sırasında nelere dikkat etmeliyim?
+Ders materyallerine hangi sistemden ulaşabilirim?
+Ara sınav tarihleri nerede yayımlanır?
+Final sınavına giriş belgesini nasıl alabilirim?
+Bütünleme sınavına kimler katılabilir?
+Sınav sonuçlarına nasıl itiraz edebilirim?
+Öğrenim ücretini hangi yöntemlerle ödeyebilirim?
+Ödeme yaptıktan sonra kaydımın durumunu nasıl kontrol ederim?
+Akademik takvimde bahar dönemi başlangıcını nereden görebilirim?
+Öğrenci belgesi nasıl talep edilir?
+Transkript belgesini nereden indirebilirim?
+Mezuniyet koşullarını nereden öğrenebilirim?
+Mezuniyet belgesine nasıl ulaşabilirim?
+Öğrenme yönetim sistemine girişte sorun yaşarsam ne yapmalıyım?
