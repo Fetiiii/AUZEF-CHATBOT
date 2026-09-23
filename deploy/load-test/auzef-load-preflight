@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Read-only checks for the single-server Docker Compose load-test environment.
+set -uo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+
+fail=0
+printf 'AUZEF LOAD TEST PREFLIGHT\n'
+printf 'Compose: %s\n' "$LT_COMPOSE_FILE"
+
+for command_name in "$LT_DOCKER" awk date; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+        printf 'FAIL required command unavailable: %s\n' "$command_name"
+        exit 1
+    fi
+done
+if ! lt_compose version >/dev/null 2>&1; then
+    printf 'FAIL Docker Compose is unavailable\n'
+    exit 1
+fi
+
+declare -A container_ids=()
+for service in backend db meilisearch qdrant frontend; do
+    id="$(lt_container "$service")"
+    if [ -n "$id" ] && lt_running "$id"; then
+        container_ids["$service"]="$id"
+        printf 'PASS service %-13s running\n' "$service"
+    else
+        printf 'FAIL service %-13s not running\n' "$service"
+        fail=1
+    fi
+done
+
+if [ -n "${container_ids[backend]:-}" ]; then
+    backend_id="${container_ids[backend]}"
+    limits="$(lt_limits "$backend_id")"
+    if [ -z "$limits" ]; then
+        printf 'FAIL backend limits unavailable\n'
+        fail=1
+    else
+        IFS='|' read -r memory swap nanocpus oom_killed <<< "$limits"
+        printf '\nBACKEND RUNTIME LIMITS\n'
+        for entry in "memory|$memory|8589934592 bytes (8 GiB)" \
+                     "memory+swap|$swap|12884901888 bytes (12 GiB)" \
+                     "CPU|$nanocpus|6000000000 NanoCpus (6 CPU)"; do
+            IFS='|' read -r name actual expected <<< "$entry"
+            expected_number="${expected%% *}"
+            if [ "$actual" = "$expected_number" ]; then
+                printf 'PASS %-12s %s\n' "$name" "$expected"
+            else
+                printf 'FAIL %-12s actual=%s expected=%s\n' "$name" "$actual" "$expected"
+                fail=1
+            fi
+        done
+        printf 'OOMKilled: %s\n' "$oom_killed"
+        if [ "$oom_killed" != false ]; then
+            printf 'FAIL backend reports OOMKilled\n'
+            fail=1
+        fi
+    fi
+    workers="$(lt_workers "$backend_id")"
+    if [ "$workers" = 2 ]; then
+        printf 'PASS Uvicorn workers 2\n'
+    else
+        printf 'FAIL Uvicorn workers actual=%s expected=2\n' "${workers:-N/A}"
+        fail=1
+    fi
+
+    printf '\nHEALTH (direct backend loopback)\n'
+    health="$(lt_health "$backend_id")"
+    if [ -z "$health" ]; then
+        printf 'FAIL health probes unavailable\n'
+        fail=1
+    else
+        live_seen=0
+        ready_seen=0
+        while IFS='|' read -r name code ms state; do
+            [ -n "$name" ] || continue
+            case "$name" in live) live_seen=1 ;; ready) ready_seen=1 ;; esac
+            printf '%-5s HTTP %-3s %5s ms / %s\n' "$name" "$code" "$ms" "$state"
+            if [ "$code" != 200 ] || { [ "$name" = ready ] && [ "$state" != ready ]; }; then
+                printf 'FAIL %s health is not normal\n' "$name"
+                fail=1
+            fi
+        done <<< "$health"
+        if [ "$live_seen" -ne 1 ] || [ "$ready_seen" -ne 1 ]; then
+            printf 'FAIL live or ready health result missing\n'
+            fail=1
+        fi
+    fi
+
+    printf '\nCGROUP BASELINE\n'
+    cgroup="$(lt_cgroup "$backend_id")"
+    if [ -z "$cgroup" ]; then
+        printf 'FAIL memory.events or cpu.stat unreadable\n'
+        fail=1
+    fi
+    for key in memory.max memory.oom memory.oom_kill cpu.nr_throttled cpu.throttled_usec; do
+        printf '%-20s %s\n' "$key" "$(lt_value "$cgroup" "$key")"
+    done
+fi
+
+printf '\nPOSTGRESQL\n'
+if [ -n "${container_ids[db]:-}" ]; then
+    db_check="$(lt_pg_query "${container_ids[db]}" 'SELECT 1;')"
+    if [ "$db_check" = 1 ]; then
+        printf 'PASS read-only SELECT 1\n'
+    else
+        printf 'FAIL read-only SELECT 1 did not succeed\n'
+        fail=1
+    fi
+else
+    printf 'FAIL db service unavailable\n'
+    fail=1
+fi
+
+if [ "$fail" -eq 0 ]; then
+    printf '\nRESULT: PASS — test may start\n'
+else
+    printf '\nRESULT: FAIL — do not start the load test\n'
+fi
+exit "$fail"

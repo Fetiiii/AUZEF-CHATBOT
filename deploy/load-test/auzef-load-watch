@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Live dashboard for one Docker Compose load-test window. Read-only probes.
+set -uo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+
+interval="${AUZEF_WATCH_INTERVAL:-2}"
+once=0
+clear_screen=1
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --once) once=1 ;;
+        --no-clear) clear_screen=0 ;;
+        -h|--help)
+            printf 'Usage: %s [--once] [--no-clear]\n' "$0"
+            exit 0 ;;
+        *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
+    esac
+    shift
+done
+if ! [[ "$interval" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+   ! awk -v n="$interval" 'BEGIN { exit !(n > 0) }'; then
+    printf 'AUZEF_WATCH_INTERVAL must be a positive number\n' >&2
+    exit 2
+fi
+
+backend_id="$(lt_container backend)"
+db_id="$(lt_container db)"
+if [ -z "$backend_id" ] || [ -z "$db_id" ]; then
+    printf 'Backend or DB container unavailable; run auzef-load-preflight first\n' >&2
+    exit 1
+fi
+
+umask 077
+mkdir -p -- "$LT_STATE_DIR"
+started="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+started_epoch="$(date +%s)"
+printf '%s\n' "$started" > "$LT_STATE_DIR/current-start"
+baseline="$(lt_cgroup "$backend_id")"
+if [ -z "$baseline" ]; then
+    printf 'WARN initial cgroup counters unavailable\n' >&2
+fi
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    green=$'\033[32m'; yellow=$'\033[33m'; red=$'\033[31m'; reset=$'\033[0m'
+else
+    green=''; yellow=''; red=''; reset=''
+fi
+trap 'printf "\nWatcher stopped.\n"; exit 0' INT TERM
+
+while :; do
+    reason=()
+    level=0
+    add_warn() { reason+=("$1"); if [ "$level" -lt 1 ]; then level=1; fi; }
+    add_stop() { reason+=("$1"); level=2; }
+
+    if [ "$(lt_container backend)" != "$backend_id" ]; then
+        add_stop 'backend container changed; restart watch and preflight'
+    fi
+
+    logs="$(lt_log_summary "$backend_id" "$started")"
+    if [ "$?" -ne 0 ]; then
+        add_warn 'backend logs unreadable'
+        logs=''
+    fi
+    widget_200="$(lt_value "$logs" widget_200)"
+    widget_4xx="$(lt_value "$logs" widget_4xx)"
+    widget_5xx="$(lt_value "$logs" widget_5xx)"
+    widget_503="$(lt_value "$logs" widget_503)"
+    pool="$(lt_value "$logs" pool)"
+    timeout="$(lt_value "$logs" timeout)"
+    querylog="$(lt_value "$logs" querylog)"
+
+    stats="$(lt_stats "$backend_id")"
+    if [ -n "$stats" ]; then
+        IFS='|' read -r container_name cpu ram mem_percent pids <<< "$stats"
+    else
+        cpu='N/A'; ram='N/A'; mem_percent='N/A'; pids='N/A'
+        add_warn 'backend docker stats unavailable'
+    fi
+
+    cgroup="$(lt_cgroup "$backend_id")"
+    if [ -z "$cgroup" ]; then add_warn 'cgroup counters unavailable'; fi
+    max_delta="$(lt_delta "$(lt_value "$cgroup" memory.max)" "$(lt_value "$baseline" memory.max)")"
+    oom_delta="$(lt_delta "$(lt_value "$cgroup" memory.oom)" "$(lt_value "$baseline" memory.oom)")"
+    kill_delta="$(lt_delta "$(lt_value "$cgroup" memory.oom_kill)" "$(lt_value "$baseline" memory.oom_kill)")"
+    throttle_delta="$(lt_delta "$(lt_value "$cgroup" cpu.nr_throttled)" "$(lt_value "$baseline" cpu.nr_throttled)")"
+    throttle_us_delta="$(lt_delta "$(lt_value "$cgroup" cpu.throttled_usec)" "$(lt_value "$baseline" cpu.throttled_usec)")"
+    if [ "$max_delta" = N/A ] || [ "$oom_delta" = N/A ] || [ "$kill_delta" = N/A ]; then
+        add_warn 'memory.events delta unavailable'
+    fi
+
+    pg="$(lt_pg_summary "$db_id")"
+    if [ "$?" -eq 0 ] && [[ "$pg" =~ ^[0-9]+\|[0-9]+\|[0-9]+\|[0-9]+\|[0-9]+\|[0-9.]+$ ]]; then
+        IFS='|' read -r active idle idle_txn idle_1s idle_5s oldest <<< "$pg"
+        pg_state=OK
+    else
+        active='N/A'; idle='N/A'; idle_txn='N/A'; idle_1s='N/A'; idle_5s='N/A'; oldest='N/A'
+        pg_state=ERROR
+        add_warn 'PostgreSQL activity unavailable'
+    fi
+
+    health="$(lt_health "$backend_id")"
+    live_code='000'; live_ms='N/A'; ready_code='000'; ready_ms='N/A'; ready_state='unknown'
+    while IFS='|' read -r name code ms state; do
+        case "$name" in
+            live) live_code="$code"; live_ms="$ms" ;;
+            ready) ready_code="$code"; ready_ms="$ms"; ready_state="$state" ;;
+        esac
+    done <<< "$health"
+
+    if [ "$widget_5xx" != N/A ] && [ "$widget_5xx" -gt 0 ]; then add_stop 'widget 5xx detected'; fi
+    if [ "$widget_503" != N/A ] && [ "$widget_503" -gt 0 ]; then add_stop 'widget 503 detected'; fi
+    if [ "$pool" != N/A ] && [ "$pool" -gt 0 ]; then add_stop 'QueuePool limit detected'; fi
+    if [ "$timeout" != N/A ] && [ "$timeout" -gt 0 ]; then add_stop 'connection timeout log detected'; fi
+    if [ "$oom_delta" != N/A ] && [ "$oom_delta" -gt 0 ]; then add_stop 'cgroup OOM since start'; fi
+    if [ "$kill_delta" != N/A ] && [ "$kill_delta" -gt 0 ]; then add_stop 'cgroup OOM kill since start'; fi
+    if [ "$idle_5s" != N/A ] && [ "$idle_5s" -gt 0 ]; then add_stop 'idle in transaction >5s'; fi
+    if [ "$live_code" != 200 ]; then add_stop 'liveness is not HTTP 200'; fi
+    if [ "$max_delta" != N/A ] && [ "$max_delta" -gt 0 ]; then add_warn 'memory.max increased'; fi
+    if [ "$ready_code" != 200 ] || [ "$ready_state" != ready ]; then add_warn 'readiness is not normal'; fi
+    if [ "$idle_1s" != N/A ] && [ "$idle_1s" -gt 0 ]; then add_warn 'idle in transaction >1s'; fi
+    if [ "$querylog" != N/A ] && [ "$querylog" -gt 0 ]; then add_warn 'query-log write failure'; fi
+    if [[ "$mem_percent" =~ ^[0-9]+([.][0-9]+)?%$ ]] &&
+       awk -v n="${mem_percent%%%}" 'BEGIN { exit !(n >= 85) }'; then
+        add_warn 'backend RAM >=85% of cgroup limit'
+    fi
+
+    if [ "$level" -eq 2 ]; then
+        label=STOP; color="$red"
+    elif [ "$level" -eq 1 ]; then
+        label=WARN; color="$yellow"
+    else
+        label=OK; color="$green"
+    fi
+    if [ "$clear_screen" -eq 1 ] && [ -t 1 ]; then printf '\033[H\033[2J'; fi
+    printf 'AUZEF LOAD TEST WATCH\nStarted: %s   Elapsed: %ss\n' "$started" "$(( $(date +%s) - started_epoch ))"
+    printf '\nHTTP / APPLICATION (backend logs since start)\n'
+    printf 'Widget 200 %-8s  4xx %-8s  5xx %-8s  503 %s\n' "$widget_200" "$widget_4xx" "$widget_5xx" "$widget_503"
+    printf 'QueuePool %-8s  connection timed out %-8s  query-log failures %s\n' "$pool" "$timeout" "$querylog"
+    printf 'Live  HTTP %-3s %5s ms    Ready HTTP %-3s %5s ms / %s\n' "$live_code" "$live_ms" "$ready_code" "$ready_ms" "$ready_state"
+    printf '\nBACKEND\nCPU %-8s  RAM %-22s  PIDS %s\n' "$cpu" "$ram" "$pids"
+    printf 'memory.events delta: max +%s  oom +%s  oom_kill +%s\n' "$max_delta" "$oom_delta" "$kill_delta"
+    printf 'cpu.stat delta: nr_throttled +%s  throttled_usec +%s\n' "$throttle_delta" "$throttle_us_delta"
+    printf '\nPOSTGRESQL: %s (DB service cluster, all databases; no SQL text)\n' "$pg_state"
+    printf 'active %-6s idle %-6s idle in txn %-6s >1s %-6s >5s %-6s oldest txn %ss\n' \
+        "$active" "$idle" "$idle_txn" "$idle_1s" "$idle_5s" "$oldest"
+    printf '\nSTATUS: %s%s%s\n' "$color" "$label" "$reset"
+    if [ "${#reason[@]}" -gt 0 ]; then printf 'Reasons: %s\n' "$(IFS='; '; printf '%s' "${reason[*]}")"; fi
+    printf 'STOP: stop the generator, then run auzef-load-snapshot. Ctrl+C exits.\n'
+
+    if [ "$once" -eq 1 ]; then break; fi
+    sleep "$interval"
+done

@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Incident capture without raw logs, SQL text, credentials, or user content.
+set -uo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+
+umask 077
+snapshot_root="${AUZEF_LOAD_SNAPSHOT_ROOT:-$LT_STATE_DIR}"
+mkdir -p -- "$snapshot_root"
+snapshot_dir="$(mktemp -d "$snapshot_root/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")" || exit 1
+backend_id="$(lt_container backend)"
+db_id="$(lt_container db)"
+if [ -n "${AUZEF_LOAD_SINCE:-}" ]; then
+    since="$AUZEF_LOAD_SINCE"
+    window_source='AUZEF_LOAD_SINCE'
+elif [ -r "$LT_STATE_DIR/current-start" ]; then
+    IFS= read -r since < "$LT_STATE_DIR/current-start"
+    window_source='watcher start file'
+else
+    since="$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%S.%NZ)"
+    window_source='fallback: last 15 minutes (watcher start unavailable)'
+fi
+
+{
+    printf 'AUZEF load-test incident snapshot\n'
+    printf 'Captured UTC: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'Log window since: %s (%s)\n' "$since" "$window_source"
+    printf 'Git ref: %s\n' "$(git -C "$LT_ROOT" rev-parse --short HEAD 2>/dev/null || printf 'unavailable')"
+    printf 'Compose service IDs present: backend=%s db=%s\n' \
+        "$([ -n "$backend_id" ] && printf yes || printf no)" \
+        "$([ -n "$db_id" ] && printf yes || printf no)"
+    printf 'Backend log files contain classifications and counts only; raw lines are never saved.\n'
+    printf 'PostgreSQL metadata covers the Compose db service cluster, not an external split server.\n'
+} > "$snapshot_dir/summary.txt"
+
+if [ -n "$backend_id" ]; then
+    lt_stats "$backend_id" > "$snapshot_dir/docker-stats.txt" || printf 'ERROR\n' > "$snapshot_dir/docker-stats.txt"
+    limits="$(lt_limits "$backend_id")"
+    if [ -n "$limits" ]; then
+        IFS='|' read -r memory swap nanocpus oom_killed <<< "$limits"
+        {
+            printf 'MemoryBytes=%s\n' "$memory"
+            printf 'MemorySwapBytes=%s\n' "$swap"
+            printf 'NanoCpus=%s\n' "$nanocpus"
+            printf 'OOMKilled=%s\n' "$oom_killed"
+        } > "$snapshot_dir/backend-limits.txt"
+    else
+        printf 'ERROR\n' > "$snapshot_dir/backend-limits.txt"
+    fi
+    cgroup="$(lt_cgroup "$backend_id")"
+    for key in memory.max memory.oom memory.oom_kill memory.high; do
+        printf '%s %s\n' "$key" "$(lt_value "$cgroup" "$key")"
+    done > "$snapshot_dir/memory-events.txt"
+    for key in cpu.nr_throttled cpu.throttled_usec; do
+        printf '%s %s\n' "$key" "$(lt_value "$cgroup" "$key")"
+    done > "$snapshot_dir/cpu-stat.txt"
+    lt_health "$backend_id" > "$snapshot_dir/health.txt" || printf 'ERROR\n' > "$snapshot_dir/health.txt"
+    lt_log_summary "$backend_id" "$since" > "$snapshot_dir/widget-statuses.txt" || printf 'ERROR\n' > "$snapshot_dir/widget-statuses.txt"
+    lt_log_events "$backend_id" "$since" > "$snapshot_dir/backend-errors.txt" || printf 'ERROR\n' > "$snapshot_dir/backend-errors.txt"
+else
+    for filename in docker-stats.txt backend-limits.txt memory-events.txt cpu-stat.txt health.txt widget-statuses.txt backend-errors.txt; do
+        printf 'ERROR: backend container unavailable\n' > "$snapshot_dir/$filename"
+    done
+fi
+
+if [ -n "$db_id" ]; then
+    {
+        printf 'active|idle|idle_in_transaction|idle_txn_gt_1s|idle_txn_gt_5s|oldest_txn_seconds\n'
+        lt_pg_summary "$db_id" || printf 'ERROR\n'
+        printf '\ndatabase|pid|state|wait_event_type|wait_event|txn_age_seconds\n'
+        lt_pg_detail "$db_id" || printf 'ERROR\n'
+    } > "$snapshot_dir/postgres-activity-summary.txt"
+else
+    printf 'ERROR: db container unavailable\n' > "$snapshot_dir/postgres-activity-summary.txt"
+fi
+
+printf 'Snapshot: %s\n' "$snapshot_dir"
