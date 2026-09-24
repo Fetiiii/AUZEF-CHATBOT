@@ -1,0 +1,574 @@
+#!/usr/bin/env python3
+"""Preflight-gated synchronized widget bursts with read-only DB reconciliation.
+
+Reuses the existing load client, watcher, sampler and sanitized log collectors.
+No request/answer text, conversation token, client IP or SQL query text enters
+the run artifacts. Numeric conversation/message IDs are kept for reconciliation.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+import importlib.machinery
+import importlib.util
+import json
+import math
+import os
+from pathlib import Path
+import ssl
+import sys
+import tempfile
+import threading
+import time
+import uuid
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+DEFAULT_OUTPUT = ROOT / "outputs" / "performance-readiness"
+
+
+def load_tool(filename: str, name: str):
+    loader = importlib.machinery.SourceFileLoader(name, str(HERE / filename))
+    spec = importlib.util.spec_from_loader(name, loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    loader.exec_module(module)
+    return module
+
+
+plan = load_tool("auzef-load-plan", "auzef_burst_plan")
+client = load_tool("auzef-load-run", "auzef_burst_client")
+
+
+def load_profile(path: Path) -> list[dict]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    cases = document.get("cases") if isinstance(document, dict) else None
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("burst workload requires nonempty cases")
+    seen = set()
+    for case in cases:
+        if not isinstance(case, dict) or case.get("type") not in ("short", "normal", "long", "context_followup"):
+            raise ValueError("invalid burst case type")
+        question = case.get("question")
+        setup = case.get("setup")
+        if not isinstance(question, str) or not question.strip() or len(question) > 1000:
+            raise ValueError("burst question must be 1..1000 characters")
+        if case["type"] == "context_followup" and (not isinstance(setup, str) or not setup.strip() or len(setup) > 1000):
+            raise ValueError("context follow-up requires a setup turn")
+        if case.get("fault_injection"):
+            raise ValueError("fault injection is excluded from normal burst runs")
+        seen.add(case["type"])
+    if seen != {"short", "normal", "long", "context_followup"}:
+        raise ValueError("burst workload must cover all four case types")
+    return cases
+
+
+def db_probe(backend_id: str, env: dict, *, after_conversation: int | None = None,
+             after_message: int | None = None) -> dict:
+    """Use the app's DB-CHAT routing. Only IDs, roles and nonempty flags leave DB."""
+    script = r'''
+import json, sys
+from sqlalchemy import text
+from core.database import chat_engine
+with chat_engine.connect() as conn:
+    cmax=conn.execute(text('SELECT COALESCE(MAX(id),0) FROM conversations')).scalar_one()
+    mmax=conn.execute(text('SELECT COALESCE(MAX(id),0) FROM conversation_messages')).scalar_one()
+    result={'max_conversation_id':int(cmax),'max_message_id':int(mmax)}
+    if len(sys.argv)>1:
+        c=int(sys.argv[1]); m=int(sys.argv[2])
+        result['conversations']=[{'id':int(x[0]),'token_present':bool(x[1])} for x in conn.execute(
+            text('SELECT id, client_token IS NOT NULL FROM conversations WHERE id>:c ORDER BY id'),{'c':c})]
+        result['messages']=[{'id':int(x[0]),'conversation_id':int(x[1]),'role':str(x[2]),'nonempty':bool(x[3])} for x in conn.execute(
+            text("SELECT id, conversation_id, role, LENGTH(BTRIM(content))>0 FROM conversation_messages WHERE id>:m ORDER BY id"),{'m':m})]
+print(json.dumps(result,separators=(',',':')))
+'''
+    command = [env.get("AUZEF_DOCKER_BIN", "docker"), "exec", backend_id, "python", "-c", script]
+    if after_conversation is not None:
+        command += [str(after_conversation), str(after_message)]
+    result = plan.run(command, timeout=15, env=env)
+    if result.returncode != 0:
+        raise RuntimeError("read-only DB-CHAT probe unavailable")
+    try:
+        parsed = json.loads(result.stdout)
+    except ValueError as exc:
+        raise RuntimeError("read-only DB-CHAT probe returned invalid JSON") from exc
+    if not isinstance(parsed.get("max_conversation_id"), int) or not isinstance(parsed.get("max_message_id"), int):
+        raise RuntimeError("read-only DB-CHAT watermark missing")
+    return parsed
+
+
+def reconcile(before: dict, after: dict, records: list[dict], expected_new_conversations: int) -> dict:
+    conversations = {row["id"]: row for row in after["conversations"]}
+    messages = {row["id"]: row for row in after["messages"]}
+    orphan_message_conversations = sorted({row["conversation_id"] for row in after["messages"]}
+                                          - set(conversations))
+    by_conversation: dict[int, list[dict]] = defaultdict(list)
+    for row in after["messages"]:
+        by_conversation[row["conversation_id"]].append(row)
+
+    successful = [row for row in records if row.get("response_contract_ok")]
+    expected_turns = Counter(row["response_conversation_id"] for row in successful)
+    expected_conversations = set(expected_turns)
+    seed_ids = {row["response_conversation_id"] for row in records if row.get("kind") == "seed" and row.get("response_contract_ok")}
+    followup_mismatch = sum(row.get("kind") == "burst" and row.get("conversation_reused") and
+                            row.get("response_conversation_id") != row.get("expected_conversation_id")
+                            for row in records if row.get("response_contract_ok"))
+    response_message_errors = []
+    for row in successful:
+        msg = messages.get(row.get("response_message_id"))
+        if (not msg or msg["conversation_id"] != row["response_conversation_id"]
+                or msg["role"] != "bot" or not msg["nonempty"]):
+            response_message_errors.append(row["request_id"])
+
+    per_conversation = []
+    unanswered = missing_user = missing_bot = extra_user = extra_bot = order_errors = 0
+    for cid, conv in sorted(conversations.items()):
+        rows = sorted(by_conversation.get(cid, []), key=lambda item: item["id"])
+        roles = [row["role"] for row in rows]
+        users, bots = roles.count("user"), roles.count("bot")
+        expected = expected_turns[cid]
+        unanswered += max(0, users - bots)
+        missing_user += max(0, expected - users)
+        missing_bot += max(0, expected - bots)
+        extra_user += max(0, users - expected)
+        extra_bot += max(0, bots - expected)
+        bad_order = roles != [item for _ in range(users) for item in ("user", "bot")]
+        order_errors += bad_order
+        per_conversation.append({"conversation_id": cid, "user_turns": users,
+            "bot_turns": bots, "expected_successful_turns": expected,
+            "token_present": conv["token_present"], "empty": not rows,
+            "nonempty_messages": all(item["nonempty"] for item in rows),
+            "turn_order_ok": not bad_order})
+
+    result = {
+        "source": "read-only DB-CHAT ID watermark; content and token values excluded",
+        "before": {"max_conversation_id": before["max_conversation_id"], "max_message_id": before["max_message_id"]},
+        "after": {"max_conversation_id": after["max_conversation_id"], "max_message_id": after["max_message_id"]},
+        "created_conversations": len(conversations),
+        "expected_new_conversations": expected_new_conversations,
+        "written_user_turns": sum(row["user_turns"] for row in per_conversation),
+        "written_bot_turns": sum(row["bot_turns"] for row in per_conversation),
+        "unanswered_user_turns": unanswered,
+        "empty_conversations": sum(row["empty"] for row in per_conversation),
+        "unexpected_conversation_ids": sorted(set(conversations) - expected_conversations),
+        "messages_for_preexisting_or_missing_conversations": orphan_message_conversations,
+        "missing_expected_conversation_ids": sorted(expected_conversations - set(conversations)),
+        "followup_conversation_mismatches": followup_mismatch,
+        "response_message_error_request_ids": response_message_errors,
+        "missing_user_turns_for_successful_requests": missing_user,
+        "missing_bot_turns_for_successful_requests": missing_bot,
+        "extra_user_turns_vs_successful_requests": extra_user,
+        "extra_bot_turns_vs_successful_requests": extra_bot,
+        "conversation_turn_order_errors": order_errors,
+        "missing_tokens": sum(not row["token_present"] for row in per_conversation),
+        "empty_message_contents": sum(not row["nonempty"] for row in after["messages"]),
+        "seed_conversations": len(seed_ids),
+        "per_conversation": per_conversation,
+    }
+    result["lifecycle_pass"] = (
+        result["created_conversations"] == expected_new_conversations
+        and result["unanswered_user_turns"] == result["empty_conversations"] == 0
+        and not result["unexpected_conversation_ids"] and not result["missing_expected_conversation_ids"]
+        and not orphan_message_conversations
+        and not response_message_errors and not followup_mismatch
+        and not missing_user and not missing_bot and not extra_user and not extra_bot
+        and not order_errors and not result["missing_tokens"] and not result["empty_message_contents"]
+    )
+    return result
+
+
+def send_case(target, case: dict, conversation, *, user_id: int, stage: int,
+              phase: str, turn_index: int, timeout: float, tls_context, kind: str) -> tuple[dict, tuple | None]:
+    request_id = uuid.uuid4().hex
+    record, next_conversation = client.send_stateful_turn(
+        target=target, message=case["question"], conversation=conversation,
+        request_id=request_id, user_id=user_id, scenario=case["type"],
+        stage=stage, phase=phase, turn_index=turn_index, timeout=timeout,
+        tls_context=tls_context, include_response_ids=True)
+    record["kind"] = kind
+    record["expected_conversation_id"] = conversation[0] if conversation else None
+    return record, next_conversation
+
+
+def launch_wave(target, assignments: list[tuple[int, dict, tuple | None]], *, stage: int,
+                repeat: int, timeout: float, tls_context) -> tuple[list[dict], float]:
+    """One barrier-released HTTP request per assignment; no serialized follow-up in wave."""
+    ready = threading.Condition()
+    gate = threading.Event()
+    aborted = threading.Event()
+    ready_count = 0
+    start_times = []
+
+    def task(item):
+        nonlocal ready_count
+        user_id, case, conversation = item
+        with ready:
+            ready_count += 1
+            ready.notify_all()
+        gate.wait()
+        if aborted.is_set():
+            raise RuntimeError("burst launch aborted before traffic")
+        launch_ns = time.perf_counter_ns()
+        try:
+            record, _ = send_case(target, case, conversation, user_id=user_id,
+                stage=stage, phase=f"burst_r{repeat}", turn_index=2 if conversation else 1,
+                timeout=timeout, tls_context=tls_context, kind="burst")
+        except Exception as exc:
+            record = {"request_id": uuid.uuid4().hex, "virtual_user_id": user_id,
+                "scenario_type": case["type"], "stage": stage, "phase": f"burst_r{repeat}",
+                "http_status": None, "classification": "generator_error_" + type(exc).__name__,
+                "latency_ms": None, "response_contract_ok": False,
+                "response_conversation_id": None, "response_message_id": None,
+                "conversation_reused": conversation is not None,
+                "none_observed": None, "degraded_observed": None, "provider_failure_observed": None,
+                "kind": "burst", "expected_conversation_id": conversation[0] if conversation else None}
+        return launch_ns, record
+
+    with ThreadPoolExecutor(max_workers=stage) as executor:
+        futures = [executor.submit(task, item) for item in assignments]
+        with ready:
+            if not ready.wait_for(lambda: ready_count == stage, timeout=30):
+                aborted.set()
+                gate.set()
+                raise RuntimeError("burst workers did not reach launch barrier")
+        gate.set()
+        rows = [future.result() for future in as_completed(futures)]
+    start_times = [item[0] for item in rows]
+    records = [item[1] for item in rows]
+    records.sort(key=lambda row: row["virtual_user_id"])
+    return records, round((max(start_times) - min(start_times)) / 1_000_000, 3)
+
+
+def summarize_wave(records: list[dict], *, stage: int, repeat: int, launch_skew_ms: float,
+                   seed_count: int, lifecycle: dict) -> dict:
+    statuses = Counter(row.get("http_status") for row in records if row.get("http_status") is not None)
+    latencies = [row["latency_ms"] for row in records if row.get("http_status") == 200
+                 and row.get("response_contract_ok") and isinstance(row.get("latency_ms"), (int, float))]
+    return {"stage": stage, "repeat": repeat, "sent_requests": stage,
+        "terminal_client_results": len(records), "http_responses": sum(statuses.values()),
+        "status_counts": {str(k): v for k, v in sorted(statuses.items())},
+        "http_200": statuses[200], "http_429": statuses[429],
+        "http_5xx": sum(v for k, v in statuses.items() if 500 <= k < 600),
+        "timeouts": sum(row.get("classification") == "transport_timeout" for row in records),
+        "connection_errors": sum(row.get("classification") == "connection_error" for row in records),
+        "generator_errors": sum(str(row.get("classification", "")).startswith("generator_error") for row in records),
+        "invalid_response_contracts": sum(row.get("http_status") == 200 and not row.get("response_contract_ok") for row in records),
+        "latency_success_ms": client.latency_stats(latencies),
+        "latency_p95_sample_sufficient": len(latencies) >= 100,
+        "launch_skew_ms": launch_skew_ms, "context_seed_requests": seed_count,
+        "db": lifecycle,
+    }
+
+
+def final_turn_status(waves: list[dict], final: dict) -> dict:
+    """Re-read wave conversations after the client timeout window.
+
+    Separates a bot turn that was written late (client gave up first) from a
+    user turn that never got an answer.
+    """
+    roles: dict[int, list[str]] = defaultdict(list)
+    for row in sorted(final["messages"], key=lambda item: item["id"]):
+        roles[row["conversation_id"]].append(row["role"])
+    known = {row["id"] for row in final["conversations"]}
+    total_unanswered = 0
+    for wave in waves:
+        ids = [row["conversation_id"] for row in wave["db"]["per_conversation"]]
+        unanswered = sum(max(0, roles[cid].count("user") - roles[cid].count("bot")) for cid in ids)
+        wave["db"]["unanswered_user_turns_final"] = unanswered
+        wave["db"]["late_bot_turns"] = max(0, wave["db"]["unanswered_user_turns"] - unanswered)
+        total_unanswered += unanswered
+    return {"created_conversations_whole_run": len(known),
+            "user_turns_whole_run": sum(r.count("user") for r in roles.values()),
+            "bot_turns_whole_run": sum(r.count("bot") for r in roles.values()),
+            "unanswered_user_turns_whole_run": sum(max(0, r.count("user") - r.count("bot")) for r in roles.values()),
+            "unanswered_user_turns_in_waves": total_unanswered,
+            "empty_conversations_whole_run": sum(not roles.get(cid) for cid in known)}
+
+
+def scenario_breakdown(rows: list[dict]) -> dict:
+    """Per scenario class latency/status plus numeric context shape from DecisionTrace."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        groups[row.get("scenario_type")].append(row)
+    result = {}
+    for scenario, items in sorted(groups.items(), key=lambda pair: str(pair[0])):
+        ok = [row["latency_ms"] for row in items if row.get("http_status") == 200
+              and row.get("response_contract_ok") and isinstance(row.get("latency_ms"), (int, float))]
+        ctx = [row.get("trace_context") or {} for row in items]
+        def values(key):
+            return [item[key] for item in ctx if isinstance(item.get(key), (int, float)) and not isinstance(item.get(key), bool)]
+        result[str(scenario)] = {
+            "requests": len(items), "http_200": sum(row.get("http_status") == 200 for row in items),
+            "non_200_or_error": sum(row.get("http_status") != 200 for row in items),
+            "latency_success_ms": client.latency_stats(ok),
+            "trace_joined": sum(bool(item) for item in ctx),
+            "current_input_length_max": max(values("current_input_length"), default=None),
+            "previous_user_context_count_min": min(values("previous_user_context_count"), default=None),
+            "context_message_count_min": min(values("context_message_count"), default=None),
+            "context_char_count_max": max(values("context_char_count"), default=None),
+            "context_used_true": sum(item.get("context_used_any") is True for item in ctx),
+            "analyzer_fallback_to_single": sum(item.get("analyzer_fallback_to_single") is True for item in ctx),
+            "analyzer_non_success": sum(item.get("analyzer_status") not in (None, "success") for item in ctx),
+            "analyzer_outcome_counts": dict(Counter(str(item.get("analyzer_outcome_status")) for item in ctx if item)),
+            "analyzer_parse_counts": dict(Counter(str(item.get("analyzer_parse_status")) for item in ctx if item)),
+            "none_observed": sum(row.get("none_observed") is True for row in items),
+            "degraded_observed": sum(row.get("degraded_observed") is True for row in items),
+            "provider_failure_observed": sum(row.get("provider_failure_observed") is True for row in items),
+        }
+    return result
+
+
+def correlate_wave_resources(folder: Path, waves: list[dict]) -> None:
+    phases = json.loads((folder / "server-phase-summary.json").read_text(encoding="utf-8"))
+    resource_rows = [json.loads(line) for line in (folder / "resource-samples.jsonl").read_text(encoding="utf-8").splitlines()]
+    db_rows = [json.loads(line) for line in (folder / "db-samples.jsonl").read_text(encoding="utf-8").splitlines()]
+    for wave in waves:
+        stage, phase = wave["stage"], f"burst_r{wave['repeat']}"
+        resources = [row for row in resource_rows if row.get("stage") == stage and row.get("phase") == phase
+                     and row.get("cgroup") and row.get("processes")]
+        database = [row for row in db_rows if row.get("stage") == stage and row.get("phase") == phase
+                    and row.get("status") == "ok"]
+        phase_metrics = {row["metric"]: row for row in phases["groups"]
+                         if row["stage"] == stage and row["phase"] == phase}
+        tokens = [row for row in phases["threadpool_samples"]
+                  if row["stage"] == stage and row["phase"] == phase]
+        workers = [process for row in resources for process in row["processes"] if process.get("role") == "worker"]
+        first_cpu = resources[0]["cgroup"].get("cpu_stat", {}) if resources else {}
+        last_cpu = resources[-1]["cgroup"].get("cpu_stat", {}) if resources else {}
+        def delta(key):
+            first, last = first_cpu.get(key), last_cpu.get(key)
+            return last - first if isinstance(first, int) and isinstance(last, int) and last >= first else None
+        wave["resources"] = {
+            "resource_samples": len(resources), "db_samples": len(database),
+            "max_worker_cpu_percent_one_core": max((row.get("cpu_percent_one_core") or 0 for row in workers), default=None),
+            "max_worker_rss_kb": max((row.get("rss_kb") or 0 for row in workers), default=None),
+            "max_worker_threads": max((row.get("threads") or 0 for row in workers), default=None),
+            "max_cgroup_memory_bytes": max((row["cgroup"].get("memory_current") or 0 for row in resources), default=None),
+            "cpu_throttled_periods_delta": delta("nr_throttled"),
+            "cpu_throttled_usec_delta": delta("throttled_usec"),
+            "max_db_connections": max((row.get("connection_count") or 0 for row in database), default=None),
+            "max_idle_in_transaction": max((row.get("state_counts", {}).get("idle in transaction") or 0 for row in database), default=None),
+            "max_anyio_borrowed_tokens_per_worker": max((row["max_borrowed_tokens"] for row in tokens), default=None),
+            "embedding_p95_ms": (phase_metrics.get("embedding", {}).get("timing") or {}).get("p95_ms"),
+            "embedding_max_active_per_worker": phase_metrics.get("embedding", {}).get("max_active_per_worker_observed"),
+            "provider_sdk_p95_ms": (phase_metrics.get("llm_provider", {}).get("timing") or {}).get("p95_ms"),
+            "handler_queue_upper_bound_p95_ms": (phase_metrics.get("handler_queue", {}).get("timing") or {}).get("p95_ms"),
+        }
+
+
+def parser():
+    p = argparse.ArgumentParser(description="Synchronized AUZEF burst regression with DB lifecycle checks")
+    p.add_argument("--url", required=True)
+    p.add_argument("--stages", default="15,20,30")
+    p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("--workload", type=Path, default=HERE / "burst-workload.json")
+    p.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT)
+    p.add_argument("--timeout", type=float, default=130.0)
+    p.add_argument("--cooldown-seconds", type=float, default=6.0)
+    p.add_argument("--sample-interval", type=float, default=1.0)
+    p.add_argument("--insecure", action="store_true")
+    p.add_argument("--confirm-load-test", action="store_true")
+    return p
+
+
+def main(argv=None) -> int:
+    args = parser().parse_args(argv)
+    if not args.confirm_load_test:
+        parser().error("--confirm-load-test is required")
+    try:
+        target = client.parse_target(args.url)
+        stages = [int(value) for value in args.stages.split(",")]
+        if not stages or stages != sorted(set(stages)) or any(stage < 1 or stage > 30 for stage in stages):
+            raise ValueError("stages must be sorted, unique and <=30")
+        if args.insecure and target.scheme != "https":
+            raise ValueError("--insecure requires HTTPS")
+        if args.repeats < 1 or args.repeats > 5:
+            raise ValueError("repeats must be 1..5")
+        if args.timeout <= 0 or not math.isfinite(args.timeout) or args.cooldown_seconds < 5 \
+           or args.sample_interval < 0.5 or not all(math.isfinite(x) for x in (args.cooldown_seconds, args.sample_interval)):
+            raise ValueError("invalid safety timing")
+        cases = load_profile(args.workload)
+    except (OSError, ValueError, TypeError) as exc:
+        parser().error(str(exc))
+
+    os.umask(0o077)
+    args.output_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder = Path(tempfile.mkdtemp(prefix=datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-burst-"), dir=args.output_root))
+    env = os.environ.copy()
+    env["AUZEF_LOAD_OUTPUT_ROOT"] = str(args.output_root)
+    env["AUZEF_REQUIRE_TELEMETRY"] = "1"
+    preflight = plan.run([str(HERE / "auzef-load-preflight")], timeout=60, env=env)
+    checks = [{"status": line.split(" ", 1)[0], "detail": line.split(" ", 1)[1]}
+              for line in preflight.stdout.splitlines() if line.startswith(("PASS ", "WARN ", "FAIL "))]
+    plan.write_json(folder / "preflight.json", {"captured_utc": plan.utc_now(),
+        "result": "PASS" if preflight.returncode == 0 else "FAIL", "checks": checks})
+    environment = plan.snapshot_environment(env)
+    environment["burst_profile"] = {"path": str(args.workload.resolve()),
+        "case_types": dict(Counter(case["type"] for case in cases)),
+        "stages": stages, "repeats": args.repeats, "sample_interval_seconds": args.sample_interval}
+    plan.write_json(folder / "environment.json", environment)
+    if preflight.returncode != 0:
+        plan.write_json(folder / "burst-summary.json", {"result": "NO_GO", "waves": []})
+        (folder / "final-summary.md").write_text("# NO-GO\n\nPreflight FAIL; no burst requests sent.\n")
+        print(f"NO-GO: preflight failed; no burst sent. Results: {folder}")
+        return 1
+
+    ids = {service: plan.container_id(service, env) for service in ("backend", "db", "frontend")}
+    context = ssl._create_unverified_context() if args.insecure else ssl.create_default_context()
+    sampler = plan.Sampler(folder, ids["backend"], ids["db"], args.sample_interval, env)
+    watcher = plan.Watcher(folder, env)
+    started = plan.utc_now()
+    records: list[dict] = []
+    waves: list[dict] = []
+    verdict = "PASS"
+    first_before = None
+    last_launch = None
+    sampler.start()
+    watcher.start()
+    (folder / "db-reconciliation.jsonl").touch()
+    try:
+        for _ in range(30):
+            if watcher.status != "UNKNOWN" or watcher.process.poll() is not None:
+                break
+            time.sleep(1)
+        if watcher.status != "OK":
+            verdict = "NO_GO_WATCHER"
+        for stage in stages:
+            if verdict != "PASS":
+                break
+            for repeat in range(1, args.repeats + 1):
+                if watcher.status != "OK":
+                    verdict = "STOP" if watcher.status == "STOP" else "WARN"
+                    break
+                before = db_probe(ids["backend"], env)
+                first_before = first_before or before
+                assignments = [(index + 1, cases[(index + repeat - 1) % len(cases)], None)
+                               for index in range(stage)]
+                seeded = []
+                sampler.stage, sampler.phase = stage, f"seed_r{repeat}"
+                for index, (user_id, case, _) in enumerate(assignments):
+                    if case["type"] != "context_followup":
+                        continue
+                    seed_case = {"type": "context_seed", "question": case["setup"]}
+                    record, conversation = send_case(target, seed_case, None, user_id=user_id,
+                        stage=stage, phase=f"seed_r{repeat}", turn_index=1,
+                        timeout=args.timeout, tls_context=context, kind="seed")
+                    records.append(record)
+                    seeded.append(record)
+                    if not record["response_contract_ok"] or not conversation or watcher.status != "OK":
+                        verdict = "SEED_FAILURE" if watcher.status == "OK" else watcher.status
+                        break
+                    assignments[index] = (user_id, case, conversation)
+                if verdict != "PASS":
+                    break
+                time.sleep(args.cooldown_seconds)
+                if watcher.status != "OK":
+                    verdict = "STOP" if watcher.status == "STOP" else "WARN"
+                    break
+                sampler.stage, sampler.phase = stage, f"burst_r{repeat}"
+                last_launch = time.monotonic()
+                burst, skew = launch_wave(target, assignments, stage=stage, repeat=repeat,
+                    timeout=args.timeout, tls_context=context)
+                records.extend(burst)
+                time.sleep(3 if all(row.get("http_status") == 200 for row in burst) else 15)
+                after = db_probe(ids["backend"], env, after_conversation=before["max_conversation_id"],
+                    after_message=before["max_message_id"])
+                with (folder / "db-reconciliation.jsonl").open("a", encoding="utf-8") as output:
+                    output.write(json.dumps({"stage": stage, "repeat": repeat,
+                        "before": before, "after": after}, separators=(",", ":")) + "\n")
+                lifecycle = reconcile(before, after, seeded + burst, stage)
+                wave = summarize_wave(burst, stage=stage, repeat=repeat,
+                    launch_skew_ms=skew, seed_count=len(seeded), lifecycle=lifecycle)
+                waves.append(wave)
+                plan.write_json(folder / "burst-summary.json", {"result": "RUNNING", "waves": waves})
+                if (watcher.status != "OK" or wave["terminal_client_results"] != stage
+                    or wave["http_200"] != stage or wave["invalid_response_contracts"]
+                    or not lifecycle["lifecycle_pass"]):
+                    verdict = "STOP" if watcher.status == "STOP" else "WARN" if watcher.status == "WARN" else "FAIL"
+                    break
+                sampler.phase = "cooldown"
+                time.sleep(args.cooldown_seconds)
+            if verdict != "PASS":
+                break
+    except KeyboardInterrupt:
+        verdict = "INTERRUPTED"
+    except Exception as exc:
+        verdict = "INSTRUMENTATION_FAILURE_" + type(exc).__name__
+    finally:
+        watcher.close()
+        sampler.close()
+        with (folder / "client-results.jsonl").open("w", encoding="utf-8") as output:
+            for record in records:
+                output.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+    final_db = None
+    if first_before is not None and waves:
+        # Wait out the client timeout (plus nginx slack) when anything looked
+        # unanswered, so late backend writes are not counted as lost answers.
+        suspicious = any(wave["db"]["unanswered_user_turns"] or wave["http_200"] != wave["sent_requests"]
+                         for wave in waves)
+        wait = (args.timeout + 10 - (time.monotonic() - last_launch)) if suspicious and last_launch else 5
+        time.sleep(max(5.0, wait))
+        try:
+            final = db_probe(ids["backend"], env, after_conversation=first_before["max_conversation_id"],
+                             after_message=first_before["max_message_id"])
+            with (folder / "db-reconciliation.jsonl").open("a", encoding="utf-8") as output:
+                output.write(json.dumps({"stage": "final", "repeat": None, "before": first_before,
+                                         "after": final}, separators=(",", ":")) + "\n")
+            final_db = final_turn_status(waves, final)
+            final_db["waited_seconds"] = round(max(5.0, wait), 1)
+        except RuntimeError as exc:
+            final_db = {"error": str(exc)}
+
+    provider, traces, links = plan.collect_server_events(folder, ids, started, env)
+    join = plan.correlate_client_results(folder, [], traces, links)
+    provider["trace_join"] = join
+    plan.write_json(folder / "provider-summary.json", provider)
+    plan.write_json(folder / "nginx-summary.json", plan.summarize_nginx(folder))
+    plan.write_json(folder / "server-phase-summary.json", plan.summarize_server_phases(folder))
+    correlate_wave_resources(folder, waves)
+    correlated = [json.loads(line) for line in (folder / "client-results.jsonl").read_text(encoding="utf-8").splitlines()]
+    for wave in waves:
+        wave["by_scenario"] = scenario_breakdown([row for row in correlated if row.get("stage") == wave["stage"]
+                                                  and row.get("phase") == f"burst_r{wave['repeat']}"])
+    seed_breakdown = scenario_breakdown([row for row in correlated if row.get("kind") == "seed"])
+    tagged = {row["request_id"] for row in records}
+    nginx_rows = [json.loads(line) for line in (folder / "nginx-metrics.jsonl").read_text().splitlines()]
+    unrelated_chat = sum(row.get("widget_chat") == 1 and row.get("request_id") not in tagged for row in nginx_rows)
+    measurement = {"client_records": len(records), "trace_joined": join["trace_joined"],
+        "valid_resource_samples": plan.count_valid_samples(folder / "resource-samples.jsonl", "resource"),
+        "valid_db_samples": plan.count_valid_samples(folder / "db-samples.jsonl", "db"),
+        "backend_arrivals": provider["counts"].get("backend:request_arrival", 0),
+        "unrelated_widget_chat_requests": unrelated_chat}
+    if verdict == "PASS" and (measurement["trace_joined"] != len(records)
+        or measurement["backend_arrivals"] != len(records)
+        or not measurement["valid_resource_samples"] or not measurement["valid_db_samples"]
+        or unrelated_chat or any(not wave["resources"]["resource_samples"]
+                              or not wave["resources"]["db_samples"] for wave in waves)):
+        verdict = "INCOMPLETE_OR_CONTAMINATED_MEASUREMENT"
+    plan.write_json(folder / "burst-summary.json", {"result": verdict, "waves": waves,
+        "measurement": measurement, "final_db": final_db, "seed_breakdown": seed_breakdown,
+        "percentile_policy": "burst p95 is descriptive with <100 responses per wave"})
+    lines = ["# AUZEF synchronized burst regression", "", f"Result: **{verdict}**", "",
+        "| Stage | Repeat | Sent | HTTP responses | 200 | 429 | 5xx | Timeout | Conversations | User turns | Bot turns | Unanswered user turns | Empty conversations | p50 ms | p95 ms* | Max ms | Launch skew ms |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+    for wave in waves:
+        db = wave["db"]
+        latency = wave["latency_success_ms"] or {}
+        lines.append(f"| {wave['stage']} | {wave['repeat']} | {wave['sent_requests']} | {wave['http_responses']} | {wave['http_200']} | {wave['http_429']} | {wave['http_5xx']} | {wave['timeouts']} | {db['created_conversations']} | {db['written_user_turns']} | {db['written_bot_turns']} | {db['unanswered_user_turns']} | {db['empty_conversations']} | {latency.get('p50','N/A')} | {latency.get('p95','N/A')} | {latency.get('max','N/A')} | {wave['launch_skew_ms']} |")
+    if final_db:
+        lines += ["", "Final DB re-check after the wait window: `" + json.dumps(final_db, separators=(",", ":")) + "`"]
+    lines += ["", "* Per-wave p95 is descriptive because each burst has fewer than 100 responses.",
+        "", "DB-CHAT reconciliation uses numeric ID watermarks and excludes question, answer, token and IP values.",
+        "See burst-summary.json, client-results.jsonl, resource-samples.jsonl, db-samples.jsonl,",
+        "server-phase-summary.json, provider-summary.json, nginx-summary.json and watcher.txt.", ""]
+    (folder / "final-summary.md").write_text("\n".join(lines), encoding="utf-8")
+    print(f"{verdict}: {len(waves)} burst waves recorded. Results: {folder}")
+    return 0 if verdict == "PASS" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

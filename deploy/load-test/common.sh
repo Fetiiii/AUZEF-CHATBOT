@@ -8,7 +8,11 @@ LT_DOCKER="${AUZEF_DOCKER_BIN:-docker}"
 LT_STATE_DIR="${AUZEF_LOAD_STATE_DIR:-${TMPDIR:-/tmp}/auzef-load-test-${UID}}"
 
 lt_compose() {
-    "$LT_DOCKER" compose --project-directory "$LT_ROOT" -f "$LT_COMPOSE_FILE" "$@"
+    if [ -n "${AUZEF_COMPOSE_EXTRA_FILE:-}" ]; then
+        "$LT_DOCKER" compose --project-directory "$LT_ROOT" -f "$LT_COMPOSE_FILE" -f "$AUZEF_COMPOSE_EXTRA_FILE" "$@"
+    else
+        "$LT_DOCKER" compose --project-directory "$LT_ROOT" -f "$LT_COMPOSE_FILE" "$@"
+    fi
 }
 
 lt_container() {
@@ -58,6 +62,49 @@ try:
     print(int(args[args.index(b"--workers") + 1]))
 except (ValueError, IndexError):
     print("N/A")
+' 2>/dev/null
+}
+
+lt_worker_processes() {
+    "$LT_DOCKER" exec "$1" python -c '
+import os
+count = 0
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        cmd = open(f"/proc/{pid}/cmdline", "rb").read()
+        status = open(f"/proc/{pid}/status").read()
+        parent = next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:"))
+        if parent == "1" and b"multiprocessing.spawn" in cmd:
+            count += 1
+    except (OSError, StopIteration):
+        pass
+print(count)
+' 2>/dev/null
+}
+
+lt_model_cache() {
+    "$LT_DOCKER" exec "$1" python -c '
+import os
+import sys
+from pathlib import Path
+root = Path(os.environ.get("HF_HOME", "/app/.cache/huggingface"))
+snapshots = root / "hub" / sys.argv[1] / "snapshots"
+raise SystemExit(0 if snapshots.is_dir() and any(p.is_file() for p in snapshots.rglob("config.json")) else 1)
+' "$2" >/dev/null 2>&1
+}
+
+lt_ready_dependencies() {
+    "$LT_DOCKER" exec "$1" python -c '
+import json, urllib.request
+try:
+    with urllib.request.urlopen("http://127.0.0.1:8000/health/ready", timeout=3) as response:
+        body = json.load(response)
+    for name in ("db_admin", "db_chat", "meilisearch", "qdrant"):
+        print(name + "|" + str(body.get("dependencies", {}).get(name, "unknown")))
+except Exception:
+    pass
 ' 2>/dev/null
 }
 

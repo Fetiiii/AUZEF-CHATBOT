@@ -21,6 +21,8 @@ case "$1" in
     inspect)
         if [[ "$3" == *State.Running* ]]; then
             printf 'true\n'
+        elif [[ "$3" == *'.Image'* ]]; then
+            printf 'sha256:fixture-image\n'
         elif [ "${FAKE_LOAD_CASE:-ok}" = bad_limits ]; then
             printf '4294967296|6442450944|2000000000|false\n'
         else
@@ -31,6 +33,12 @@ case "$1" in
         if [ "$3" = python ]; then
             if [[ "$5" == *'/proc/1/cmdline'* ]]; then
                 printf '2\n'
+            elif [[ "$5" == *'multiprocessing.spawn'* ]]; then
+                printf '2\n'
+            elif [[ "$5" == *'json.load(response)'* ]]; then
+                printf 'db_admin|ok\ndb_chat|ok\nmeilisearch|ok\nqdrant|ok\n'
+            elif [[ "$5" == *'HF_HOME'* ]]; then
+                :
             elif [ "${FAKE_LOAD_CASE:-ok}" = live_down ]; then
                 printf 'live|503|12|unknown\nready|200|25|ready\n'
             else
@@ -72,6 +80,7 @@ chmod +x "$test_dir/docker"
 export AUZEF_DOCKER_BIN="$test_dir/docker"
 export AUZEF_LOAD_STATE_DIR="$test_dir/state"
 export AUZEF_LOAD_SNAPSHOT_ROOT="$test_dir/snapshots"
+export AUZEF_EXPECT_GIT_COMMIT="$(git -C "$tools_dir/../.." rev-parse HEAD)"
 
 if ! "$tools_dir/auzef-load-preflight" > "$test_dir/preflight"; then
     awk '{ print }' "$test_dir/preflight" >&2

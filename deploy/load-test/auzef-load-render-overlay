@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Render a reviewed test-only Compose overlay from the same resource contract
+# used by preflight. This script writes a file; it never applies it.
+set -euo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
+contract_file="${AUZEF_LOAD_CONTRACT_FILE:-$LT_DIR/resource-contract.env}"
+output_file="${1:-$LT_ROOT/outputs/performance-readiness/compose.instrumentation.yml}"
+[ -r "$contract_file" ] || { printf 'Contract not readable\n' >&2; exit 2; }
+# shellcheck disable=SC1090
+source "$contract_file"
+python3 - "$output_file" "$AUZEF_EXPECT_MEMORY_BYTES" "$AUZEF_EXPECT_MEMORY_SWAP_BYTES" \
+    "$AUZEF_EXPECT_NANO_CPUS" "$LT_DIR/nginx-metrics.conf" <<'PY'
+import json, os, pathlib, sys
+from decimal import Decimal
+output, memory, swap, nano_cpus, nginx = sys.argv[1:]
+for value in (memory, swap, nano_cpus):
+    if not value.isdigit() or int(value) <= 0:
+        raise SystemExit('Resource contract values must be positive integers')
+if int(swap) < int(memory):
+    raise SystemExit('Memory+swap must be at least memory')
+cpus = str(Decimal(nano_cpus) / Decimal(1_000_000_000))
+path = pathlib.Path(output).resolve()
+path.parent.mkdir(parents=True, exist_ok=True)
+os.umask(0o077)
+content = f'''# Generated from resource-contract.env for a controlled test host only.
+services:
+  backend:
+    mem_limit: "{memory}"
+    memswap_limit: "{swap}"
+    cpus: "{cpus}"
+    deploy:
+      resources:
+        limits:
+          memory: "{memory}"
+          cpus: "{cpus}"
+    environment:
+      AUZEF_LOAD_METRICS: "1"
+  frontend:
+    volumes:
+      - {json.dumps(str(pathlib.Path(nginx).resolve()) + ":/etc/nginx/load-test/metrics.conf:ro")}
+'''
+path.write_text(content, encoding='utf-8')
+print(path)
+PY

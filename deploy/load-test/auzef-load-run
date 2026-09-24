@@ -7,6 +7,7 @@ No application imports, retries, redirects, raw response logging, or credentials
 from __future__ import annotations
 
 import argparse
+import uuid
 import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,6 +54,28 @@ class RequestResult:
     valid_json: bool
     answer_present: bool
     message_id_present: bool
+
+
+def load_workload(path: Path) -> list[dict]:
+    """Read a small, reviewed, deterministic, PII-free scenario profile."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError("workload profile cannot be read as JSON") from exc
+    scenarios = document.get("scenarios") if isinstance(document, dict) else None
+    if not isinstance(scenarios, list) or not scenarios:
+        raise ValueError("workload profile requires nonempty scenarios")
+    for scenario in scenarios:
+        if not isinstance(scenario, dict) or not isinstance(scenario.get("type"), str):
+            raise ValueError("every workload scenario needs a type")
+        turns = scenario.get("turns")
+        if not isinstance(turns, list) or not 1 <= len(turns) <= 3 or any(
+            not isinstance(turn, str) or not turn.strip() or len(turn) > 1000 for turn in turns
+        ):
+            raise ValueError("every workload scenario needs 1-3 short turns")
+        if scenario.get("fault_injection"):
+            raise ValueError("normal load profile must not contain fault injection")
+    return scenarios
 
 
 def nearest_rank(values: list[float], percentile: int) -> float:
@@ -109,7 +132,11 @@ def parser() -> LoadArgumentParser:
     command = LoadArgumentParser(description="Controlled /widget-chat load through Nginx")
     command.add_argument("--url", default=os.environ.get("AUZEF_LOAD_URL"))
     command.add_argument("--concurrency", type=int, required=True)
-    command.add_argument("--requests", type=int, required=True)
+    command.add_argument("--requests", type=int)
+    command.add_argument("--workload", type=Path, help="stateful reviewed scenario profile")
+    command.add_argument("--rounds", type=int, help="scenario rounds per virtual user")
+    command.add_argument("--phase", choices=("warmup", "steady"), default="steady")
+    command.add_argument("--stage", type=int, help="stage concurrency label")
     command.add_argument("--timeout", type=float, default=130.0, help="per-request seconds (default: 130)")
     command.add_argument("--questions", type=Path, default=DEFAULT_QUESTIONS)
     command.add_argument("--output-root", type=Path, default=Path(os.environ.get("AUZEF_LOAD_RUNS_ROOT", DEFAULT_RUNS_ROOT)))
@@ -124,8 +151,13 @@ def validate_args(command: LoadArgumentParser, args: argparse.Namespace) -> tupl
         command.error("--confirm-load-test is required")
     if not args.url:
         command.error("--url or AUZEF_LOAD_URL is required")
-    if args.concurrency < 1 or args.requests < 1:
-        command.error("--concurrency and --requests must be positive")
+    if args.concurrency < 1:
+        command.error("--concurrency must be positive")
+    if args.workload:
+        if args.rounds is None or args.rounds < 1 or args.requests is not None:
+            command.error("stateful workload requires positive --rounds and no --requests")
+    elif args.requests is None or args.requests < 1:
+        command.error("--requests must be positive")
     if args.concurrency > 30 and not args.allow_over_30:
         command.error("concurrency >30 requires --allow-over-30")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -134,7 +166,7 @@ def validate_args(command: LoadArgumentParser, args: argparse.Namespace) -> tupl
         target = parse_target(args.url)
         if args.insecure and target.scheme != "https":
             command.error("--insecure applies only to HTTPS targets")
-        return target, load_questions(args.questions)
+        return target, load_workload(args.workload) if args.workload else load_questions(args.questions)
     except ValueError as exc:
         command.error(str(exc))
     raise AssertionError("unreachable")
@@ -202,6 +234,169 @@ def send_one(
         request_index, question_index, started, round(elapsed_ms, 2), status,
         category, valid_json, answer_present, message_id_present,
     )
+
+
+def send_stateful_turn(
+    *, target: SplitResult, message: str, conversation: tuple[int, str] | None,
+    request_id: str, user_id: int, scenario: str, stage: int, phase: str,
+    turn_index: int, timeout: float, tls_context: Optional[ssl.SSLContext],
+    include_response_ids: bool = False,
+) -> tuple[dict, tuple[int, str] | None]:
+    """One turn; conversation credentials remain in memory and never enter output."""
+    start_utc = datetime.now(timezone.utc).isoformat()
+    started = time.perf_counter()
+    connection: Optional[http.client.HTTPConnection] = None
+    status: Optional[int] = None
+    category = "ok"
+    next_conversation = conversation
+    suggestions = False
+    response_contract = False
+    response_conversation_id = None
+    response_message_id = None
+    try:
+        if target.scheme == "https":
+            connection = http.client.HTTPSConnection(target.hostname, target.port, timeout=timeout, context=tls_context)
+        else:
+            connection = http.client.HTTPConnection(target.hostname, target.port, timeout=timeout)
+        payload = {"message": message}
+        if conversation:
+            payload["conversation_id"], payload["conversation_token"] = conversation
+        connection.request(
+            "POST", target.path, body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json", "Connection": "close",
+                     "X-AUZEF-Load-Request-ID": request_id},
+        )
+        response = connection.getresponse()
+        status = response.status
+        body = response.read(2_000_001)
+        if status == 200:
+            try:
+                document = json.loads(body)
+                if not isinstance(document, dict):
+                    category = "invalid_response"
+                else:
+                    answer = document.get("answer")
+                    message_id = document.get("message_id")
+                    conv_id = document.get("conversation_id")
+                    response_message_id = message_id if type(message_id) is int and message_id > 0 else None
+                    response_conversation_id = conv_id if type(conv_id) is int and conv_id > 0 else None
+                    token = document.get("conversation_token")
+                    suggestions = isinstance(document.get("suggestions"), list) and bool(document["suggestions"])
+                    response_contract = (
+                        isinstance(answer, str) and bool(answer.strip())
+                        and type(message_id) is int and message_id > 0
+                        and type(conv_id) is int and conv_id > 0
+                        and isinstance(token, str) and bool(token)
+                    )
+                    if response_contract:
+                        next_conversation = (conv_id, token)
+                    else:
+                        category = "invalid_response_contract"
+            except (ValueError, UnicodeError):
+                category = "malformed_json"
+        elif status == 429:
+            category = "rate_limited"
+        else:
+            category = "http_error"
+    except (socket.timeout, TimeoutError):
+        category = "transport_timeout"
+    except (OSError, http.client.HTTPException):
+        category = "connection_error"
+    finally:
+        if connection:
+            connection.close()
+    record = {
+        "request_id": request_id, "virtual_user_id": user_id, "scenario_type": scenario,
+        "stage": stage, "phase": phase, "turn_index": turn_index,
+        "start_utc": start_utc, "end_utc": datetime.now(timezone.utc).isoformat(),
+        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+        "http_status": status, "classification": category,
+        "response_contract_ok": response_contract, "suggestions_present": suggestions,
+        "conversation_reused": conversation is not None,
+        "none_observed": None, "degraded_observed": None, "provider_failure_observed": None,
+    }
+    if include_response_ids:
+        record["response_conversation_id"] = response_conversation_id
+        record["response_message_id"] = response_message_id
+    return record, next_conversation
+
+
+def run_stateful(
+    target: SplitResult, scenarios: list[dict], *, users: int, rounds: int,
+    stage: int, phase: str, timeout: float, tls_context: Optional[ssl.SSLContext],
+) -> tuple[list[dict], float]:
+    gate = threading.Event()
+    aborted = threading.Event()
+    ready = threading.Condition()
+    ready_count = 0
+
+    def virtual_user(user_id: int) -> list[dict]:
+        nonlocal ready_count
+        with ready:
+            ready_count += 1
+            ready.notify_all()
+        gate.wait()
+        if aborted.is_set():
+            return []
+        records = []
+        for round_index in range(rounds):
+            scenario = scenarios[(user_id - 1 + round_index) % len(scenarios)]
+            conversation = None  # each scenario starts fresh; follow-ups reuse only their owner's token
+            for turn_index, message in enumerate(scenario["turns"], 1):
+                request_id = uuid.uuid4().hex
+                record, conversation = send_stateful_turn(
+                    target=target, message=message, conversation=conversation,
+                    request_id=request_id, user_id=user_id, scenario=scenario["type"],
+                    stage=stage, phase=phase, turn_index=turn_index,
+                    timeout=timeout, tls_context=tls_context,
+                )
+                records.append(record)
+                if not record["response_contract_ok"]:
+                    break  # do not send a context follow-up without its own first turn
+        return records
+
+    with ThreadPoolExecutor(max_workers=users) as executor:
+        futures = [executor.submit(virtual_user, user_id) for user_id in range(1, users + 1)]
+        with ready:
+            if not ready.wait_for(lambda: ready_count == users, timeout=30):
+                aborted.set()
+                gate.set()
+                raise RuntimeError("virtual users did not reach launch gate")
+        started = time.perf_counter()
+        gate.set()
+        records = []
+        for future in as_completed(futures):
+            records.extend(future.result())
+    records.sort(key=lambda row: (row["start_utc"], row["virtual_user_id"]))
+    return records, round((time.perf_counter() - started) * 1000, 2)
+
+
+def summarize_stateful(run_id: str, args: argparse.Namespace, scenarios: list[dict], records: list[dict], wall_ms: float) -> tuple[dict, int]:
+    status_counts = Counter(row["http_status"] for row in records if row["http_status"] is not None)
+    good = [row for row in records if row["http_status"] == 200 and row["response_contract_ok"]]
+    latency = latency_stats([row["latency_ms"] for row in good])
+    failures = any(row["classification"] not in ("ok", "rate_limited") for row in records)
+    label = "FAIL" if failures else "RATE_LIMITED" if status_counts[429] else "PASS"
+    n = len(good)
+    summary = {
+        "run_id": run_id, "stage": args.stage or args.concurrency, "phase": args.phase,
+        "virtual_users": args.concurrency, "rounds_per_user": args.rounds,
+        "scenario_count": len(scenarios), "request_count": len(records), "success_count": n,
+        "status_counts": {str(k): v for k, v in sorted(status_counts.items())},
+        "http_200": status_counts[200], "http_429": status_counts[429],
+        "http_5xx": sum(v for k, v in status_counts.items() if 500 <= k < 600),
+        "http_502": status_counts[502], "http_503": status_counts[503], "http_504": status_counts[504],
+        "timeouts": sum(row["classification"] == "transport_timeout" for row in records),
+        "connection_errors": sum(row["classification"] == "connection_error" for row in records),
+        "suggestions_count": sum(row["suggestions_present"] for row in records),
+        "none_count": None, "degraded_count": None, "provider_failure_count": None,
+        "latency_success_ms": latency,
+        "p95_sample_sufficient": n >= 100, "p99_sample_sufficient": n >= 1000,
+        "wall_time_ms": wall_ms,
+        "requests_per_second": round(len(records) / (wall_ms / 1000), 2) if wall_ms else 0,
+        "result": label,
+    }
+    return summary, 1 if failures else 2 if status_counts[429] else 0
 
 
 def run_requests(
@@ -363,7 +558,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("WARNING: HTTP target uses plaintext; use the HTTPS front-door URL for the server test.", file=sys.stderr)
     print(f"Target host   {target_label(target)}")
     print(f"Target path   {target.path}")
-    print(f"Concurrency  {args.concurrency}    Requests {args.requests}    Timeout {args.timeout:g}s    Questions {len(questions)}")
+    print(f"Concurrency  {args.concurrency}    Requests {args.requests if not args.workload else 'stateful'}    Timeout {args.timeout:g}s    Scenarios {len(questions)}")
     os.umask(0o077)
     run_prefix = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + f"-c{args.concurrency}-"
     try:
@@ -374,6 +569,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 3
     print(f"Run ID        {run_id}")
     context = ssl._create_unverified_context() if args.insecure else ssl.create_default_context()
+    if args.workload:
+        try:
+            records, wall_ms = run_stateful(
+                target, questions, users=args.concurrency, rounds=args.rounds,
+                stage=args.stage or args.concurrency, phase=args.phase,
+                timeout=args.timeout, tls_context=context,
+            )
+        except Exception as exc:
+            print(f"FAIL: stateful generator error: {type(exc).__name__}", file=sys.stderr)
+            return 1
+        summary, exit_code = summarize_stateful(run_id, args, questions, records, wall_ms)
+        run_dir = args.output_root / run_id
+        try:
+            with (run_dir / "summary.json").open("x", encoding="utf-8") as output:
+                json.dump(summary, output, ensure_ascii=False, indent=2)
+                output.write("\n")
+            with (run_dir / "client-results.jsonl").open("x", encoding="utf-8") as output:
+                for record in records:
+                    output.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except OSError:
+            print("FAIL: results could not be saved", file=sys.stderr)
+            return 1
+        print(f"RESULT: {summary['result']}  requests={summary['request_count']}  200={summary['http_200']}  429={summary['http_429']}  5xx={summary['http_5xx']}")
+        print(f"Latency (successful 200): {summary['latency_success_ms']}")
+        if not summary["p95_sample_sufficient"] or not summary["p99_sample_sufficient"]:
+            print("WARN: percentile sample insufficient; p95 needs >=100, p99 >=1000 successful requests")
+        print(f"Results: {run_dir}")
+        return exit_code
     results, skew_ms, wall_ms = run_requests(target, questions, args.concurrency, args.requests, args.timeout, context)
     summary, exit_code = summarize(run_id, target, questions, args, results, skew_ms, wall_ms)
     try:

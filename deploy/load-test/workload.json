@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source": "tests/e2e/internal_pilot/scenarios.json",
+  "note": "Reviewed PII-free pilot prompts. Outcomes are observed, not forced; fallback faults run separately.",
+  "scenarios": [
+    {"type": "single_select", "fixture_id": "IP-E2E-001", "turns": ["Kayıt yenileme işlemini nasıl yaparım?"]},
+    {"type": "expected_none", "fixture_id": "IP-E2E-025", "turns": ["Merhaba"]},
+    {"type": "calendar", "fixture_id": "IP-E2E-029", "turns": ["Final sınavları ne zaman başlıyor?"]},
+    {"type": "multi", "fixture_id": "IP-E2E-036", "turns": ["Harç ne kadar ve nasıl ödeyeceğim?"]},
+    {"type": "context_followup", "fixture_id": "IP-E2E-039", "turns": ["Yatay geçiş hakkında bilgi alabilir miyim?", "Peki başvuru için hangi belgeler lazım?"]},
+    {"type": "suggestion_probe", "fixture_id": "synthetic-no-match", "turns": ["AUZEF mavi uzay asansörü başvurusu nereden yapılır?"]}
+  ]
+}

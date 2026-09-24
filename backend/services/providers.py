@@ -3,6 +3,7 @@ import meilisearch
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Distance, VectorParams
 from sentence_transformers import SentenceTransformer
+from services.load_metrics import Timer
 
 #: Alias noktalarının kimlik aralığı. `qna.id` ile çakışmaması için ofsetli;
 #: u64 sınırının çok altında kalıyor.
@@ -56,10 +57,11 @@ class MeiliSearchProvider(BaseSearchProvider):
             raise RuntimeError("MeiliSearch health status is not available")
 
     def search(self, query: str, limit: int = 3):
-        results = self.index.search(query, {
-            'limit': limit,
-            'showRankingScore': True
-        })
+        with Timer("meili"):
+            results = self.index.search(query, {
+                'limit': limit,
+                'showRankingScore': True
+            })
         return [
             {
                 "id": hit['id'],
@@ -120,12 +122,14 @@ class QdrantProvider(BaseSearchProvider):
             )
 
     def search(self, query: str, limit: int = 3):
-        query_vector = self.model.encode(query).tolist()
-        results = self.client.query_points(
-            collection_name=self.collection_name,
-            query=query_vector,
-            limit=limit
-        )
+        with Timer("embedding"):
+            query_vector = self.model.encode(query).tolist()
+        with Timer("qdrant"):
+            results = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector,
+                limit=limit
+            )
         return [
             {
                 "id": point.id,

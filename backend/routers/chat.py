@@ -3,6 +3,7 @@ import hmac
 import logging
 import os
 import secrets
+import time
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
@@ -22,6 +23,7 @@ from services.answer_pipeline import (
 )
 from services.decision_trace import DecisionTrace, emit_decision_trace
 from services.intent_analyzer import MAX_PREVIOUS_USER_TURNS
+from services import load_metrics
 
 logger = logging.getLogger("auzef")
 router = APIRouter()
@@ -180,6 +182,12 @@ def _widget_reply(conversation_id: Optional[int], conversation_token: Optional[s
 @router.post("/widget-chat")
 def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: BackgroundTasks):
     """Embed widget için basit adapter: {message} → {answer}"""
+    if load_metrics.ENABLED:
+        request.scope.setdefault("state", {})["load_handler_started"] = True
+        load_metrics.chat_started()
+        arrival_ns = request.scope["state"].get("load_arrival_ns")
+        if arrival_ns is not None:
+            load_metrics.event("handler_queue", wait_ms=round((time.perf_counter_ns() - arrival_ns) / 1_000_000, 3))
     # İlk kalıcı/pahalı işlemden önce DB-ADMIN'deki ortak state'i oku. DB
     # erişimi başarısızsa kritik dependency kaybında pipeline'ı başlatma.
     try:
@@ -207,7 +215,8 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     conversation_token = None
     conversation_context = ()
     try:
-        conversation_id, conversation_token, conversation_context = _persist_user_turn(body, ip, q)
+        with load_metrics.Timer("db_user_write"):
+            conversation_id, conversation_token, conversation_context = _persist_user_turn(body, ip, q)
     except Exception as exc:
         logger.error("Conversation kaydı yapılamadı (yanıt yolu etkilenmez): %s", type(exc).__name__)
 
@@ -215,6 +224,7 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
         endpoint="widget_chat",
         conversation_id=conversation_id,
     )
+    load_metrics.event("trace_link", trace_request_id=trace.request_id)
     trace.set_context(enabled=CHAT_CONTEXT_ENABLED, messages=conversation_context)
 
     # Cevap üret: LLM seçici ana yol (birleşik QnA + takvim havuzu, çoklu soru)
@@ -234,7 +244,8 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
             answer_count=None,  # pipeline already recorded the real count
         )
         emit_decision_trace(trace)
-        return _widget_reply(conversation_id, conversation_token, answer, source)
+        with load_metrics.Timer("db_bot_write"):
+            return _widget_reply(conversation_id, conversation_token, answer, source)
 
     # Öneriler: cevap DEĞİL; guard/aktiflik kurallarına uyan başlıklar.
     try:
@@ -243,18 +254,20 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
             background_tasks.add_task(_log_query, "none", "suggest", ip)
             trace.finalize(outcome="suggestions", source="none", qna_ids=[], answer_count=0)
             emit_decision_trace(trace)
-            return _widget_reply(
-                conversation_id, conversation_token,
-                "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
-                "none", suggestions=suggestions
-            )
+            with load_metrics.Timer("db_bot_write"):
+                return _widget_reply(
+                    conversation_id, conversation_token,
+                    "Bu konuda net bir bilgim yok. Şunları sormak istemiş olabilirsiniz:",
+                    "none", suggestions=suggestions
+                )
     except Exception:
         pass
 
     background_tasks.add_task(_log_query, "none", "suggest", ip)
     trace.finalize(outcome="no_answer", source="none", qna_ids=[], answer_count=0)
     emit_decision_trace(trace)
-    return _widget_reply(conversation_id, conversation_token, "Bu konuda bilgim bulunmuyor.", "none")
+    with load_metrics.Timer("db_bot_write"):
+        return _widget_reply(conversation_id, conversation_token, "Bu konuda bilgim bulunmuyor.", "none")
 
 
 @router.post("/api/messages/{message_id}/rating")

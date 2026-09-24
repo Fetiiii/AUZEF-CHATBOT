@@ -1,6 +1,7 @@
 import copy
 import os
 import time
+from services.load_metrics import Timer
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from typing import Optional, Sequence
@@ -194,7 +195,8 @@ class _OpenAICompatibleProvider(BaseLLMProvider):
             if config.timeout_seconds is not None:
                 kwargs["timeout"] = config.timeout_seconds
             kwargs.update(reasoning)
-            response = client.chat.completions.create(**kwargs)
+            with Timer("llm_provider"):
+                response = client.chat.completions.create(**kwargs)
             usage = getattr(response, "usage", None)
             choice = response.choices[0]
             return LLMInvocationResult(
@@ -272,11 +274,12 @@ class GeminiProvider(BaseLLMProvider):
                 "temperature": config.temperature,
             }
             client = self._client_for_config(config)
-            response = client.models.generate_content(
-                model=config.model,
-                contents=f"{system}\n\n{user}",
-                config=genai_types.GenerateContentConfig(**generate_config_kwargs),
-            )
+            with Timer("llm_provider"):
+                response = client.models.generate_content(
+                    model=config.model,
+                    contents=f"{system}\n\n{user}",
+                    config=genai_types.GenerateContentConfig(**generate_config_kwargs),
+                )
             usage = getattr(response, "usage_metadata", None)
             candidates = getattr(response, "candidates", None) or []
             finish_reason = (

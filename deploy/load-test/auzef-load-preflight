@@ -3,16 +3,65 @@
 set -uo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 
+contract_file="${AUZEF_LOAD_CONTRACT_FILE:-$LT_DIR/resource-contract.env}"
+if [ ! -r "$contract_file" ]; then
+    printf 'FAIL resource contract cannot be read: %s\n' "$contract_file"
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "$contract_file"
+expected_memory="${AUZEF_EXPECT_MEMORY_BYTES:-}"
+expected_swap="${AUZEF_EXPECT_MEMORY_SWAP_BYTES:-}"
+expected_cpu="${AUZEF_EXPECT_NANO_CPUS:-}"
+expected_workers="${AUZEF_EXPECT_UVICORN_WORKERS:-}"
+expected_model_cache="${AUZEF_EXPECT_HF_MODEL_CACHE:-}"
+for value in "$expected_memory" "$expected_swap" "$expected_cpu" "$expected_workers"; do
+    if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+        printf 'FAIL resource contract requires positive numeric limits and workers\n'
+        exit 1
+    fi
+done
+if [[ ! "$expected_model_cache" =~ ^models--[a-zA-Z0-9._-]+--[a-zA-Z0-9._-]+$ ]]; then
+    printf 'FAIL resource contract requires a safe HuggingFace model cache key\n'
+    exit 1
+fi
+
 fail=0
 printf 'AUZEF LOAD TEST PREFLIGHT\n'
 printf 'Compose: %s\n' "$LT_COMPOSE_FILE"
 
-for command_name in "$LT_DOCKER" awk date; do
+for command_name in "$LT_DOCKER" awk date git python3; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         printf 'FAIL required command unavailable: %s\n' "$command_name"
         exit 1
     fi
 done
+actual_ref="$(git -C "$LT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+expected_ref="${AUZEF_EXPECT_GIT_COMMIT:-}"
+expected_image="${AUZEF_EXPECT_BACKEND_IMAGE_ID:-}"
+if [ -z "$expected_ref" ] && [ -z "$expected_image" ]; then
+    printf 'FAIL expected git commit or backend image ID must be explicit\n'
+    fail=1
+fi
+if [ "${AUZEF_REQUIRE_TELEMETRY:-0}" = 1 ] && [ -z "$expected_image" ]; then
+    printf 'FAIL full load run requires expected backend image ID\n'
+    fail=1
+fi
+if [ "${AUZEF_REQUIRE_TELEMETRY:-0}" = 1 ] && [ -z "$expected_ref" ]; then
+    printf 'FAIL full load run requires expected git commit\n'
+    fail=1
+fi
+if [ -n "$expected_ref" ]; then
+    if [ "$actual_ref" = "$expected_ref" ]; then
+        printf 'PASS git commit %s\n' "$actual_ref"
+    else
+        printf 'FAIL git commit actual=%s expected=%s\n' "${actual_ref:-N/A}" "$expected_ref"
+        fail=1
+    fi
+fi
+if [ -n "$(git -C "$LT_ROOT" status --porcelain 2>/dev/null)" ]; then
+    printf 'WARN working tree is dirty; environment snapshot records this\n'
+fi
 if ! lt_compose version >/dev/null 2>&1; then
     printf 'FAIL Docker Compose is unavailable\n'
     exit 1
@@ -32,6 +81,17 @@ done
 
 if [ -n "${container_ids[backend]:-}" ]; then
     backend_id="${container_ids[backend]}"
+    actual_image="$("$LT_DOCKER" inspect --format '{{.Image}}' "$backend_id" 2>/dev/null || true)"
+    if [ -n "$expected_image" ]; then
+        if [ "$actual_image" = "$expected_image" ]; then
+            printf 'PASS backend image %s\n' "$actual_image"
+        else
+            printf 'FAIL backend image mismatch actual=%s expected=%s\n' "${actual_image:-N/A}" "$expected_image"
+            fail=1
+        fi
+    else
+        printf 'WARN backend image identity not asserted; actual=%s\n' "${actual_image:-N/A}"
+    fi
     limits="$(lt_limits "$backend_id")"
     if [ -z "$limits" ]; then
         printf 'FAIL backend limits unavailable\n'
@@ -39,9 +99,9 @@ if [ -n "${container_ids[backend]:-}" ]; then
     else
         IFS='|' read -r memory swap nanocpus oom_killed <<< "$limits"
         printf '\nBACKEND RUNTIME LIMITS\n'
-        for entry in "memory|$memory|8589934592 bytes (8 GiB)" \
-                     "memory+swap|$swap|12884901888 bytes (12 GiB)" \
-                     "CPU|$nanocpus|6000000000 NanoCpus (6 CPU)"; do
+        for entry in "memory|$memory|$expected_memory bytes" \
+                     "memory+swap|$swap|$expected_swap bytes" \
+                     "CPU|$nanocpus|$expected_cpu NanoCpus"; do
             IFS='|' read -r name actual expected <<< "$entry"
             expected_number="${expected%% *}"
             if [ "$actual" = "$expected_number" ]; then
@@ -58,11 +118,32 @@ if [ -n "${container_ids[backend]:-}" ]; then
         fi
     fi
     workers="$(lt_workers "$backend_id")"
-    if [ "$workers" = 2 ]; then
-        printf 'PASS Uvicorn workers 2\n'
+    if [ "$workers" = "$expected_workers" ]; then
+        printf 'PASS configured Uvicorn workers %s\n' "$workers"
     else
-        printf 'FAIL Uvicorn workers actual=%s expected=2\n' "${workers:-N/A}"
+        printf 'FAIL configured Uvicorn workers actual=%s expected=%s\n' "${workers:-N/A}" "$expected_workers"
         fail=1
+    fi
+    process_workers="$(lt_worker_processes "$backend_id")"
+    if [ "$process_workers" = "$expected_workers" ]; then
+        printf 'PASS running Uvicorn worker processes %s\n' "$process_workers"
+    else
+        printf 'FAIL running Uvicorn worker processes actual=%s expected=%s\n' "${process_workers:-N/A}" "$expected_workers"
+        fail=1
+    fi
+    if lt_model_cache "$backend_id" "$expected_model_cache"; then
+        printf 'PASS embedding model cache present and readable: %s\n' "$expected_model_cache"
+    else
+        printf 'FAIL embedding model cache unavailable or empty\n'
+        fail=1
+    fi
+    if [ "${AUZEF_REQUIRE_TELEMETRY:-0}" = 1 ]; then
+        if [ "$("$LT_DOCKER" exec "$backend_id" python -c 'import os; print(os.getenv("AUZEF_LOAD_METRICS", "0"))' 2>/dev/null)" = 1 ]; then
+            printf 'PASS opt-in backend load metrics active\n'
+        else
+            printf 'FAIL opt-in backend load metrics inactive\n'
+            fail=1
+        fi
     fi
 
     printf '\nHEALTH (direct backend loopback)\n'
@@ -87,6 +168,16 @@ if [ -n "${container_ids[backend]:-}" ]; then
             fail=1
         fi
     fi
+    dependencies="$(lt_ready_dependencies "$backend_id")"
+    for dependency in db_admin db_chat meilisearch qdrant; do
+        state="$(awk -F '|' -v name="$dependency" '$1 == name {print $2}' <<< "$dependencies")"
+        if [ "$state" = ok ]; then
+            printf 'PASS dependency %-13s reachable\n' "$dependency"
+        else
+            printf 'FAIL dependency %-13s status=%s\n' "$dependency" "${state:-unknown}"
+            fail=1
+        fi
+    done
 
     printf '\nCGROUP BASELINE\n'
     cgroup="$(lt_cgroup "$backend_id")"
@@ -97,6 +188,15 @@ if [ -n "${container_ids[backend]:-}" ]; then
     for key in memory.max memory.oom memory.oom_kill cpu.nr_throttled cpu.throttled_usec; do
         printf '%-20s %s\n' "$key" "$(lt_value "$cgroup" "$key")"
     done
+fi
+
+if [ "${AUZEF_REQUIRE_TELEMETRY:-0}" = 1 ] && [ -n "${container_ids[frontend]:-}" ]; then
+    if "$LT_DOCKER" exec "${container_ids[frontend]}" nginx -T 2>/dev/null | awk '/AUZEF_LOAD_NGINX/ { found=1 } END { exit !found }'; then
+        printf 'PASS test-only Nginx timing log active\n'
+    else
+        printf 'FAIL test-only Nginx timing log inactive\n'
+        fail=1
+    fi
 fi
 
 printf '\nPOSTGRESQL\n'
@@ -112,6 +212,30 @@ else
     printf 'FAIL db service unavailable\n'
     fail=1
 fi
+
+printf '\nOUTPUT / HOST TOOLING\n'
+output_root="${AUZEF_LOAD_OUTPUT_ROOT:-$LT_ROOT/outputs/performance-readiness}"
+if python3 - "$output_root" <<'PY'
+import pathlib, sys, tempfile
+path = pathlib.Path(sys.argv[1])
+path.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile(dir=path, prefix='.preflight-', delete=True):
+    pass
+PY
+then
+    printf 'PASS output directory writable: %s\n' "$output_root"
+else
+    printf 'FAIL output directory not writable: %s\n' "$output_root"
+    fail=1
+fi
+for tool in bash "$LT_DOCKER" python3 git awk date; do
+    if command -v "$tool" >/dev/null 2>&1; then
+        printf 'PASS required tooling %s\n' "$tool"
+    else
+        printf 'FAIL required tooling %s\n' "$tool"
+        fail=1
+    fi
+done
 
 if [ "$fail" -eq 0 ]; then
     printf '\nRESULT: PASS — test may start\n'

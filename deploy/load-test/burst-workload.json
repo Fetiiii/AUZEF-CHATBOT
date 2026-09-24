@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "description": "PII-free student questions for synchronized burst regression; follow-up setup turns are sent before the burst.",
+  "cases": [
+    {
+      "type": "short",
+      "question": "Sınav giriş belgem nerede?"
+    },
+    {
+      "type": "short",
+      "question": "Harç ücretini nereden görebilirim?"
+    },
+    {
+      "type": "normal",
+      "question": "AUZEF öğrencisi olarak bahar dönemi kayıt yenileme tarihlerini nereden öğrenebilirim ve işlemi hangi sistemden yapmam gerekir?"
+    },
+    {
+      "type": "normal",
+      "question": "Final sınavı için giriş belgemi ne zaman indirebilirim; sınav yerim veya saatim değişirse güncel bilgiyi hangi ekrandan kontrol etmeliyim?"
+    },
+    {
+      "type": "long",
+      "question": "İkinci üniversite kapsamında AUZEF'e yeni kayıt yaptırmayı düşünüyorum. Başvuru ve kesin kayıt tarihlerinin nereden duyurulduğunu, çevrim içi başvuru sırasında hangi belgeleri hazırlamam gerektiğini, belge yükleme veya ödeme adımlarında bir eksik olursa bunu nasıl tamamlayabileceğimi ve kayıt durumumu hangi ekrandan takip edebileceğimi öğrenmek istiyorum."
+    },
+    {
+      "type": "long",
+      "question": "AUZEF'te bir dersten bütünleme sınavına girmeyi planlıyorum. Sınav giriş belgesinin hangi tarihte yayımlandığını, sınav yerimin değişip değişmediğini nereden kontrol edebileceğimi, sınav günü yanımda hangi belgelerin bulunması gerektiğini ve sınav saatine yetişemediğim durumda başvurabileceğim resmi bir işlem olup olmadığını birlikte açıklar mısınız?"
+    },
+    {
+      "type": "long",
+      "question": "merhaba ben geçen dönem kaydımı dondurmuştum şimdi geri dönmek istiyorum ama sistemde ders seçimi kısmı açılmıyor, harç borcum da var mı yok mu emin değilim, bir de danışmanıma ulaşamadım. kaydımı nasıl aktif hale getiririm, harcı ödemem gerekiyorsa nereden öderim ve bu dönem derslerimi hâlâ seçebilir miyim?"
+    },
+    {
+      "type": "context_followup",
+      "setup": "Yatay geçiş hakkında bilgi alabilir miyim?",
+      "question": "Peki başvuru için hangi belgeler lazım?",
+      "source_fixture": "IP-E2E-039"
+    },
+    {
+      "type": "context_followup",
+      "setup": "Bütünleme sınavı ne zaman?",
+      "question": "Peki nereden gireceğim?",
+      "source_fixture": "IP-E2E-040"
+    },
+    {
+      "type": "context_followup",
+      "setup": "selam, ben şu an çalışıyorum ve işten dolayı final haftasında sınavıma giremeyeceğim gibi görünüyor, raporum da yok aslında sadece iş yoğunluğu. bu durumda mazeret sınavı gibi bir hakkım olur mu yoksa direkt bütünlemeye mi kalırım, bu konuda bilgi verebilir misiniz?",
+      "question": "Peki bütünlemeye kalırsam notum nasıl hesaplanıyor?"
+    },
+    {
+      "type": "context_followup",
+      "setup": "Kayıt dondurma işlemi nasıl yapılır?",
+      "question": "Bunu en geç ne zamana kadar yapabilirim?"
+    }
+  ]
+}

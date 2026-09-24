@@ -30,6 +30,7 @@ from routers.calendar import router as calendar_router
 from routers.solution_center import router as solution_center_router
 from routers.ai_config import router as ai_config_router
 from integrations.solution_center.exceptions import SolutionCenterException
+from services.load_metrics import ENABLED as LOAD_METRICS_ENABLED, LoadMetricsMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("auzef")
@@ -57,6 +58,8 @@ app.include_router(calendar_router)
 app.include_router(solution_center_router)
 app.include_router(ai_config_router)
 app.add_middleware(AdminAuthMiddleware)
+if LOAD_METRICS_ENABLED:
+    app.add_middleware(LoadMetricsMiddleware)
 
 
 # Çözüm Merkezi hataları → kullanıcıya nazik mesaj (API detayları SIZDIRILMAZ).

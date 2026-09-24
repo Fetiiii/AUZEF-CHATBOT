@@ -1,0 +1,746 @@
+#!/usr/bin/env python3
+"""Preflight-gated, stateful load stages with read-only resource correlation.
+
+This is the operator entry point. It invokes the existing auzef-load-run
+generator and auzef-load-watch; it does not change application configuration.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from datetime import datetime, timezone
+import json
+import math
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from urllib.parse import urlsplit
+
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+DEFAULT_OUTPUT = ROOT / "outputs" / "performance-readiness"
+PROFILE = HERE / "workload.json"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def run(command: list[str], *, timeout: float = 15, env: dict | None = None) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(command, text=True, capture_output=True, timeout=timeout, env=env, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return subprocess.CompletedProcess(command, 124, "", "unavailable")
+
+
+def write_json(path: Path, value: dict) -> None:
+    with path.open("w", encoding="utf-8") as output:
+        json.dump(value, output, ensure_ascii=False, indent=2)
+        output.write("\n")
+
+
+def count_lines(path: Path) -> int:
+    with path.open(encoding="utf-8") as source:
+        return sum(1 for _ in source)
+
+
+def count_valid_samples(path: Path, kind: str) -> int:
+    count = 0
+    with path.open(encoding="utf-8") as source:
+        for line in source:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if kind == "resource" and row.get("cgroup") and any(
+                item.get("role") == "worker" for item in row.get("processes", [])):
+                count += 1
+            if kind == "db" and row.get("status") == "ok":
+                count += 1
+    return count
+
+
+def docker_compose_cmd(env: dict) -> list[str]:
+    base = [env.get("AUZEF_DOCKER_BIN", "docker"), "compose", "--project-directory", str(ROOT),
+            "-f", env.get("AUZEF_COMPOSE_FILE", str(ROOT / "docker-compose.yml"))]
+    if env.get("AUZEF_COMPOSE_EXTRA_FILE"):
+        base += ["-f", env["AUZEF_COMPOSE_EXTRA_FILE"]]
+    return base
+
+
+def container_id(service: str, env: dict) -> str | None:
+    result = run(docker_compose_cmd(env) + ["ps", "-q", service], env=env)
+    return result.stdout.strip().splitlines()[0] if result.returncode == 0 and result.stdout.strip() else None
+
+
+def snapshot_environment(env: dict) -> dict:
+    result = {"captured_utc": utc_now(), "source": "host git, Docker inspect, container Python and read-only service version probes"}
+    git = lambda *args: run(["git", "-C", str(ROOT), *args], env=env).stdout.strip()
+    result["git"] = {"commit": git("rev-parse", "HEAD"), "ref": git("branch", "--show-current"),
+                     "dirty": bool(git("status", "--porcelain"))}
+    result["containers"] = {}
+    docker = env.get("AUZEF_DOCKER_BIN", "docker")
+    for service in ("backend", "db", "meilisearch", "qdrant", "frontend"):
+        cid = container_id(service, env)
+        if not cid:
+            result["containers"][service] = {"available": False}
+            continue
+        item = {"id": cid}
+        for key, template in (
+            ("image_id", "{{.Image}}"), ("started_at", "{{.State.StartedAt}}"),
+            ("memory_bytes", "{{.HostConfig.Memory}}"),
+            ("memory_swap_bytes", "{{.HostConfig.MemorySwap}}"),
+            ("nano_cpus", "{{.HostConfig.NanoCpus}}"),
+        ):
+            value = run([docker, "inspect", "--format", template, cid], env=env).stdout.strip()
+            item[key] = int(value) if (key.endswith("bytes") or key == "nano_cpus") and value.isdigit() else (value or None)
+        result["containers"][service] = item
+    db_id = result["containers"]["db"].get("id")
+    if db_id:
+        sql = "SELECT capability,model_registry_id,COALESCE(timeout_seconds::text,'-'),COALESCE(max_retries::text,'-'),config_version_id FROM ai_capability_config ORDER BY capability;"
+        shell = 'export PGPASSWORD="${POSTGRES_PASSWORD:-}" PGCONNECT_TIMEOUT=2; exec psql -X -A -t -F "|" -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}" -c "$1"'
+        config_result = run([docker, "exec", db_id, "sh", "-c", shell, "_", sql], timeout=8, env=env)
+        result["active_llm_config"] = [
+            dict(zip(("capability", "model_registry_id", "timeout_seconds", "max_retries", "config_version_id"), line.split("|")))
+            for line in config_result.stdout.splitlines() if len(line.split("|")) == 5
+        ] if config_result.returncode == 0 else {"status": "not_observable"}
+    backend = result["containers"]["backend"].get("id")
+    if backend:
+        script = (
+            "import json,platform,importlib.metadata as m,os; "
+            "names=['fastapi','uvicorn','sqlalchemy','sentence-transformers','torch','qdrant-client','meilisearch']; "
+            "versions={n:(m.version(n) if n in {d.metadata['Name'].lower() for d in m.distributions()} else None) for n in names}; "
+            "print(json.dumps({'python':platform.python_version(),'packages':versions,'load_metrics_enabled':os.getenv('AUZEF_LOAD_METRICS')=='1'}))"
+        )
+        parsed = run([docker, "exec", backend, "python", "-c", script], timeout=20, env=env)
+        try:
+            result["backend_runtime"] = json.loads(parsed.stdout)
+        except ValueError:
+            result["backend_runtime"] = {"status": "not_observable"}
+        workers = run([docker, "exec", backend, "python", "-c",
+                       "p=open('/proc/1/cmdline','rb').read().split(b'\\0'); print(p[p.index(b'--workers')+1].decode() if b'--workers' in p else 'unknown')"], env=env)
+        result["backend_runtime"]["configured_workers"] = workers.stdout.strip() or "not_observable"
+        version_script = (
+            "import json,os,urllib.request; "
+            "url=os.getenv('MEILI_URL','').rstrip('/')+'/version'; "
+            "req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.getenv('MEILI_MASTER_KEY','')}); "
+            "print(json.dumps(json.load(urllib.request.urlopen(req,timeout=3))))"
+        )
+        meili = run([docker, "exec", backend, "python", "-c", version_script], timeout=8, env=env)
+        try:
+            result["meili_server_version"] = json.loads(meili.stdout).get("pkgVersion")
+        except ValueError:
+            result["meili_server_version"] = None
+        qdrant_script = (
+            "import json,os,urllib.request; "
+            "url='http://'+os.getenv('QDRANT_HOST','qdrant')+':'+os.getenv('QDRANT_PORT','6333')+'/'; "
+            "print(json.dumps(json.load(urllib.request.urlopen(url,timeout=3))))"
+        )
+        qdrant = run([docker, "exec", backend, "python", "-c", qdrant_script], timeout=8, env=env)
+        try:
+            result["qdrant_server_version"] = json.loads(qdrant.stdout).get("version")
+        except ValueError:
+            result["qdrant_server_version"] = None
+    return result
+
+
+def resource_sample(backend_id: str, env: dict) -> dict:
+    docker = env.get("AUZEF_DOCKER_BIN", "docker")
+    script = r'''
+import json, os, time
+from pathlib import Path
+root=Path('/sys/fs/cgroup')
+def lines(name):
+    try: return (root/name).read_text().strip()
+    except OSError: return None
+def fields(name):
+    value=lines(name)
+    if value is None: return None
+    return {k:int(v) for k,v in (line.split() for line in value.splitlines() if len(line.split())==2)}
+processes=[]
+for pid in os.listdir('/proc'):
+    if not pid.isdigit(): continue
+    try:
+        status={k.strip():v.strip() for k,v in (line.split(':',1) for line in open('/proc/'+pid+'/status') if ':' in line)}
+        cmd=open('/proc/'+pid+'/cmdline','rb').read()
+        if pid!='1' and b'multiprocessing.spawn' not in cmd: continue
+        if b'resource_tracker' in cmd: continue
+        stat=open('/proc/'+pid+'/stat').read().split()
+        fds=list(os.scandir('/proc/'+pid+'/fd'))
+        sockets=0
+        for entry in fds:
+            try: sockets+=os.readlink(entry.path).startswith('socket:[')
+            except OSError: pass
+        processes.append({'pid':int(pid),'role':'master' if pid=='1' else 'worker',
+          'rss_kb':int(status.get('VmRSS','0 kB').split()[0]),
+          'threads':int(status.get('Threads','0')),'fd_count':len(fds),'socket_count':sockets,
+          'cpu_seconds':round((int(stat[13])+int(stat[14]))/os.sysconf('SC_CLK_TCK'),3),
+          'uptime_seconds':round(float(open('/proc/uptime').read().split()[0])-int(stat[21])/os.sysconf('SC_CLK_TCK'),1)})
+    except (OSError,ValueError,IndexError): pass
+def number(name):
+    value=lines(name)
+    return int(value) if value and value.isdigit() else None
+print(json.dumps({'processes':processes,'cgroup':{'memory_current':number('memory.current'),
+  'memory_peak':number('memory.peak'),'memory_max':number('memory.max'),
+  'memory_events':fields('memory.events'),'cpu_stat':fields('cpu.stat'),
+  'pids_current':number('pids.current')}}))
+'''
+    result = run([docker, "exec", backend_id, "python", "-c", script], timeout=8, env=env)
+    try:
+        sample = json.loads(result.stdout)
+    except ValueError:
+        sample = {"status": "unavailable"}
+    sample["timestamp_utc"] = utc_now()
+    try:
+        meminfo = {line.split(':', 1)[0]: int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines() if ':' in line and len(line.split()) > 1 and line.split()[1].isdigit()}
+        cpu_values = [int(x) for x in Path('/proc/stat').read_text().splitlines()[0].split()[1:]]
+        sample["host"] = {"load_average": list(os.getloadavg()),
+                          "mem_available_kb": meminfo.get("MemAvailable"),
+                          "swap_total_kb": meminfo.get("SwapTotal"), "swap_free_kb": meminfo.get("SwapFree"),
+                          "cpu_total_ticks": sum(cpu_values), "cpu_idle_ticks": cpu_values[3] + cpu_values[4]}
+    except (OSError, StopIteration, ValueError):
+        sample["host"] = {"status": "not_observable"}
+    return sample
+
+
+def db_sample(db_id: str, env: dict) -> dict:
+    sql = """SELECT COALESCE(datname,'-'), pid, COALESCE(state,'unknown'),
+      COALESCE(wait_event_type,'-'), COALESCE(wait_event,'-'),
+      COALESCE(round(extract(epoch FROM clock_timestamp()-xact_start)::numeric,3)::text,'-'),
+      COALESCE(round(extract(epoch FROM clock_timestamp()-query_start)::numeric,3)::text,'-')
+      FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()
+      ORDER BY xact_start NULLS LAST, pid LIMIT 200;"""
+    shell = 'export PGPASSWORD="${POSTGRES_PASSWORD:-}" PGCONNECT_TIMEOUT=2; exec psql -X -A -t -F "|" -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-${POSTGRES_USER:-postgres}}" -c "$1"'
+    result = run([env.get("AUZEF_DOCKER_BIN", "docker"), "exec", db_id, "sh", "-c", shell, "_", sql], timeout=8, env=env)
+    rows = []
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            parts = line.split("|")
+            if len(parts) == 7:
+                rows.append(dict(zip(("database", "pid", "state", "wait_event_type", "wait_event", "xact_age_s", "query_age_s"), parts)))
+    return {"timestamp_utc": utc_now(), "status": "ok" if result.returncode == 0 else "unavailable",
+            "connection_count": len(rows), "state_counts": dict(Counter(row["state"] for row in rows)),
+            "rows": rows}
+
+
+class Sampler:
+    def __init__(self, folder: Path, backend_id: str, db_id: str, interval: float, env: dict):
+        self.folder, self.backend_id, self.db_id, self.interval, self.env = folder, backend_id, db_id, interval, env
+        self.phase = "setup"
+        self.stage = 0
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.previous_cpu: dict[int, tuple[float, float]] = {}
+        self.previous_host: tuple[int, int] | None = None
+
+    def start(self):
+        (self.folder / "resource-samples.jsonl").touch()
+        (self.folder / "db-samples.jsonl").touch()
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=self.interval + 20)
+
+    def _loop(self):
+        with (self.folder / "resource-samples.jsonl").open("a", encoding="utf-8") as resources, \
+             (self.folder / "db-samples.jsonl").open("a", encoding="utf-8") as database:
+            while not self.stop.is_set():
+                for output, probe, cid in ((resources, resource_sample, self.backend_id),
+                                           (database, db_sample, self.db_id)):
+                    row = probe(cid, self.env)
+                    if probe is resource_sample:
+                        now_mono = time.monotonic()
+                        for process in row.get("processes", []):
+                            pid, seconds = process["pid"], process["cpu_seconds"]
+                            previous = self.previous_cpu.get(pid)
+                            process["cpu_percent_one_core"] = round(100 * (seconds - previous[0]) / (now_mono - previous[1]), 2) if previous and now_mono > previous[1] else None
+                            self.previous_cpu[pid] = (seconds, now_mono)
+                        host = row.get("host", {})
+                        total, idle = host.get("cpu_total_ticks"), host.get("cpu_idle_ticks")
+                        if isinstance(total, int) and isinstance(idle, int):
+                            if self.previous_host and total > self.previous_host[0]:
+                                host["cpu_utilization_percent"] = round(100 * (1 - (idle - self.previous_host[1]) / (total - self.previous_host[0])), 2)
+                            else:
+                                host["cpu_utilization_percent"] = None
+                            self.previous_host = (total, idle)
+                    row.update({"stage": self.stage, "phase": self.phase})
+                    output.write(json.dumps(row, separators=(",", ":")) + "\n")
+                    output.flush()
+                self.stop.wait(self.interval)
+
+
+class Watcher:
+    def __init__(self, folder: Path, env: dict):
+        self.folder, self.env = folder, env
+        self.status = "UNKNOWN"
+        self.process = None
+        self.thread = None
+
+    def start(self):
+        self.process = subprocess.Popen([str(HERE / "auzef-load-watch"), "--no-clear"],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, bufsize=1, env=self.env)
+        def read_lines():
+            with (self.folder / "watcher.txt").open("w", encoding="utf-8") as output:
+                for line in self.process.stdout:
+                    output.write(line)
+                    output.flush()
+                    match = re.search(r"STATUS: (OK|WARN|STOP)", line)
+                    if match:
+                        self.status = match.group(1)
+        self.thread = threading.Thread(target=read_lines, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try: self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired: self.process.kill()
+        if self.thread: self.thread.join(timeout=5)
+
+
+def collect_server_events(folder: Path, ids: dict, since: str, env: dict) -> tuple[dict, dict, dict]:
+    counts = Counter()
+    links = {}
+    traces = {}
+    docker = env.get("AUZEF_DOCKER_BIN", "docker")
+    for service, marker, filename in (("backend", "AUZEF_LOAD_METRIC ", "server-metrics.jsonl"),
+                                      ("frontend", "AUZEF_LOAD_NGINX", "nginx-metrics.jsonl")):
+        cid = ids.get(service)
+        if not cid: continue
+        result = run([docker, "logs", "--since", since, cid], timeout=30, env=env)
+        with (folder / filename).open("w", encoding="utf-8") as output:
+            for line in (result.stdout + result.stderr).splitlines():
+                if service == "backend" and "decision_trace=" in line:
+                    try:
+                        trace = json.loads(line.split("decision_trace=", 1)[1])
+                        trace_id = trace["request"]["request_id"]
+                        analyzer = trace.get("intent_analyzer") or {}
+                        selectors = trace.get("selectors") or []
+                        trace_row = {
+                            "trace_request_id": trace_id,
+                            "analyzer_status": analyzer.get("call_status"),
+                            "analyzer_latency_ms": analyzer.get("latency_ms"),
+                            "analyzer_retry_count": analyzer.get("retry_count"),
+                            "retrieval": [{"retrieval_ms": entry.get("retrieval_ms"),
+                                           "qdrant_available": entry.get("qdrant_available"),
+                                           "meili_available": entry.get("meili_available")}
+                                          for entry in trace.get("retrieval", [])],
+                            "selectors": [{"status": entry.get("call_status"),
+                                           "latency_ms": entry.get("latency_ms"),
+                                           "retry_count": entry.get("retry_count"),
+                                           "semantic_none": entry.get("semantic_none")}
+                                          for entry in selectors],
+                            "final_outcome": (trace.get("final") or {}).get("final_outcome"),
+                            "degraded_count": len(trace.get("degraded") or []),
+                            "circuit_events": len(trace.get("circuit") or []),
+                            # Numeric context shape only; no message content.
+                            "context_message_count": (trace.get("context") or {}).get("context_message_count"),
+                            "context_char_count": (trace.get("context") or {}).get("context_char_count"),
+                            "previous_user_context_count": analyzer.get("previous_user_context_count"),
+                            "current_input_length": analyzer.get("current_input_length"),
+                            "intent_count": analyzer.get("intent_count"),
+                            "context_used_any": (any(item.get("context_used") for item in analyzer["intents"])
+                                                 if isinstance(analyzer.get("intents"), list) else None),
+                            "analyzer_fallback_to_single": analyzer.get("fallback_to_single"),
+                            "analyzer_outcome_status": analyzer.get("outcome_status"),
+                            "analyzer_parse_status": analyzer.get("parse_status"),
+                        }
+                        traces[trace_id] = trace_row
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                if marker not in line: continue
+                try:
+                    payload = json.loads(line.split(marker, 1)[1] if service == "backend" else line[line.index("{"):])
+                except ValueError:
+                    continue
+                if service == "frontend" and payload.get("kind") != "AUZEF_LOAD_NGINX": continue
+                output.write(json.dumps(payload, separators=(",", ":")) + "\n")
+                counts[(service, str(payload.get("event", payload.get("status", "unknown"))))] += 1
+                if service == "backend" and payload.get("event") == "trace_link":
+                    links[payload.get("request_id")] = payload.get("trace_request_id")
+    with (folder / "trace-summary.jsonl").open("w", encoding="utf-8") as output:
+        for row in traces.values():
+            output.write(json.dumps(row, separators=(",", ":")) + "\n")
+    summary = {"source": "Docker logs filtered to content-free load events and sanitized DecisionTrace fields",
+               "counts": {f"{service}:{event}": count for (service, event), count in sorted(counts.items())},
+               "logical_analyzer_calls": sum(row["analyzer_latency_ms"] is not None for row in traces.values()),
+               "logical_selector_calls": sum(entry["latency_ms"] is not None for row in traces.values() for entry in row["selectors"]),
+               "analyzer_timeout_count": sum(row["analyzer_status"] == "timeout" for row in traces.values()),
+               "selector_timeout_count": sum(entry["status"] == "timeout" for row in traces.values() for entry in row["selectors"]),
+               "actual_sdk_attempt_count": None,
+               "actual_sdk_retry_count": None}
+    return summary, traces, links
+
+
+def correlate_client_results(folder: Path, summaries: list[dict], traces: dict, links: dict) -> dict:
+    path = folder / "client-results.jsonl"
+    matched = 0
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        trace = traces.get(links.get(row["request_id"]))
+        if trace:
+            matched += 1
+            row["none_observed"] = any(entry["semantic_none"] for entry in trace["selectors"])
+            row["degraded_observed"] = trace["degraded_count"] > 0
+            row["provider_failure_observed"] = trace["analyzer_status"] in ("timeout", "model_error") or any(
+                entry["status"] in ("timeout", "model_error") for entry in trace["selectors"])
+            row["trace_context"] = {key: trace.get(key) for key in (
+                "context_message_count", "context_char_count", "previous_user_context_count",
+                "current_input_length", "intent_count", "context_used_any",
+                "analyzer_fallback_to_single", "analyzer_status", "analyzer_outcome_status",
+                "analyzer_parse_status", "final_outcome")}
+        rows.append(row)
+    with path.open("w", encoding="utf-8") as output:
+        for row in rows:
+            output.write(json.dumps(row, separators=(",", ":")) + "\n")
+    for summary in summaries:
+        selected = [row for row in rows if row["stage"] == summary["stage"] and row["phase"] == summary["phase"]]
+        for field in ("none_observed", "degraded_observed", "provider_failure_observed"):
+            key = {"none_observed": "none_count", "degraded_observed": "degraded_count",
+                   "provider_failure_observed": "provider_failure_count"}[field]
+            summary[key] = sum(row[field] is True for row in selected) if selected and all(row[field] is not None for row in selected) else None
+        summary["trace_join_count"] = sum(row["none_observed"] is not None for row in selected)
+    return {"client_requests": len(rows), "trace_joined": matched, "trace_join_coverage": round(matched / len(rows), 3) if rows else None}
+
+
+def timing_stats(values: list[float]) -> dict | None:
+    if not values:
+        return None
+    values.sort()
+    return {"count": len(values), "min_ms": round(values[0], 2),
+            "p50_ms": round(values[math.ceil(.50 * len(values)) - 1], 2),
+            "p95_ms": round(values[math.ceil(.95 * len(values)) - 1], 2),
+            "p99_ms": round(values[math.ceil(.99 * len(values)) - 1], 2),
+            "max_ms": round(values[-1], 2),
+            "p95_sample_sufficient": len(values) >= 100,
+            "p99_sample_sufficient": len(values) >= 1000}
+
+
+def summarize_nginx(folder: Path) -> dict:
+    client = {row["request_id"]: (row["stage"], row["phase"])
+              for row in (json.loads(line) for line in (folder / "client-results.jsonl").read_text(encoding="utf-8").splitlines())}
+    groups: dict[tuple[int, str], dict] = {}
+    unmatched = 0
+    for line in (folder / "nginx-metrics.jsonl").read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        key = client.get(row.get("request_id"))
+        if not key:
+            unmatched += 1
+            continue
+        group = groups.setdefault(key, {"status_counts": Counter(), "request_ms": [],
+                                        "upstream_ms": [], "upstream_nodes": Counter()})
+        group["status_counts"][str(row.get("status"))] += 1
+        group["upstream_nodes"][str(row.get("upstream_addr"))] += 1
+        for field, target in (("request_time", "request_ms"), ("upstream_response_time", "upstream_ms")):
+            try:
+                group[target].append(float(row[field]) * 1000)
+            except (ValueError, KeyError, TypeError):
+                pass
+    return {"source": "test-only Nginx log, joined by synthetic request ID; no client IP or URL",
+            "unmatched_log_rows": unmatched,
+            "groups": [{"stage": stage, "phase": phase,
+                        "status_counts": dict(values["status_counts"]),
+                        "upstream_nodes": dict(values["upstream_nodes"]),
+                        "request_time": timing_stats(values["request_ms"]),
+                        "upstream_response_time": timing_stats(values["upstream_ms"])}
+                       for (stage, phase), values in sorted(groups.items())]}
+
+
+def summarize_server_phases(folder: Path) -> dict:
+    client = {row["request_id"]: (row["stage"], row["phase"])
+              for row in (json.loads(line) for line in (folder / "client-results.jsonl").read_text(encoding="utf-8").splitlines())}
+    groups: dict[tuple[int, str, str], dict] = {}
+    pool_groups: dict[tuple[int, str, str], dict] = {}
+    threadpool_groups: dict[tuple[int, str, str], dict] = {}
+    for line in (folder / "server-metrics.jsonl").read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        key = client.get(row.get("request_id"))
+        if not key:
+            continue
+        event = row.get("event")
+        if event == "threadpool" and isinstance(row.get("borrowed_tokens"), int):
+            threadpool_key = (*key, str(row.get("point")))
+            threadpool_group = threadpool_groups.setdefault(threadpool_key, {"samples": 0,
+                "max_borrowed_tokens": 0, "total_tokens": row.get("total_tokens")})
+            threadpool_group["samples"] += 1
+            threadpool_group["max_borrowed_tokens"] = max(
+                threadpool_group["max_borrowed_tokens"], row["borrowed_tokens"])
+            continue
+        if event == "db_pool" and isinstance(row.get("checked_out"), int):
+            pool_key = (*key, str(row.get("pool")))
+            pool_group = pool_groups.setdefault(pool_key, {"samples": 0, "max_checked_out": 0,
+                                                           "max_overflow": 0, "size": row.get("size")})
+            pool_group["samples"] += 1
+            pool_group["max_checked_out"] = max(pool_group["max_checked_out"], row["checked_out"])
+            pool_group["max_overflow"] = max(pool_group["max_overflow"], row.get("overflow") or 0)
+            continue
+        phase = row.get("phase") if event in ("phase_start", "phase_end") else event
+        if phase not in ("embedding", "meili", "qdrant", "llm_provider", "db_user_write", "db_bot_write",
+                         "handler_queue", "handler_start", "handler_finish"):
+            continue
+        group = groups.setdefault((*key, phase), {"durations": [], "max_active": 0, "errors": Counter()})
+        if event == "phase_end" and isinstance(row.get("duration_ms"), (int, float)):
+            group["durations"].append(row["duration_ms"])
+            if row.get("error_type"):
+                group["errors"][row["error_type"]] += 1
+        elif event == "handler_queue" and isinstance(row.get("wait_ms"), (int, float)):
+            group["durations"].append(row["wait_ms"])
+        elif event == "handler_finish" and isinstance(row.get("arrival_to_response_ms"), (int, float)):
+            group["durations"].append(row["arrival_to_response_ms"])
+        if isinstance(row.get("active"), int):
+            group["max_active"] = max(group["max_active"], row["active"])
+    return {"source": "opt-in backend content-free phase events, joined by synthetic request ID",
+            "threadpool_samples": [{"stage": stage, "phase": phase, "point": point, **values}
+                                   for (stage, phase, point), values in sorted(threadpool_groups.items())],
+            "db_pool_samples": [{"stage": stage, "phase": phase, "pool": pool, **values}
+                                for (stage, phase, pool), values in sorted(pool_groups.items())],
+            "groups": [{"stage": stage, "phase": run_phase, "metric": metric,
+                        "timing": timing_stats(values["durations"]),
+                        "max_active_per_worker_observed": values["max_active"],
+                        "error_types": dict(values["errors"])}
+                       for (stage, run_phase, metric), values in sorted(groups.items())]}
+
+
+def summarize_resources(folder: Path) -> list[dict]:
+    groups: dict[tuple[int, str], dict] = {}
+    for line in (folder / "resource-samples.jsonl").read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        key = (row.get("stage", 0), row.get("phase", "setup"))
+        if key[0] < 1 or key[1] not in ("warmup", "steady"):
+            continue
+        group = groups.setdefault(key, {"samples": 0, "max_worker_rss_kb": 0,
+                                        "max_worker_cpu_percent_one_core": 0,
+                                        "max_worker_threads": 0, "max_worker_fds": 0,
+                                        "max_cgroup_memory_current": 0,
+                                        "max_host_cpu_utilization_percent": 0,
+                                        "first_cpu_throttled": None, "last_cpu_throttled": None,
+                                        "max_db_connections": 0, "max_idle_in_transaction": 0})
+        group["samples"] += 1
+        for process in row.get("processes", []):
+            if process.get("role") != "worker": continue
+            group["max_worker_rss_kb"] = max(group["max_worker_rss_kb"], process.get("rss_kb") or 0)
+            group["max_worker_cpu_percent_one_core"] = max(group["max_worker_cpu_percent_one_core"], process.get("cpu_percent_one_core") or 0)
+            group["max_worker_threads"] = max(group["max_worker_threads"], process.get("threads") or 0)
+            group["max_worker_fds"] = max(group["max_worker_fds"], process.get("fd_count") or 0)
+        cgroup = row.get("cgroup") or {}
+        group["max_cgroup_memory_current"] = max(group["max_cgroup_memory_current"], cgroup.get("memory_current") or 0)
+        group["max_host_cpu_utilization_percent"] = max(group["max_host_cpu_utilization_percent"], (row.get("host") or {}).get("cpu_utilization_percent") or 0)
+        throttled = (cgroup.get("cpu_stat") or {}).get("nr_throttled")
+        if isinstance(throttled, int):
+            if group["first_cpu_throttled"] is None: group["first_cpu_throttled"] = throttled
+            group["last_cpu_throttled"] = throttled
+    for line in (folder / "db-samples.jsonl").read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        group = groups.get((row.get("stage"), row.get("phase")))
+        if not group: continue
+        group["max_db_connections"] = max(group["max_db_connections"], row.get("connection_count") or 0)
+        group["max_idle_in_transaction"] = max(group["max_idle_in_transaction"],
+            sum(count for state, count in (row.get("state_counts") or {}).items() if state.startswith("idle in transaction")))
+    result = []
+    for (stage, phase), values in sorted(groups.items()):
+        values["cpu_throttled_periods_delta"] = (
+            values["last_cpu_throttled"] - values["first_cpu_throttled"]
+            if values["first_cpu_throttled"] is not None and values["last_cpu_throttled"] is not None else None)
+        result.append({"stage": stage, "phase": phase, **values})
+    return result
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Preflight-gated AUZEF stateful load plan")
+    p.add_argument("--url", required=True)
+    p.add_argument("--stages", default="1,5,10,15,20")
+    p.add_argument("--workload", type=Path, default=PROFILE)
+    p.add_argument("--warmup-rounds", type=int, default=1)
+    p.add_argument("--steady-min-requests", type=int, default=100)
+    p.add_argument("--cooldown-seconds", type=float, default=5)
+    p.add_argument("--sample-interval", type=float, default=2)
+    p.add_argument("--max-stage-seconds", type=float, default=1800)
+    p.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT)
+    p.add_argument("--contract", type=Path)
+    p.add_argument("--confirm-load-test", action="store_true")
+    p.add_argument("--insecure", action="store_true")
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    if not args.confirm_load_test:
+        parser().error("--confirm-load-test is required")
+    try:
+        target = urlsplit(args.url)
+        if target.scheme not in ("http", "https") or not target.hostname or target.path != "/widget-chat" \
+           or "@" in target.netloc or target.query or target.fragment or target.port == 8000 \
+           or target.hostname.lower() in ("backend", "auzef_backend"):
+            raise ValueError()
+        if args.insecure and target.scheme != "https":
+            raise ValueError()
+        stages = [int(x) for x in args.stages.split(",")]
+        if not stages or any(x < 1 or x > 30 for x in stages) or stages != sorted(set(stages)):
+            raise ValueError()
+        profile = json.loads(args.workload.read_text(encoding="utf-8"))
+        scenarios = profile["scenarios"]
+        if not scenarios or any(not isinstance(x.get("turns"), list) for x in scenarios):
+            raise ValueError()
+        if args.warmup_rounds < 1 or args.steady_min_requests < 100 or args.cooldown_seconds < 5 or args.sample_interval < 1 \
+           or not all(math.isfinite(x) and x > 0 for x in (args.cooldown_seconds, args.sample_interval, args.max_stage_seconds)):
+            raise ValueError()
+    except (ValueError, OSError, KeyError, TypeError):
+        parser().error("invalid stages, workload or safety parameters")
+    os.umask(0o077)
+    args.output_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder = Path(tempfile.mkdtemp(prefix=datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-"), dir=args.output_root))
+    env = os.environ.copy()
+    env["AUZEF_LOAD_OUTPUT_ROOT"] = str(args.output_root)
+    env["AUZEF_REQUIRE_TELEMETRY"] = "1"
+    if args.contract: env["AUZEF_LOAD_CONTRACT_FILE"] = str(args.contract.resolve())
+    preflight = run([str(HERE / "auzef-load-preflight")], timeout=60, env=env)
+    checks = [{"status": line.split(" ", 1)[0], "detail": line.split(" ", 1)[1]}
+              for line in preflight.stdout.splitlines() if line.startswith(("PASS ", "WARN ", "FAIL "))]
+    write_json(folder / "preflight.json", {"captured_utc": utc_now(), "result": "PASS" if preflight.returncode == 0 else "FAIL", "checks": checks})
+    environment = snapshot_environment(env)
+    environment["target_origin"] = f"{target.scheme}://{target.hostname}{(':' + str(target.port)) if target.port else ''}"
+    write_json(folder / "environment.json", environment)
+    if preflight.returncode != 0:
+        write_json(folder / "stage-summary.json", {"result": "NO_GO", "reason": "preflight failed", "stages": []})
+        (folder / "final-summary.md").write_text("# NO-GO\n\nPreflight FAIL; no load requests sent. See preflight.json.\n", encoding="utf-8")
+        print(f"NO-GO: preflight failed; no load sent. Results: {folder}")
+        return 1
+    ids = {name: container_id(name, env) for name in ("backend", "db", "frontend")}
+    started = utc_now()
+    sampler = Sampler(folder, ids["backend"], ids["db"], args.sample_interval, env)
+    watcher = Watcher(folder, env)
+    active_child = None
+    summaries = []
+    verdict = "PASS"
+    sampler.start()
+    watcher.start()
+    try:
+        for _ in range(30):
+            if watcher.status != "UNKNOWN" or watcher.process.poll() is not None:
+                break
+            time.sleep(1)
+        if watcher.status != "OK":
+            verdict = "NO_GO_WATCHER"
+        with (folder / "client-results.jsonl").open("w", encoding="utf-8") as all_results:
+            for stage in stages:
+                if verdict != "PASS": break
+                turns_per_cycle = sum(len(item["turns"]) for item in scenarios)
+                rounds = math.ceil(args.steady_min_requests * len(scenarios) / (stage * turns_per_cycle))
+                warmup_rounds = max(args.warmup_rounds, math.ceil(len(scenarios) / stage))
+                for phase, phase_rounds in (("warmup", warmup_rounds), ("steady", rounds)):
+                    sampler.stage, sampler.phase = stage, phase
+                    command = [str(HERE / "auzef-load-run"), "--url", args.url,
+                               "--concurrency", str(stage), "--workload", str(args.workload),
+                               "--rounds", str(phase_rounds), "--phase", phase, "--stage", str(stage),
+                               "--output-root", str(folder / "stages"), "--confirm-load-test"]
+                    if args.insecure: command.append("--insecure")
+                    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+                    active_child = child
+                    deadline = time.monotonic() + args.max_stage_seconds
+                    while child.poll() is None:
+                        if watcher.status in ("STOP", "WARN") or time.monotonic() >= deadline:
+                            child.terminate()
+                            try: child.wait(timeout=5)
+                            except subprocess.TimeoutExpired: child.kill()
+                            verdict = "STOP" if watcher.status == "STOP" else "WARN_OR_TIMEOUT"
+                            break
+                        time.sleep(1)
+                    output = child.communicate(timeout=5)[0]
+                    active_child = None
+                    match = re.search(r"^Results: (.+)$", output, re.M)
+                    if not match:
+                        if verdict == "PASS": verdict = "FAIL"
+                        summaries.append({"stage": stage, "phase": phase,
+                                          "result": "GENERATOR_INTERRUPTED_OR_FAILED",
+                                          "gate": verdict, "exit_code": child.returncode})
+                        break
+                    stage_dir = Path(match.group(1))
+                    stage_summary = json.loads((stage_dir / "summary.json").read_text(encoding="utf-8"))
+                    summaries.append(stage_summary)
+                    for line in (stage_dir / "client-results.jsonl").read_text(encoding="utf-8").splitlines():
+                        all_results.write(line + "\n")
+                    all_results.flush()
+                    if child.returncode != 0 or watcher.status != "OK":
+                        verdict = "STOP" if watcher.status == "STOP" else "WARN_OR_FAIL"
+                        break
+                    if phase == "warmup":
+                        sampler.phase = "warmup_cooldown"
+                        time.sleep(args.cooldown_seconds)
+                        if watcher.status != "OK":
+                            verdict = "STOP" if watcher.status == "STOP" else "WARN"
+                            break
+                if verdict != "PASS": break
+                sampler.phase = "cooldown"
+                time.sleep(args.cooldown_seconds)
+                if watcher.status != "OK":
+                    verdict = "STOP" if watcher.status == "STOP" else "WARN"
+                    break
+    except KeyboardInterrupt:
+        verdict = "INTERRUPTED"
+    finally:
+        if active_child is not None and active_child.poll() is None:
+            active_child.terminate()
+            try: active_child.wait(timeout=5)
+            except subprocess.TimeoutExpired: active_child.kill()
+        watcher.close()
+        sampler.close()
+    provider, traces, links = collect_server_events(folder, ids, started, env)
+    join = correlate_client_results(folder, summaries, traces, links)
+    provider["trace_join"] = join
+    measurement_checks = {
+        "backend_arrivals": provider["counts"].get("backend:request_arrival", 0),
+        "nginx_requests": sum(v for k, v in provider["counts"].items() if k.startswith("frontend:")),
+        "resource_samples": count_lines(folder / "resource-samples.jsonl"),
+        "db_samples": count_lines(folder / "db-samples.jsonl"),
+        "valid_resource_samples": count_valid_samples(folder / "resource-samples.jsonl", "resource"),
+        "valid_db_samples": count_valid_samples(folder / "db-samples.jsonl", "db"),
+        "trace_joined": join["trace_joined"],
+    }
+    if verdict == "PASS" and (
+        not measurement_checks["valid_resource_samples"] or not measurement_checks["valid_db_samples"]
+        or measurement_checks["backend_arrivals"] < join["client_requests"]
+        or measurement_checks["nginx_requests"] < join["client_requests"]
+        or (join["trace_join_coverage"] is not None and join["trace_join_coverage"] < 0.95)
+    ):
+        verdict = "INCOMPLETE_MEASUREMENT"
+    write_json(folder / "provider-summary.json", provider)
+    write_json(folder / "nginx-summary.json", summarize_nginx(folder))
+    write_json(folder / "server-phase-summary.json", summarize_server_phases(folder))
+    resources = summarize_resources(folder)
+    write_json(folder / "stage-summary.json", {"result": verdict, "stages": summaries,
+                                                "resource_correlations": resources,
+                                                "measurement_checks": measurement_checks,
+                                                "percentile_policy": "p95 descriptive at >=100 successes; p99 at >=1000"})
+    resource_index = {(row["stage"], row["phase"]): row for row in resources}
+    lines = ["# AUZEF load run", "", f"Result: **{verdict}**", "",
+             "| Stage | Phase | Requests | 200 | 429 | 5xx | p95 ms | RPS | Max cgroup MiB | Max worker RSS MiB | DB connections |",
+             "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+    for summary in summaries:
+        resource = resource_index.get((summary["stage"], summary["phase"]), {})
+        p95 = (summary.get("latency_success_ms") or {}).get("p95")
+        cgroup_mib = round(resource["max_cgroup_memory_current"] / 1048576, 1) if resource.get("samples") else "N/A"
+        worker_mib = round(resource["max_worker_rss_kb"] / 1024, 1) if resource.get("samples") else "N/A"
+        lines.append(f"| {summary['stage']} | {summary['phase']} | {summary.get('request_count', 'N/A')} | {summary.get('http_200', 'N/A')} | {summary.get('http_429', 'N/A')} | {summary.get('http_5xx', 'N/A')} | "
+                     f"{p95 if summary.get('p95_sample_sufficient') else 'insufficient'} | {summary.get('requests_per_second', 'N/A')} | "
+                     f"{cgroup_mib} | {worker_mib} | {resource.get('max_db_connections', 'N/A')} |")
+    lines += ["", "p95 needs >=100 successful requests; p99 needs >=1000. Warm-up is excluded from steady decisions.",
+              "", "See stage-summary.json, client-results.jsonl, resource-samples.jsonl, db-samples.jsonl,",
+              "server-phase-summary.json, provider-summary.json and nginx-summary.json for correlation.", ""]
+    (folder / "final-summary.md").write_text("\n".join(lines), encoding="utf-8")
+    print(f"{verdict}: {len(summaries)} phases recorded. Results: {folder}")
+    return 0 if verdict == "PASS" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
