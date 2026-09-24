@@ -141,6 +141,10 @@ def _wire(monkeypatch, provider, spy, *, calendar_rows=(), llm_enabled=True):
 
     monkeypatch.setattr(answer_pipeline, "is_llm_enabled", lambda _db: llm_enabled)
     monkeypatch.setattr(answer_pipeline, "get_llm_provider", lambda _db: provider)
+    monkeypatch.setattr(
+        answer_pipeline, "resolve_llm_request_state",
+        lambda _db: (llm_enabled, provider if llm_enabled else None, None),
+    )
     monkeypatch.setattr(answer_pipeline.QDRANT_PROVIDER, "search", spy.qdrant)
     monkeypatch.setattr(answer_pipeline, "meili_search_safe", spy.meili)
     monkeypatch.setattr(

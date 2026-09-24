@@ -176,6 +176,10 @@ Tüm değişkenler [`.env.example`](.env.example) içinde şablonludur. `docker-
 | `CM_AUTH_SCHEME` | Header şeması, varsayılan `Api-Key` → `Authorization: Api-Key <token>`. |
 | `CM_CHANNEL_SHORTCODE` | Kanal kodu, varsayılan `AUZEF_WEB_SAYFASI_CHATBOT`. |
 | `CM_TIMEOUT` / `CM_MAX_RETRIES` / `CM_VERIFICATION_TTL_MIN` / `CM_CATEGORY_CACHE_TTL` | Opsiyonel ince ayar (10sn / 2 / 10dk / 900sn). |
+| `INTEGRATION_API_KEY` | Çözüm Merkezi'nin salt-okunur `/api/integrations/v1` QnA API'sinde `X-API-Key` olarak kullanacağı ayrı server-to-server secret. |
+
+QnA export/senkronizasyon sözleşmesi için
+[entegrasyon API dokümanına](docs/INTEGRATION_API.md) bakın.
 
 > ⚠️ **`.env` değişikliğini uygulamak için** `restart` YETMEZ — `env_file` değişiklikleri yalnızca container yeniden **oluşturulunca** okunur:
 > ```bash

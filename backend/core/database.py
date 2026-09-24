@@ -61,11 +61,34 @@ class QnA(Base):
     # (CSV ile eklenen QnA'lar sessizce aranamaz oluyordu).
     status = Column(SmallInteger, nullable=False, server_default="1", default=1)
     updated_by = Column(String(255), nullable=True)   # son düzenleyen kullanıcının e-postası (denetim izi)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    # A transaction can begin before an integration watermark and commit after
+    # it. Transaction-start now() would then hide the committed write from the
+    # next changes request; use the statement clock for QnA writes instead.
+    created_at = Column(DateTime, server_default=text("timezone('UTC', clock_timestamp())"))
+    updated_at = Column(
+        DateTime,
+        server_default=text("timezone('UTC', clock_timestamp())"),
+        onupdate=func.timezone("UTC", func.clock_timestamp()),
+    )
 
     queries = relationship("QnAQuery", back_populates="qna", cascade="all, delete-orphan")
     tags = relationship("Tag", secondary="qna_tags", back_populates="qnas")
+
+
+class QnAIntegrationDeletion(Base):
+    """Hard-deleted QnA ids retained for external incremental sync."""
+
+    __tablename__ = "qna_integration_deletions"
+
+    # Deliberately no FK: the canonical qna row no longer exists after delete.
+    qna_id = Column(BigInteger, primary_key=True)
+    deleted_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=text("timezone('UTC', clock_timestamp())"),
+        index=True,
+    )
+
 
 class QnAQuery(Base):                                                                                                                      
     __tablename__ = "qna_queries"                                                                                                         
@@ -356,6 +379,7 @@ class AIConfigAudit(Base):
 
 ADMIN_MODELS = (
     QnA,
+    QnAIntegrationDeletion,
     QnAQuery,
     QnARoutingGuard,
     Tag,
@@ -458,6 +482,10 @@ ADMIN_DDL = (
     "UPDATE qna SET status = 1 WHERE status IS NULL",
     # İçerik değişikliklerinin denetim izi.
     "ALTER TABLE qna ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
+    "ALTER TABLE qna ALTER COLUMN created_at SET DEFAULT timezone('UTC', clock_timestamp())",
+    "ALTER TABLE qna ALTER COLUMN updated_at SET DEFAULT timezone('UTC', clock_timestamp())",
+    "ALTER TABLE qna_integration_deletions ALTER COLUMN deleted_at "
+    "SET DEFAULT timezone('UTC', clock_timestamp())",
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS updated_by VARCHAR(255)",
     # Calendar V2: no guessed year/term backfill.  Existing rows remain visible
     # as legacy current-dataset rows until reviewed in the Calendar CRUD.

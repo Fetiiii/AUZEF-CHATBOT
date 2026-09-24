@@ -30,6 +30,8 @@ from routers.calendar import router as calendar_router
 from routers.solution_center import router as solution_center_router
 from routers.ai_config import router as ai_config_router
 from integrations.solution_center.exceptions import SolutionCenterException
+from integrations.solution_center_qna.observability import integration_request_logging
+from integrations.solution_center_qna.router import router as integration_router
 from services.load_metrics import ENABLED as LOAD_METRICS_ENABLED, LoadMetricsMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +39,7 @@ logger = logging.getLogger("auzef")
 
 
 app = FastAPI(title="AUZEF Akilli Asistan API")
+app.middleware("http")(integration_request_logging)
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +60,7 @@ app.include_router(stats_router)
 app.include_router(calendar_router)
 app.include_router(solution_center_router)
 app.include_router(ai_config_router)
+app.include_router(integration_router)
 app.add_middleware(AdminAuthMiddleware)
 if LOAD_METRICS_ENABLED:
     app.add_middleware(LoadMetricsMiddleware)

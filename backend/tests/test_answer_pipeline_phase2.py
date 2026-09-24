@@ -15,6 +15,10 @@ from services.routing_guards import RoutingGuardPolicy
 class EmptyCalendarDB:
     class Query:
         @staticmethod
+        def filter(*_args):
+            return EmptyCalendarDB.Query()
+
+        @staticmethod
         def all():
             return []
 

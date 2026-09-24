@@ -11,6 +11,7 @@ from sqlalchemy.exc import UnboundExecutionError
 
 ADMIN_TABLE_NAMES = {
     "qna",
+    "qna_integration_deletions",
     "qna_queries",
     "qna_routing_guards",
     "tags",
@@ -160,6 +161,7 @@ def test_all_owned_models_persist_to_their_physical_database():
         Conversation,
         ConversationMessage,
         QnA,
+        QnAIntegrationDeletion,
         QnAQuery,
         QnARoutingGuard,
         QnATag,
@@ -207,6 +209,7 @@ def test_all_owned_models_persist_to_their_physical_database():
                 start_date="01.01.2099",
                 end_date="01.01.2099",
             ),
+            QnAIntegrationDeletion(qna_id=999999),
             user,
         ])
         db.commit()

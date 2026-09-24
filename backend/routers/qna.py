@@ -226,6 +226,18 @@ def delete_qna(qna_id: int, db: Session = Depends(get_db)):
     row = db.query(QnA).filter(QnA.id == qna_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="QnA kaydı bulunamadı.")
+    # QnA hard-delete davranışını korurken dış entegrasyonun daha önce
+    # aldığı kaydı silebilmesi için aynı transaction'da tombstone yaz.
+    execute_admin_sql(
+        db,
+        text(
+            "INSERT INTO qna_integration_deletions (qna_id, deleted_at) "
+            "VALUES (:qna_id, timezone('UTC', clock_timestamp())) "
+            "ON CONFLICT (qna_id) DO UPDATE "
+            "SET deleted_at = EXCLUDED.deleted_at"
+        ),
+        {"qna_id": row.id},
+    )
     db.delete(row)
     db.commit()
 

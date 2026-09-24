@@ -255,6 +255,11 @@ secret değerlerini ekrana basmadan doğrulanmalıdır. `ADMIN_DATABASE_URL`,
 kalamaz. Production, development `DATABASE_URL` fallback'ine güvenmez.
 LLM/Solution Center alanları uygulamanın mevcut optional/conditional davranışına
 göre boş olabilir; preflight bunları keyfi olarak zorunlu yapmaz.
+Salt-okunur Çözüm Merkezi QnA API'si kullanılacaksa yüksek entropili
+`INTEGRATION_API_KEY` değeri `/etc/auzef/backend.env` içinde verilmelidir; gerçek
+değer yalnız secret yönetimi kanalından dağıtılır ve isteklerde `X-API-Key`
+header'ı olarak HTTPS üzerinden gönderilir. Ayrıntılı istemci sözleşmesi için
+[entegrasyon API dokümanına](../../docs/INTEGRATION_API.md) bakın.
 
 ### SHARED INIT
 
