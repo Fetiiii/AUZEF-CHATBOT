@@ -331,6 +331,14 @@ def collect_server_events(folder: Path, ids: dict, since: str, env: dict) -> tup
                             "analyzer_status": analyzer.get("call_status"),
                             "analyzer_latency_ms": analyzer.get("latency_ms"),
                             "analyzer_retry_count": analyzer.get("retry_count"),
+                            # Final category of the logical call (RATE_LIMIT, PROVIDER_5XX, ...).
+                            "analyzer_failure_category": analyzer.get("failure_category"),
+                            # Logical latency (incl. body retries/backoff) vs final physical attempt.
+                            "analyzer_attempt_latency_ms": (analyzer.get("provider_metadata") or {}).get("attempt_latency_ms"),
+                            "analyzer_circuit_skipped": any(
+                                c.get("capability") == "intent_analyzer" and c.get("llm_call_skipped")
+                                for c in trace.get("circuit") or []),
+                            "circuit_opened": sum(c.get("transition") == "opened" for c in trace.get("circuit") or []),
                             "retrieval": [{"retrieval_ms": entry.get("retrieval_ms"),
                                            "qdrant_available": entry.get("qdrant_available"),
                                            "meili_available": entry.get("meili_available")}
@@ -376,6 +384,13 @@ def collect_server_events(folder: Path, ids: dict, since: str, env: dict) -> tup
                "logical_analyzer_calls": sum(row["analyzer_latency_ms"] is not None for row in traces.values()),
                "logical_selector_calls": sum(entry["latency_ms"] is not None for row in traces.values() for entry in row["selectors"]),
                "analyzer_timeout_count": sum(row["analyzer_status"] == "timeout" for row in traces.values()),
+               "analyzer_failure_categories": dict(Counter(
+                   row["analyzer_failure_category"] for row in traces.values() if row.get("analyzer_failure_category"))),
+               "analyzer_retries": sum(row.get("analyzer_retry_count") or 0 for row in traces.values()),
+               "analyzer_retry_exhausted_rate_limit": sum(
+                   row.get("analyzer_failure_category") == "RATE_LIMIT" for row in traces.values()),
+               "analyzer_circuit_skipped": sum(bool(row.get("analyzer_circuit_skipped")) for row in traces.values()),
+               "circuit_opened": sum(row.get("circuit_opened") or 0 for row in traces.values()),
                "selector_timeout_count": sum(entry["status"] == "timeout" for row in traces.values() for entry in row["selectors"]),
                "actual_sdk_attempt_count": None,
                "actual_sdk_retry_count": None}

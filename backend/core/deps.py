@@ -22,6 +22,7 @@ from services.llm_provider import (
     OpenRouterProvider,
 )
 from services.llm_runtime import AI_CONFIG_CACHE, ConfigStatus
+from services.test_overrides import apply_test_analyzer_override
 
 logger = logging.getLogger("auzef")
 
@@ -224,7 +225,9 @@ def get_llm_provider(db: Session):
         if client is None:
             return None
         clients[capability] = client
-    return ManagedLLMProvider(runtime.configs, clients, runtime=runtime)
+    # Inert unless the instrumented test stack sets the override (test-only).
+    configs = apply_test_analyzer_override(runtime.configs)
+    return ManagedLLMProvider(configs, clients, runtime=runtime)
 
 
 def _admin_llm_flag(db: Session) -> bool:

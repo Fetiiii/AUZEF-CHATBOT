@@ -27,6 +27,7 @@ from services.llm_config import (
 )
 from services.candidate_eligibility import SelectorCandidate
 from services.selector import build_selector_prompt, parse_selector_output
+from services.test_overrides import openrouter_base_url
 from services.intent_analyzer import (
     build_intent_analyzer_prompt,
     parse_intent_analysis,
@@ -442,7 +443,8 @@ class OpenRouterProvider(_OpenAICompatibleProvider):
         super().__init__(
             model=model,
             api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
-            base_url="https://openrouter.ai/api/v1",
+            # Inert unless the instrumented test stack sets a loopback proxy.
+            base_url=openrouter_base_url("https://openrouter.ai/api/v1"),
             provider_name="openrouter",
         )
 

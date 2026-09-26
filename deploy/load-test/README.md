@@ -199,3 +199,39 @@ python -m unittest discover -s deploy/load-test/tests -p 'test_*.py' -q
 These tests use fake Docker and a local fake widget server. They test the
 preflight STOP gate, watcher/snapshot behavior, state isolation and output
 privacy. They are **not** capacity results.
+
+## Intent Analyzer diagnostics and controlled Analyzer load
+
+Two container-side tools exercise the production Intent Analyzer path without
+changing configuration, registry, prompt or parser. Both run through
+`docker exec -i auzef_backend python - '<json>' < <tool>` and print only
+numeric/categorical fields (plus, for the diagnosis tool, the raw model output
+for offline scoring under `outputs/`).
+
+- `analyzer-diagnose.py` — per-case diagnosis with optional overrides
+  (`model_override`, `reasoning_effort_override`, `max_tokens_override`,
+  `system_append`). Records logical latency, final attempt latency,
+  `retry_count`, `failure_category`, parse/schema/invariant results.
+- `analyzer-load.py` — controlled logical-call load for one model:
+  `{"model": "openai/gpt-6-luna", "reasoning_effort": "none", "calls": 60,
+  "concurrency": 2, "interval_seconds": 1.0, "cases": [{"current": "...",
+  "previous": ["..."]}]}`. Each logical call goes through a fresh
+  `CircuitBreaker` (production `BreakerConfig` from env) →
+  `analyze_intents_with_result` → `_availability_kind` → `record`. The summary
+  reports logical calls, body-level physical attempts, RATE_LIMIT, retries,
+  retry-exhausted, circuit open/skip counts, success and degraded rates, and
+  logical vs final-attempt latency.
+
+The OpenAI-compatible adapter owns the retry loop (SDK-internal retries are
+disabled) under one logical deadline per capability (`LOGICAL_DEADLINE_SECONDS`
+in `services/llm_config.py`); HTTP-level and body-level errors (HTTP 200 +
+`{"error": {"code": 429}}`) use the SDK's retry decisions and backoff, and each
+retry emits an `llm_retry` load-metric event. `retry_count` therefore counts
+every adapter retry. This lives in the backend image: the container only runs
+it after the test image is rebuilt; `analyzer-load.py` reports
+`adapter_body_retry_support` so a run against an old image is recognisable.
+
+`fault-proxy.py` is a TEST-ONLY loopback proxy in front of OpenRouter that
+rewrites a seeded fraction of successful answers into body-level 429s and can
+hold requests to exercise timeouts. The backend reaches it only through the
+gated hook `AUZEF_TEST_OPENROUTER_BASE_URL` (+ `AUZEF_LOAD_METRICS=1`).
