@@ -345,7 +345,7 @@ def test_variant_run_leaves_breaker_trace_and_config_untouched(tmp_path, monkeyp
     summary = run_benchmark(snaps, backend, identity, tmp_path, case_ids=set(split["dev"]))
     assert summary.executed == len(split["dev"])
     assert all(call["messages"][0]["content"] == a.text for call in captured)
-    assert {k for call in captured for k in call} == {"model", "messages", "max_tokens", "temperature"}
+    assert {k for call in captured for k in call} == {"model", "messages", "max_tokens", "temperature", "timeout"}
     assert LLM_CIRCUIT_BREAKER._states == {}
     assert (db.query(AIConfigVersion).count(), db.query(AICapabilityConfig).count()) == before
 

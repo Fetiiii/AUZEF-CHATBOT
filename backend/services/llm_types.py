@@ -32,7 +32,13 @@ class LLMResponseMetadata:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     finish_reason: Optional[str] = None
+    # Retries performed by the adapter within one logical invocation
+    # (HTTP-level and body-level; SDK-internal retries are disabled on the
+    # OpenAI-compatible path). None = not tracked (e.g. Gemini).
     retry_count: Optional[int] = None
+    # Duration of the final physical provider attempt. The invocation's own
+    # latency_ms is the logical latency including retries and backoff.
+    attempt_latency_ms: Optional[float] = None
 
     def to_trace_dict(self) -> dict:
         return {
@@ -43,6 +49,7 @@ class LLMResponseMetadata:
             "output_tokens": self.output_tokens,
             "finish_reason": self.finish_reason,
             "retry_count": self.retry_count,
+            "attempt_latency_ms": self.attempt_latency_ms,
         }
 
 

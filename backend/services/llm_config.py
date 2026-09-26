@@ -77,6 +77,26 @@ _DEFAULT_MAX_TOKENS = {
     LLMCapability.SELECTOR: 32,
 }
 
+# Provider-call time budget (application level). The upstream proxy cuts the
+# widget request at 120 s (nginx proxy_read_timeout); an unset timeout used to
+# fall back to the SDK default (600 s read, retried), which let one hung
+# selector call outlive the request. Invariant enforced by the adapter:
+#   logical invocation deadline < request budget < nginx 120 s
+# Worst request = analyzer deadline + 2 selector intents * selector deadline
+# = 30 + 2*15 = 60 s, leaving room for retrieval, degraded path and DB writes.
+# Values come from observed latencies (2026-09 load artifacts): analyzer p99
+# ~6 s / max 17.6 s (long inputs), selector p99 ~2.6 s / max 8.3 s.
+# A managed/env ``timeout_seconds`` still sets the per-attempt timeout; the
+# logical deadline always caps the whole invocation (attempts + backoff).
+DEFAULT_ATTEMPT_TIMEOUT_SECONDS = {
+    LLMCapability.INTENT_ANALYZER: 20.0,
+    LLMCapability.SELECTOR: 10.0,
+}
+LOGICAL_DEADLINE_SECONDS = {
+    LLMCapability.INTENT_ANALYZER: 30.0,
+    LLMCapability.SELECTOR: 15.0,
+}
+
 
 def default_model(provider: str) -> str:
     try:

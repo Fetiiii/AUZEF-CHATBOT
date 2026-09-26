@@ -201,6 +201,8 @@ class DecisionTrace:
                     invocation.status.value if invocation else result.status.value
                 ),
                 "outcome_status": result.status.value,
+                # Safe coarse code (RATE_LIMIT / PROVIDER_5XX / ...), never error text.
+                "failure_category": invocation.failure_category if invocation else None,
                 "parse_status": result.parse_status.value,
                 "fallback_to_single": result.fallback_to_single,
                 "latency_ms": invocation.latency_ms if invocation else None,
@@ -297,6 +299,7 @@ class DecisionTrace:
                 "invalid_output": outcome == "invalid_output",
                 "model_error": outcome == "model_error",
                 "timeout": outcome == "timeout",
+                "failure_category": invocation.failure_category if invocation else None,
                 "latency_ms": invocation.latency_ms if invocation else None,
                 "provider_metadata": (
                     invocation.metadata.to_trace_dict() if invocation else None

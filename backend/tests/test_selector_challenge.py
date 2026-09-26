@@ -251,7 +251,7 @@ def test_no_reasoning_payload_is_unchanged(monkeypatch):
     for provider in ("openrouter", "openai"):
         bound, completions = _openai_compatible(provider, None, monkeypatch)
         bound.ask_with_result("soru", _candidates())
-        assert set(completions.calls[0]) == {"model", "messages", "max_tokens", "temperature"}
+        assert set(completions.calls[0]) == {"model", "messages", "max_tokens", "temperature", "timeout"}
 
 
 def test_unsupported_reasoning_fails_before_any_request(monkeypatch):

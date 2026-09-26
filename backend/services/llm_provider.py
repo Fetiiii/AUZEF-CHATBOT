@@ -1,16 +1,23 @@
 import copy
+import json
 import os
+import random
 import time
+from services import load_metrics
 from services.load_metrics import Timer
 from abc import ABC, abstractmethod
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Optional, Sequence
+import openai
 from openai import OpenAI
 from google import genai
 from google.genai import types as genai_types
 from dotenv import load_dotenv
 
 from services.llm_config import (
+    DEFAULT_ATTEMPT_TIMEOUT_SECONDS,
+    LOGICAL_DEADLINE_SECONDS,
     EffectiveLLMConfig,
     EffectiveLLMConfigSet,
     LLMCapability,
@@ -36,6 +43,166 @@ from services.llm_types import (
 )
 
 load_dotenv()
+
+# Body-level provider errors: some OpenAI-compatible gateways (OpenRouter)
+# answer HTTP 200 with a top-level {"error": {"code": 429, ...}} and no
+# choices. The SDK only retries on HTTP status, so such a response reached
+# ``choices[0]`` as a TypeError (MODEL_ERROR/UNKNOWN, never retried). These
+# values mirror the OpenAI SDK's own HTTP retry policy (openai._constants and
+# BaseClient._should_retry) so a body-level status behaves like the HTTP one.
+_RETRY_INITIAL_DELAY_SECONDS = 0.5
+_RETRY_MAX_DELAY_SECONDS = 8.0
+_SDK_DEFAULT_MAX_RETRIES = 2
+_RETRYABLE_BODY_STATUSES = frozenset({408, 409, 429})
+# Indirection points for tests; production uses the real clock/jitter.
+_sleep = time.sleep
+_jitter = random.random
+
+
+class ProviderBodyError(Exception):
+    """Provider error carried in a 2xx response body instead of the status line.
+
+    ``status_code`` lets the existing ``_failure_category`` classify it exactly
+    like an HTTP error (429 → RATE_LIMIT, 5xx → PROVIDER_5XX). The provider's
+    message is deliberately not stored: it is never logged or traced.
+    """
+
+    def __init__(self, status_code: Optional[int]):
+        super().__init__(f"provider body error (status={status_code})")
+        self.status_code = status_code
+
+
+def _body_error_status(response) -> Optional[int]:
+    """HTTP-style status from a top-level ``error`` object, if well-formed."""
+    extra = getattr(response, "model_extra", None)
+    error = extra.get("error") if isinstance(extra, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(code, bool):
+        return None
+    try:
+        status = int(code)
+    except (TypeError, ValueError):
+        return None
+    return status if 100 <= status <= 599 else None
+
+
+def _is_retryable_body_status(status: Optional[int]) -> bool:
+    return status is not None and (status in _RETRYABLE_BODY_STATUSES or status >= 500)
+
+
+def _retry_delay_seconds(retry_index: int) -> float:
+    """SDK formula: min(0.5 * 2**n, 8) * (1 - 0.25 * U)."""
+    base = min(_RETRY_INITIAL_DELAY_SECONDS * 2 ** retry_index, _RETRY_MAX_DELAY_SECONDS)
+    return base * (1 - 0.25 * _jitter())
+
+
+# A retry is not started unless at least this much of the logical deadline
+# remains for the next attempt.
+_MIN_ATTEMPT_SECONDS = 0.5
+_MAX_RETRY_AFTER_SECONDS = 60.0     # same ceiling as the SDK
+
+
+class LogicalDeadlineExceeded(TimeoutError):
+    """The whole logical invocation ran out of time (classified TIMEOUT)."""
+
+
+class AttemptWallClockTimeout(openai.APITimeoutError):
+    """One attempt exceeded its wall-clock budget while the body kept arriving.
+
+    httpx's ``timeout`` is an inactivity timeout (reset by every received
+    chunk), so an upstream that trickles bytes would never time out. Being an
+    APITimeoutError it is classified/retried exactly like an SDK timeout.
+    """
+
+
+def _create_with_wall_clock(client, kwargs: dict, attempt_deadline: float):
+    """chat.completions.create with a hard wall-clock bound on reading the body.
+
+    Reads through the SDK's streaming-response interface (same request, same
+    error handling for non-2xx) and aborts once ``attempt_deadline`` passes.
+    Clients without that interface (test doubles) use the plain call.
+    """
+    completions = client.chat.completions
+    streaming = getattr(completions, "with_streaming_response", None)
+    if streaming is None:
+        return completions.create(**kwargs)
+    with streaming.create(**kwargs) as raw:
+        buffer = bytearray()
+        for chunk in raw.iter_bytes():
+            buffer.extend(chunk)
+            if time.perf_counter() > attempt_deadline:
+                raise AttemptWallClockTimeout(request=raw.http_request)
+    try:
+        body = json.loads(bytes(buffer) or b"{}")
+    except ValueError:
+        raise ProviderBodyError(None) from None
+    return _completion_view(body if isinstance(body, dict) else {})
+
+
+def _completion_view(body: dict):
+    """Minimal attribute view of a chat completion body (fields the adapter uses)."""
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else None
+    choices = [
+        SimpleNamespace(
+            message=SimpleNamespace(content=(c.get("message") or {}).get("content")),
+            finish_reason=c.get("finish_reason"),
+        )
+        for c in (body.get("choices") or []) if isinstance(c, dict)
+    ]
+    return SimpleNamespace(
+        id=body.get("id"), model=body.get("model"), choices=choices,
+        usage=SimpleNamespace(prompt_tokens=usage.get("prompt_tokens"),
+                              completion_tokens=usage.get("completion_tokens")) if usage else None,
+        # Same shape the SDK exposes for unknown top-level fields.
+        model_extra={k: v for k, v in body.items() if k not in ("id", "model", "choices", "usage")},
+    )
+
+
+def _logical_deadline(config: EffectiveLLMConfig) -> float:
+    return LOGICAL_DEADLINE_SECONDS.get(config.capability, max(LOGICAL_DEADLINE_SECONDS.values()))
+
+
+def _default_attempt_timeout(config: EffectiveLLMConfig) -> float:
+    return DEFAULT_ATTEMPT_TIMEOUT_SECONDS.get(
+        config.capability, max(DEFAULT_ATTEMPT_TIMEOUT_SECONDS.values())
+    )
+
+
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    """Retry-After(-ms) from an HTTP error response, SDK-compatible bounds."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if not headers:
+        return None
+    for name, scale in (("retry-after-ms", 0.001), ("retry-after", 1.0)):
+        raw = headers.get(name)
+        if raw is None:
+            continue
+        try:
+            value = float(raw) * scale
+        except (TypeError, ValueError):
+            return None
+        return value if 0 < value <= _MAX_RETRY_AFTER_SECONDS else None
+    return None
+
+
+def _retry_delay_for(exc: Exception, retry_index: int) -> Optional[float]:
+    """Delay before the next attempt, or None when the SDK would not retry.
+
+    Mirrors openai BaseClient._should_retry: timeouts and connection errors,
+    x-should-retry, 408/409/429 and 5xx. Body-level errors use their status.
+    """
+    if isinstance(exc, ProviderBodyError):
+        return _retry_delay_seconds(retry_index) if _is_retryable_body_status(exc.status_code) else None
+    if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
+        return _retry_delay_seconds(retry_index)
+    if isinstance(exc, openai.APIStatusError):
+        headers = getattr(exc.response, "headers", None) or {}
+        should = headers.get("x-should-retry")
+        if should == "false":
+            return None
+        if should == "true" or _is_retryable_body_status(exc.status_code):
+            return _retry_after_seconds(exc) or _retry_delay_seconds(retry_index)
+    return None
 
 
 class BaseLLMProvider(ABC):
@@ -178,10 +345,29 @@ class _OpenAICompatibleProvider(BaseLLMProvider):
         # Validated before the request: raises instead of silently dropping.
         reasoning = reasoning_request_fields(self.provider_name, config.reasoning_effort)
         started = time.perf_counter()
+        # One logical invocation with ONE deadline. The adapter owns the retry
+        # loop (SDK retries disabled) so attempts + backoff can never outlive
+        # LOGICAL_DEADLINE_SECONDS; the circuit breaker (recorded once by the
+        # caller) sees only the final outcome. Retry decisions and backoff
+        # mirror the SDK's own HTTP policy, and body-level errors (HTTP 200 +
+        # {"error": ...}) are treated like their HTTP status.
+        deadline = started + _logical_deadline(config)
+        attempt_timeout = (
+            config.timeout_seconds if config.timeout_seconds is not None
+            else _default_attempt_timeout(config)
+        )
+        retries = 0
         try:
-            client = self.client
-            if config.max_retries is not None:
-                client = client.with_options(max_retries=config.max_retries)
+            # Same budget the SDK would have applied on this client.
+            budget = (
+                config.max_retries if config.max_retries is not None
+                else getattr(self.client, "max_retries", _SDK_DEFAULT_MAX_RETRIES)
+            )
+            if not isinstance(budget, int) or isinstance(budget, bool):
+                budget = _SDK_DEFAULT_MAX_RETRIES
+            # SDK-internal retries off: the loop below owns them (deadline).
+            with_options = getattr(self.client, "with_options", None)
+            client = with_options(max_retries=0) if callable(with_options) else self.client
             kwargs = {
                 "model": config.model,
                 "messages": [
@@ -191,12 +377,34 @@ class _OpenAICompatibleProvider(BaseLLMProvider):
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
             }
-            # Omit unset optional values: passing None changes SDK defaults.
-            if config.timeout_seconds is not None:
-                kwargs["timeout"] = config.timeout_seconds
             kwargs.update(reasoning)
-            with Timer("llm_provider"):
-                response = client.chat.completions.create(**kwargs)
+            while True:
+                remaining = deadline - time.perf_counter()
+                if remaining < _MIN_ATTEMPT_SECONDS:
+                    raise LogicalDeadlineExceeded()
+                kwargs["timeout"] = min(attempt_timeout, remaining)
+                attempt_started = time.perf_counter()
+                try:
+                    with Timer("llm_provider"):
+                        response = _create_with_wall_clock(
+                            client, kwargs, attempt_started + kwargs["timeout"]
+                        )
+                    if not getattr(response, "choices", None):
+                        raise ProviderBodyError(_body_error_status(response))
+                except Exception as exc:
+                    delay = _retry_delay_for(exc, retries) if retries < budget else None
+                    if delay is None or time.perf_counter() + delay + _MIN_ATTEMPT_SECONDS > deadline:
+                        raise
+                    retries += 1
+                    load_metrics.event(
+                        "llm_retry", kind=_failure_category(exc),
+                        status=getattr(exc, "status_code", None), retry=retries,
+                        delay_ms=round(delay * 1000, 1), model=config.model,
+                    )
+                    _sleep(delay)
+                    continue
+                attempt_ms = (time.perf_counter() - attempt_started) * 1000
+                break
             usage = getattr(response, "usage", None)
             choice = response.choices[0]
             return LLMInvocationResult(
@@ -210,12 +418,12 @@ class _OpenAICompatibleProvider(BaseLLMProvider):
                     input_tokens=getattr(usage, "prompt_tokens", None),
                     output_tokens=getattr(usage, "completion_tokens", None),
                     finish_reason=_enum_value(getattr(choice, "finish_reason", None)),
-                    # SDK exposes retry policy, not the retries actually used.
-                    retry_count=None,
+                    retry_count=retries,
+                    attempt_latency_ms=attempt_ms,
                 ),
             )
         except Exception as exc:
-            return _error_result(exc, config.model, started)
+            return _error_result(exc, config.model, started, retry_count=retries)
 
 
 class OpenAIProvider(_OpenAICompatibleProvider):
@@ -356,7 +564,8 @@ def _failure_category(exc: Exception) -> str:
 
 
 def _error_result(
-    exc: Exception, requested_model: str, started: float
+    exc: Exception, requested_model: str, started: float,
+    retry_count: Optional[int] = None,
 ) -> LLMInvocationResult:
     return LLMInvocationResult(
         status=(
@@ -366,7 +575,9 @@ def _error_result(
         ),
         text=None,
         latency_ms=(time.perf_counter() - started) * 1000,
-        metadata=LLMResponseMetadata(requested_model=requested_model),
+        metadata=LLMResponseMetadata(
+            requested_model=requested_model, retry_count=retry_count
+        ),
         error_type=exc.__class__.__name__,
         failure_category=_failure_category(exc),
     )

@@ -1,3 +1,4 @@
+import pytest
 """Typed LLM outcomes retain V1 public behavior while preserving causes."""
 from types import SimpleNamespace
 
@@ -112,7 +113,9 @@ def test_openai_adapter_preserves_metadata_transmits_reasoning_and_omits_structu
     assert meta.provider_response_id == "provider-response-id"
     assert meta.input_tokens == 12 and meta.output_tokens == 1
     assert meta.finish_reason == "stop"
-    assert "timeout" not in captured
+    # Unset timeout no longer means "SDK default 600 s": the application-level
+    # per-attempt default for the selector is sent (bounded by the deadline).
+    assert captured["timeout"] == pytest.approx(10.0, abs=0.5)
     # Phase 7B-Prep: a configured reasoning level is transmitted (never dropped).
     assert captured["reasoning_effort"] == "high"
     # Phase 4 uses strict JSON + Pydantic; native response_format is not sent.
@@ -151,7 +154,8 @@ def test_openai_explicit_timeout_and_retry_are_applied(monkeypatch):
 
     provider.client = Client()
     assert provider.ask_with_result("s", _candidates()).status is LLMOutcomeStatus.SUCCESS
-    assert captured["client_options"] == {"max_retries": 4}
+    # SDK retries off; the adapter applies the configured budget itself.
+    assert captured["client_options"] == {"max_retries": 0}
     assert captured["request"]["timeout"] == 8
 
 
