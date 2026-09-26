@@ -1,0 +1,62 @@
+{
+  "info": {
+    "name": "AUZEF Çözüm Merkezi QnA Integration API",
+    "description": "Salt-okunur QnA full ve incremental senkronizasyonu. Önce örnek environment dosyasını içe aktarın; gerçek base_url ve api_key değerlerini güvenli kanaldan alın.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Key", "type": "string" },
+      { "key": "value", "value": "{{api_key}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Get QnA",
+      "request": {
+        "method": "GET",
+        "description": "Aktif QnA kayıtları. has_more=true ise next_cursor değerini cursor parametresine koyun. Tüm sayfalar bitince response.until değerini ilk changes isteğinin since değeri olarak kullanın.",
+        "url": {
+          "raw": "{{base_url}}/qna?limit=500",
+          "host": ["{{base_url}}"],
+          "path": ["qna"],
+          "query": [
+            { "key": "limit", "value": "500" },
+            { "key": "cursor", "value": "", "disabled": true }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get QnA Changes",
+      "request": {
+        "method": "GET",
+        "description": "since dahil olmak üzere upsert/delete değişiklikleri. Bütün sayfalarda aynı since değerini kullanın; başarılı tamamlamadan sonra response.until değerini environment'taki since alanına kaydedin.",
+        "url": {
+          "raw": "{{base_url}}/qna/changes?since={{since}}&limit=500",
+          "host": ["{{base_url}}"],
+          "path": ["qna", "changes"],
+          "query": [
+            { "key": "since", "value": "{{since}}" },
+            { "key": "limit", "value": "500" },
+            { "key": "cursor", "value": "", "disabled": true }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Meta",
+      "request": {
+        "method": "GET",
+        "description": "Aktif kayıt sayısı ve son dataset versiyonu; sync cursor'ı yerine kullanılmaz.",
+        "url": {
+          "raw": "{{base_url}}/meta",
+          "host": ["{{base_url}}"],
+          "path": ["meta"]
+        }
+      }
+    }
+  ]
+}

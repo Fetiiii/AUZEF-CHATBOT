@@ -7,10 +7,10 @@ Entegrasyon için bir search endpoint'i henüz sunulmamaktadır.
 
 ## Bağlantı ve kimlik doğrulama
 
-Örnek base URL:
+Base URL (`<api-host>` yerine karşı ekibe ayrıca iletilen adres kullanılmalıdır):
 
 ```text
-https://chatbot.example.edu.tr/api/integrations/v1
+https://<api-host>/api/integrations/v1
 ```
 
 Her istek yalnız aşağıdaki header ile yapılır:
@@ -25,15 +25,26 @@ Eksik/yanlış anahtar `401`, sunucuda `INTEGRATION_API_KEY` tanımlı olmaması
 `Authorize` alanı `X-API-Key` header'ını destekler; dokümanda secret default'u
 veya örneği bulunmaz.
 
-Production'da yüksek entropili anahtar secret yönetim sistemiyle üretilip
-`/etc/auzef/backend.env` içinde verilir:
+Yalnız üç entegrasyon endpoint'ini gösteren Swagger UI:
+`https://<api-host>/api/integrations/v1/docs`.
+Makine tarafından okunabilir şema:
+`https://<api-host>/api/integrations/v1/openapi.json`.
+Bu iki sayfa API key olmadan açılır. Gerçek `/qna`, `/qna/changes` ve `/meta`
+istekleri için Swagger'daki `Authorize` düğmesinden API key girilmelidir.
 
-```dotenv
-INTEGRATION_API_KEY=
-```
+Gerçek API key, base URL ve varsa test ortamı/Swagger URL'si karşı ekibe repo
+dışında güvenli kanaldan verilmelidir. Örnek Postman
+[Collection](postman/AUZEF_QnA_Integration.postman_collection.json) ve
+[environment](postman/AUZEF_QnA_Integration.postman_environment.json)
+dosyalarını içe aktarın; environment'taki `base_url` ve `api_key` değerlerini
+doldurun. `since` değerini ilk başarılı full sync'in `until` değeriyle değiştirin.
+Örnek environment gerçek secret veya production URL içermez. Ana backend
+`/docs` yolu production Nginx şablonunda yayınlanmaz; yukarıdaki entegrasyon
+Swagger'ı mevcut `/api/integrations/v1/` kuralı kapsamındadır.
 
 Anahtarın kendisi loglanmaz. Nginx production şablonu bu namespace'i istemci
 IP'si başına 10 istek/saniye, 20 burst ile sınırlar; aşım `429` döndürür.
+Ortama uygulanan gerçek sınır dağıtım ekibiyle teyit edilmelidir.
 
 ## Endpoint'ler
 
@@ -56,7 +67,7 @@ Parametreler:
 curl --fail --get \
   -H "X-API-Key: $INTEGRATION_API_KEY" \
   --data-urlencode "limit=500" \
-  https://chatbot.example.edu.tr/api/integrations/v1/qna
+  'https://<api-host>/api/integrations/v1/qna'
 ```
 
 ```json
@@ -100,7 +111,7 @@ curl --fail --get \
   -H "X-API-Key: $INTEGRATION_API_KEY" \
   --data-urlencode "since=2026-09-20T10:00:00Z" \
   --data-urlencode "limit=500" \
-  https://chatbot.example.edu.tr/api/integrations/v1/qna/changes
+  'https://<api-host>/api/integrations/v1/qna/changes'
 ```
 
 ```json
@@ -143,6 +154,12 @@ Böylece kayıt `qna` tablosundan kalksa da silme bilgisi kaybolmaz.
 
 ### Dataset durumu: `GET /meta`
 
+```sh
+curl --fail \
+  -H "X-API-Key: $INTEGRATION_API_KEY" \
+  'https://<api-host>/api/integrations/v1/meta'
+```
+
 ```json
 {
   "dataset_version": "2026-09-23T12:40:00Z|upsert|42",
@@ -175,7 +192,7 @@ version/timestamp `null`, count `0` olur.
 Bu akış client saatine dayanmaz. Hata durumunda `since` ilerletilmez; aynı
 istek tekrarı idempotent `upsert`/`delete` olarak işlenebilir.
 
-## Hatalar ve deployment
+## Hatalar ve operasyon notları
 
 - `400`: bozuk veya farklı sorguya ait cursor
 - `401`: API key eksik/yanlış
@@ -183,16 +200,11 @@ istek tekrarı idempotent `upsert`/`delete` olarak işlenebilir.
 - `429`: production reverse proxy rate limit'i
 - `503`: API key yapılandırılmamış ya da DB geçici olarak erişilemez
 
-Yeni tombstone tablosu normal `python -m scripts.init_system all` shared-init
-adımında oluşur. Denetimli manuel migration gerekirse:
-
-```sh
-cd backend
-python -m scripts.migrate_qna_integration_deletions upgrade
-```
-
-Rollback komutu tabloyu ve birikmiş delete bilgisini sileceği için veri kaybı
-etkisi vardır; yalnız entegrasyon kullanıma alınmadan önce uygulanmalıdır.
+`429`/`503` için gecikmeli tekrar deneyin; tüm sayfalar başarıyla işlenmeden
+`since` değerini ilerletmeyin. Sunucu tarafında `INTEGRATION_API_KEY`
+environment değişkeni gereklidir; gerçek değer repository veya bu örnek
+dosyalarda bulunmaz. HTTPS zorunludur. IP allowlist uygulanıyorsa gerekli
+istemci IP bilgileri dağıtım ekibiyle ayrıca paylaşılmalıdır.
 
 Gelecekte search gerekirse aynı router modülü altında
 `GET /api/integrations/v1/search` eklenebilir. Bugün bu endpoint yoktur ve

@@ -46,7 +46,8 @@ def _database_unavailable(endpoint: str) -> HTTPException:
     summary="List the active QnA dataset",
     description=(
         "Returns active canonical QnA records from PostgreSQL using cursor "
-        "pagination."
+        "pagination. The until value stays fixed across pages; use it as the "
+        "since value for /qna/changes after a successful full sync."
     ),
 )
 def list_qna(
@@ -73,8 +74,9 @@ def list_qna(
     response_model=ChangesResponse,
     summary="List incremental QnA changes",
     description=(
-        "Returns upserts and deletes after since, bounded by a server-generated "
-        "until timestamp."
+        "Returns upserts and deletes at or after since, bounded by a "
+        "server-generated until timestamp. Follow all cursor pages with the "
+        "same since, then use until as the next since."
     ),
 )
 def list_qna_changes(

@@ -454,6 +454,42 @@ def test_openapi_exposes_api_key_scheme_and_read_only_routes(app):
     )
 
 
+def test_integration_swagger_is_public_but_only_documents_protected_qna_routes(
+    client, app, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_API_KEY", TEST_API_KEY)
+
+    docs = client.get(f"{API_ROOT}/docs")
+    schema_response = client.get(f"{API_ROOT}/openapi.json")
+    assert docs.status_code == 200
+    assert f"{API_ROOT}/openapi.json" in docs.text
+    assert schema_response.status_code == 200
+
+    schema = schema_response.json()
+    paths = {f"{API_ROOT}/qna", f"{API_ROOT}/qna/changes", f"{API_ROOT}/meta"}
+    assert set(schema["paths"]) == paths
+    assert all(set(schema["paths"][path]) == {"get"} for path in paths)
+    scheme = schema["components"]["securitySchemes"]["APIKeyHeader"]
+    assert scheme == {"type": "apiKey", "in": "header", "name": "X-API-Key"}
+    assert all(
+        schema["paths"][path]["get"]["security"] == [{"APIKeyHeader": []}]
+        for path in paths
+    )
+    assert "example" not in scheme and "default" not in scheme
+    assert TEST_API_KEY not in schema_response.text
+
+    for path in paths:
+        assert client.get(path).status_code == 401
+
+    # Documentation routes must not alter the main application's OpenAPI surface.
+    main_paths = app.openapi()["paths"]
+    assert f"{API_ROOT}/docs" not in main_paths
+    assert f"{API_ROOT}/openapi.json" not in main_paths
+    assert "/api/qna" in main_paths
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+
+
 def test_database_errors_return_safe_503(client, monkeypatch, caplog):
     from integrations.solution_center_qna.service import QnAIntegrationService
 
