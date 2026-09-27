@@ -14,9 +14,16 @@ Two prompt identities exist:
     module attribute still observe the change.
 
 ``variant_a_v1``
-    The internal-pilot prompt, stored as data at
+    The first internal-pilot prompt, stored as data at
     ``services/prompts/selector/variant_a_v1.md`` and fingerprinting to
-    ``1aed5688…``.
+    ``1aed5688…``. Immutable: it is the 2026-09-26 selector baseline and the
+    rollback target for ``variant_a_v2``.
+
+``variant_a_v2``
+    The pilot-candidate prompt (freeze amendment 5): every ``variant_a_v1``
+    line verbatim plus narrow rules for premise correction, over-specific
+    candidates, relative-time answers and a safe specific-to-general fallback
+    (outputs/performance-readiness/PILOT_CANDIDATE_VALIDATION.md §4).
 
 Why the Variant A text exists twice
 -----------------------------------
@@ -45,6 +52,8 @@ PROMPT_VERSION_ENV = "SELECTOR_PROMPT_VERSION"
 
 PRODUCTION_V2 = "production_v2"
 VARIANT_A_V1 = "variant_a_v1"
+VARIANT_A_V2 = "variant_a_v2"
+VARIANT_A_V2_1 = "variant_a_v2_1"
 
 #: The version served when nothing is configured. Changing this would change
 #: public production behaviour, so the internal pilot overrides it by config
@@ -55,9 +64,13 @@ PROMPT_DIR = Path(__file__).with_name("prompts") / "selector"
 
 #: File-backed versions. ``production_v2`` is intentionally absent: it is read
 #: from the runtime module so there is exactly one copy of that text.
-_FILE_PROMPTS = {VARIANT_A_V1: "variant_a_v1.md"}
+_FILE_PROMPTS = {
+    VARIANT_A_V1: "variant_a_v1.md",
+    VARIANT_A_V2: "variant_a_v2.md",
+    VARIANT_A_V2_1: "variant_a_v2_1.md",
+}
 
-PROMPT_VERSIONS = (PRODUCTION_V2, VARIANT_A_V1)
+PROMPT_VERSIONS = (PRODUCTION_V2, VARIANT_A_V1, VARIANT_A_V2, VARIANT_A_V2_1)
 
 
 class UnknownSelectorPromptVersion(ValueError):
