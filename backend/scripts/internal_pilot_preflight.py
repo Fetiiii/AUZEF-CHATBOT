@@ -4,13 +4,20 @@ Usage (from ``backend/``)::
 
     python -m scripts.internal_pilot_preflight manifest [--write]
     python -m scripts.internal_pilot_preflight preflight [--json]
+    python -m scripts.internal_pilot_preflight amendment5 [--write] [--gate-evidence FILE]
+    python -m scripts.internal_pilot_preflight candidate [--json]
 
 ``manifest`` regenerates ``deploy/internal-pilot/answer-pipeline-freeze.json``.
 Regeneration is deterministic apart from ``created_at``, which is excluded
 from the fingerprint.
 
 ``preflight`` compares the live runtime against the frozen baseline and exits
-non-zero on any mismatch. It never modifies configuration: a mismatch is an
+non-zero on any mismatch.
+
+``candidate`` is the authoritative preflight for the pilot candidate (freeze
+amendment 5). Unlike ``preflight``/``runtime`` it reads the **DB active
+managed config** the runtime actually serves, so it must run where the
+backend's database is reachable (inside the backend container). It never modifies configuration: a mismatch is an
 operator decision, not something this tool silently repairs.
 """
 from __future__ import annotations
@@ -31,9 +38,16 @@ from services.internal_pilot_freeze import (  # noqa: E402
     repo_root,
     run_preflight,
 )
+from services.internal_pilot_candidate import (  # noqa: E402
+    AMENDMENT_5_PATH,
+    build_freeze_amendment_5,
+    collect_live_state,
+    run_candidate_preflight,
+)
 from services.internal_pilot_runtime import run_runtime_preflight  # noqa: E402
 
 MANIFEST_PATH = Path("deploy/internal-pilot/answer-pipeline-freeze.json")
+AMENDMENT_5_FILE = Path(*AMENDMENT_5_PATH)
 
 
 def _git_commit() -> str:
@@ -129,6 +143,48 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def cmd_amendment5(args: argparse.Namespace) -> int:
+    """Generate the pilot-candidate amendment (never rewrites amendments 1-4)."""
+    target = repo_root() / AMENDMENT_5_FILE
+    created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if target.exists():
+        try:
+            created_at = json.loads(target.read_text(encoding="utf-8"))["created_at"]
+        except (ValueError, KeyError):
+            pass
+    evidence = None
+    if args.gate_evidence:
+        evidence = json.loads(Path(args.gate_evidence).read_text(encoding="utf-8"))
+    amendment = build_freeze_amendment_5(
+        git_commit=args.git_commit or _git_commit(), created_at=created_at,
+        gate_evidence=evidence,
+    )
+    payload = json.dumps(amendment, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    if args.write:
+        target.write_text(payload, encoding="utf-8")
+        print(f"wrote {AMENDMENT_5_FILE}")
+        print(f"INTERNAL_PILOT_AMENDMENT_5_FINGERPRINT = {amendment['amendment_fingerprint']}")
+    else:
+        print(payload, end="")
+    return 0
+
+
+def cmd_candidate(args: argparse.Namespace) -> int:
+    """Validate the live runtime (DB managed config included) against amendment 5."""
+    from core.database import SessionLocal
+
+    with SessionLocal() as db:
+        report = run_candidate_preflight(collect_live_state(db))
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        _print_report("INTERNAL_PILOT candidate preflight (amendment 5)", report)
+        print(f"\nINTERNAL_PILOT_CANDIDATE_PREFLIGHT = {report.status}")
+        if report.failures:
+            print("Configuration was NOT modified. Resolve each mismatch explicitly.")
+    return 0 if report.passed else 1
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Check the committed manifest still matches its own fingerprint."""
     target = _manifest_file()
@@ -166,6 +222,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     runtime.add_argument("--json", action="store_true")
     runtime.set_defaults(func=cmd_runtime)
+
+    amendment5 = sub.add_parser("amendment5", help="generate freeze amendment 5")
+    amendment5.add_argument("--write", action="store_true")
+    amendment5.add_argument("--git-commit", default=None)
+    amendment5.add_argument("--gate-evidence", default=None,
+                            help="JSON file with analyzer/selector gate results")
+    amendment5.set_defaults(func=cmd_amendment5)
+
+    candidate = sub.add_parser(
+        "candidate", help="validate DB managed config + runtime against amendment 5"
+    )
+    candidate.add_argument("--json", action="store_true")
+    candidate.set_defaults(func=cmd_candidate)
 
     args = parser.parse_args(argv)
     return args.func(args)

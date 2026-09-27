@@ -1,0 +1,125 @@
+{
+  "amendment_fingerprint": "2e991cbae613f92b72f874a4c413c53553dc825993ed38b03cf562d3a11575de",
+  "amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_5",
+  "classification": {
+    "candidate_budget_change": false,
+    "eligibility_or_threshold_change": false,
+    "input_policy_change": true,
+    "intent_analyzer_budget_change": true,
+    "intent_analyzer_model_change": true,
+    "intent_analyzer_prompt_change": true,
+    "parser_contract_change": false,
+    "pilot_candidate_contract": true,
+    "provider_retry_or_deadline_change": false,
+    "retrieval_change": false,
+    "selector_config_change": false,
+    "selector_model_change": false,
+    "selector_prompt_change": true
+  },
+  "created_at": "2026-09-26T23:47:13Z",
+  "gate_evidence": {
+    "analyzer": {
+      "change": "possessive/deictic qualifier rule (H-Q1 class)",
+      "fresh_holdout": "PASS 24/24, cases sha256 de7e1421...",
+      "prompt_fingerprint": "0d2c008633c854995580966b40970062963d5e79fc1491eb1270d2ea1ced9936",
+      "regression_gate_set": "PASS 34/34 (0 truncation, 0 parser reject, p95 2967 ms)",
+      "used_holdout_regression": "26/26 semantic correct (dev evidence only)"
+    },
+    "evidence_dir": "outputs/performance-readiness/20260927-selector-v21-full",
+    "recorded": "2026-09-27",
+    "selector": {
+      "contract_prompt": "variant_a_v2 (unchanged; gate FAIL)",
+      "evaluated_prompt": "variant_a_v2_1 1cf4cd22 (not in contract)",
+      "pool_sha256": "f25a3df93d9113bb39fce484d9f02a98b472a9f667e4ff45776ead712ed2b19d",
+      "v21_full_gate": "SELECTOR_PROMPT_ONLY_APPROACH_UNSTABLE: new wrong SELECT C03 and regression G03 in non-tuned cases; F03 wrong SELECT persists"
+    },
+    "verdict": "PILOT_CANDIDATE_NEEDS_WORK"
+  },
+  "git_commit": "7fd0fd74fa06597e54d8a46919702ed9d8033655",
+  "historical_parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "input_policy": {
+    "backend_max_chars": 500,
+    "over_limit_behaviour": "HTTP 422 request validation",
+    "widget_max_chars": 500
+  },
+  "intent_analyzer": {
+    "config_fingerprint": "0181aa63cac4912085dff1934c09674c59d80815cdfdefc8a2f5c2d4a279e835",
+    "config_source": "DB active managed config (services.ai_registry)",
+    "max_retries": null,
+    "max_tokens": 600,
+    "model": "openai/gpt-6-luna",
+    "prompt_fingerprint": "0d2c008633c854995580966b40970062963d5e79fc1491eb1270d2ea1ced9936",
+    "provider": "openrouter",
+    "qualification_reference": "LUNA_QUALIFICATION_REPORT 2026-09-25 + PILOT_CANDIDATE_VALIDATION 2026-09-27",
+    "reasoning_effort": "none",
+    "reasoning_transmitted": true,
+    "registry_entry": {
+      "allowed_capabilities": [
+        "intent_analyzer"
+      ],
+      "allowed_reasoning_efforts": [
+        "none"
+      ],
+      "display_name": "GPT-6 Luna (OpenRouter)",
+      "model_identifier": "openai/gpt-6-luna",
+      "provider": "openrouter",
+      "supports_reasoning_effort": true,
+      "supports_structured_output": true
+    },
+    "temperature": 0.0,
+    "timeout_seconds": null
+  },
+  "milestone": "INTERNAL_PILOT",
+  "parent_amendment_fingerprint": "f92d8eb2a7e809ae15e256280cbe7c707480e2b261553df15aa62707a8cfee98",
+  "parent_amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_4",
+  "parents_are_immutable": true,
+  "parser": {
+    "contract_fingerprint": "1ab2f476efa039392815b3db8bb12cb5570ebe9d898f0884e38ff4dd24b584bc",
+    "parser_v3": false,
+    "strictness": "strict=True, extra=forbid, Literal[1, 2]"
+  },
+  "preserved": {
+    "attempt_timeout_seconds": {
+      "intent_analyzer": 20.0,
+      "selector": 10.0
+    },
+    "candidate_order": "production",
+    "logical_deadline_seconds": {
+      "intent_analyzer": 30.0,
+      "selector": 15.0
+    },
+    "provider_policy": {
+      "applies_to": [
+        "selector",
+        "intent_analyzer"
+      ],
+      "direct_gemini_calls_allowed": false,
+      "direct_openai_calls_allowed": false,
+      "inference_provider": "openrouter",
+      "openrouter_only": true
+    },
+    "selector_config_fingerprint": "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e"
+  },
+  "rationale": "Pilot candidate per PILOT_CANDIDATE_VALIDATION (2026-09-27): Luna analyzer with explicit reasoning none and a 600-token budget sized for a 500-character input limit; analyzer prompt states the strict parser's source/segment/word-provenance contract; selector variant_a_v2 adds narrow premise-correction, over-specific, relative-time and safe fallback rules. Parser unchanged.",
+  "rollback": {
+    "intent_analyzer_config_fingerprint": "512fe08df368e629a4960ea8f55bfa19874f49cf12f12b58ed8a681b00ab5ee3",
+    "intent_analyzer_max_tokens": 600,
+    "intent_analyzer_mechanism": "POST /api/ai-config/config/rollback/<ROLLBACK_VERSION> printed by deploy/internal-pilot/activate-luna.py; never version 1 (gpt-4o-mini @300)",
+    "intent_analyzer_model": "openai/gpt-4o-mini",
+    "selector_mechanism": "SELECTOR_PROMPT_VERSION=variant_a_v1 and restart",
+    "selector_prompt_fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+    "selector_prompt_version": "variant_a_v1"
+  },
+  "schema_version": 1,
+  "selector": {
+    "config_fingerprint": "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e",
+    "max_tokens": 32,
+    "model": "openai/gpt-4o-mini",
+    "prompt_fingerprint": "d9c8be9b6b519265f3cfff6d5f9c697844b9832e3f05bc0192a7a96fd18018b1",
+    "prompt_version": "variant_a_v2",
+    "prompt_version_env": "SELECTOR_PROMPT_VERSION",
+    "provider": "openrouter",
+    "reasoning_effort": null,
+    "temperature": 0.0
+  }
+}

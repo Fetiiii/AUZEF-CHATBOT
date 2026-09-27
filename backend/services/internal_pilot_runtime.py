@@ -27,13 +27,16 @@ import ast
 from pathlib import Path
 from typing import Mapping, Optional
 
+from services.internal_pilot_candidate import (
+    SELECTOR_PROMPT_FINGERPRINT,
+    SELECTOR_PROMPT_VERSION as PILOT_PROMPT_VERSION,
+)
 from services.internal_pilot_freeze import (
     CheckResult,
     PreflightReport,
     SELECTOR_CONFIG_FINGERPRINT,
     SELECTOR_MAX_TOKENS,
     SELECTOR_MODEL,
-    SELECTOR_PROMPT_FINGERPRINT,
     SELECTOR_PROVIDER,
     SELECTOR_REASONING_LABEL,
     SELECTOR_TEMPERATURE,
@@ -53,7 +56,8 @@ from services.selector_prompt_catalog import (
 #: pilot stack will resolve, not whatever happens to be in the caller's shell.
 PILOT_ENV_FILE = Path("deploy") / "internal-pilot" / "pilot.env.example"
 
-PILOT_PROMPT_VERSION = "variant_a_v1"
+# The pilot serves the amendment-5 candidate prompt (variant_a_v2). The
+# original freeze and amendments 1-4 keep recording variant_a_v1 as history.
 REQUIRED_TRACE_REQUEST_FIELDS = ("request_id", "conversation_id", "timestamp")
 REQUIRED_TRACE_SOURCES = ("calendar", "meili", "qdrant")
 
