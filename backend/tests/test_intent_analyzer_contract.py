@@ -901,11 +901,11 @@ def test_amendment_4_is_only_a_context_detection_bug_fix():
 
 
 def test_amendment_4_tracks_prompt_and_preserves_selector_contract():
-    from services.internal_pilot_freeze import intent_analyzer_prompt_fingerprint
-
+    # Amendment 5 now tracks the live prompt; amendment 4 keeps the prompt
+    # fingerprint it recorded (same convention as amendments 2 and 3).
     a4 = _amendment4()
     assert a4["changed"]["intent_analyzer_prompt_fingerprint"] == (
-        intent_analyzer_prompt_fingerprint()
+        "0bd2a42977187de11252c716007f3d3b21e229afd0af77f9884c3daffced5a42"
     )
     assert a4["preserved"]["selector_prompt_fingerprint"] == SELECTOR_FP
     assert a4["preserved"]["parser_strictness"] == (
