@@ -284,7 +284,9 @@
     '</div>' +
     '<div class="input-area">' +
     '<div class="input-wrap">' +
-    '<textarea id="w-input" rows="1" placeholder="Sorunuzu yazın..." aria-label="Mesaj"></textarea>' +
+    // maxlength = backend core/limits.py CHAT_MESSAGE_MAX_CHARS (500); a backend
+    // test keeps the two equal. Over-long messages are rejected server-side (422).
+    '<textarea id="w-input" rows="1" maxlength="500" placeholder="Sorunuzu yazın..." aria-label="Mesaj"></textarea>' +
     '</div>' +
     '<button class="send-btn" id="w-send" aria-label="Gönder">' +
     '<svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">' +

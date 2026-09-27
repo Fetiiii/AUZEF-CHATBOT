@@ -7,16 +7,16 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.database import Conversation, ConversationMessage, SessionLocal, utcnow
 from core.deps import (
-    MAX_MESSAGE_LEN,
     get_db,
     is_maintenance_enabled,
     log_query as _log_query,
 )
+from core.limits import CHAT_MESSAGE_MAX_CHARS
 from services.answer_pipeline import (
     answer_question as _answer_question,
     guard_safe_suggestions,
@@ -46,7 +46,9 @@ CHAT_CONTEXT_MAX_CHARS = _positive_int_env("CHAT_CONTEXT_MAX_CHARS", 1200)
 
 
 class WidgetChatRequest(BaseModel):
-    message: str
+    # Sınırsız girdi = embedding CPU'su + LLM token maliyeti. Sınır sunucuda
+    # zorunlu (aşan istek 422); widget aynı değeri maxlength olarak taşır.
+    message: str = Field(max_length=CHAT_MESSAGE_MAX_CHARS)
     conversation_id: Optional[int] = None
     # Sahiplik token'ı: konuşma ilk cevapla birlikte verilir, sonraki
     # mesajlarda geri gönderilir. Yanlış/eksik token = yeni konuşma açılır
@@ -202,9 +204,6 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     q = body.message.strip()
     if not q:
         return {"answer": "Lütfen bir soru yazın."}
-    if len(q) > MAX_MESSAGE_LEN:
-        # Sınırsız girdi = embedding CPU'su + LLM token maliyeti. Nazikçe kes.
-        return {"answer": f"Sorunuz çok uzun. Lütfen {MAX_MESSAGE_LEN} karakterden kısa şekilde yazın."}
 
     ip = request.client.host if request.client else None
 

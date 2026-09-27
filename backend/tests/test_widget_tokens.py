@@ -163,8 +163,10 @@ def test_widget_falls_back_to_suggestions_when_no_answer(client, db):
 
 
 def test_message_length_cap(client):
-    d = _chat(client, "x" * 2000)
-    assert "çok uzun" in d["answer"]
+    # Pilot input policy: the limit is enforced by request validation (422),
+    # not by a 200 "çok uzun" answer. Details: tests/test_chat_input_limit.py.
+    response = client.post("/widget-chat", json={"message": "x" * 2000})
+    assert response.status_code == 422
 
 
 def test_widget_request_uses_one_correlated_pii_safe_trace(client, monkeypatch):
