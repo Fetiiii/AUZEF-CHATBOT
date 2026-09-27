@@ -1,0 +1,113 @@
+{
+ "description": "Approved reconciliation decisions for the reviewed QnA workbook (local/dev apply). Hash-pinned: apply fails fast if the workbook or the DB rows differ.",
+ "approved_by": "project owner (user decision, 2026-09-27)",
+ "workbook_file": "qna_export_all_links_https.xlsx",
+ "workbook_sha256": "57d996e5c5a3c1b02b31302ac8636c0599712717e7ae68fd6b39db1b1729a6c5",
+ "sync_reviewed_content": true,
+ "approved_red_content_difference": [
+  {
+   "excel_row": 208,
+   "db_id": 533,
+   "question": "İstanbul Üniversitesi Carrahpaşa  öğrencisiyim AKSİS'e giriş yapamıyorum sisteme nereden giriş yapabilirim?",
+   "old_answer_sha256": "c0f9425ae3dff0aa2c662346d0ffecfad12805449b2e87011fd7db58342401df"
+  },
+  {
+   "excel_row": 211,
+   "db_id": 536,
+   "question": "YÖS sınavına kimler girebilir?",
+   "old_answer_sha256": "e92ee01e53c40de7ef523d0c45e06b20a70cce80ec546578e91a5180f0a6c4e9"
+  },
+  {
+   "excel_row": 212,
+   "db_id": 537,
+   "question": "YÖS sınavı sonucumu nasıl öğrenirim?",
+   "old_answer_sha256": "e92ee01e53c40de7ef523d0c45e06b20a70cce80ec546578e91a5180f0a6c4e9"
+  },
+  {
+   "excel_row": 217,
+   "db_id": 542,
+   "question": "Türkçe Yeterlilik belgesi almam gerekiyor örnek sınav sorularına ulaşabilir miyim?",
+   "old_answer_sha256": "474eddf99fde702a60bb348d9834d09e7e3967b2235b857a75b0c143f0ae812e"
+  },
+  {
+   "excel_row": 235,
+   "db_id": 560,
+   "question": "Uzaktan öğretim tezsiz yüksek lisans öğrencisiyim Ders materyali sistemine nereden giriş yapabilirim",
+   "old_answer_sha256": "ce47072bc02c1a502821eaf2ce22d641428308ca3298178aee2ef13bc8de8a52"
+  }
+ ],
+ "question_edits": [
+  {
+   "excel_row": 48,
+   "db_id": 373,
+   "old_question": "Neden 86 TL fazla para ödüyorum?",
+   "reviewed_question": "Neden 239,5 TL fazla para ödüyorum?",
+   "old_question_sha256": "02af79732da3cc9910fcd9781d4f683edd2216ec75a94000fa00ff8b17f80fe3",
+   "reviewed_question_sha256": "53877ba91bf4704e871bf5aa33e402bd25fe69c1f939554fcd91447d19ec7798"
+  },
+  {
+   "excel_row": 49,
+   "db_id": 374,
+   "old_question": "Sağlıkta Lisans Tamamlama programında okuyorum neden 86 tl fazla ödüyorum?",
+   "reviewed_question": "Sağlıkta Lisans Tamamlama programında okuyorum neden 239,5 TL fazla ödüyorum?",
+   "old_question_sha256": "fae7964efc65bdef4baacff86d325b35c563338b287b3ce604730c530d95f28a",
+   "reviewed_question_sha256": "fb94bc36117a3b2ce818cba781e303553b07247220dca6fab1d0064252d4be34"
+  },
+  {
+   "excel_row": 176,
+   "db_id": 501,
+   "old_question": "Açık öğretim programlarının canlı dersleri var mı?",
+   "reviewed_question": "Açıköğretim programlarının canlı dersleri var mı?",
+   "old_question_sha256": "513f368bfd6f93870a353b758469ffad65f592a8835ce19fe6da8998c2833697",
+   "reviewed_question_sha256": "b15bc4e0c1a36d3fa28d9c66312c1f983a3cc971cef25b7a927edb0e848ca49c"
+  },
+  {
+   "excel_row": 190,
+   "db_id": 515,
+   "old_question": "Açık öğretim programlarında hangi materyaller bulunmaktadır?",
+   "reviewed_question": "Açıköğretim programlarında hangi materyaller bulunmaktadır?",
+   "old_question_sha256": "82a2fbbf370e379ad26187e7eff04a4c52e56873686a41f7c660770d11439074",
+   "reviewed_question_sha256": "3f63ab2339bb4154075049288ba543407b3cc79c821b80939d49f4c07516c8e0"
+  },
+  {
+   "excel_row": 209,
+   "db_id": 534,
+   "old_question": "DD, DC harf notlu derslerim var bunlardan telafiye girmek zorunda mıyım?",
+   "reviewed_question": "DD, DC harf notlu derslerim var bunlardan bütünleme sınavına girmek zorunda mıyım?",
+   "old_question_sha256": "37a7ea3485a8fcfdf20cca37df742249c9be5faec6eab542c399eaef2b771fb8",
+   "reviewed_question_sha256": "743910cc2c1e26f805726ef2eea202287d6aa2919484320614982670576b0324"
+  },
+  {
+   "excel_row": 210,
+   "db_id": 535,
+   "old_question": "Telafi (Bütünleme) sınavı için başvuru yapmam gerekiyor mu?",
+   "reviewed_question": "Bütünleme (Telafi) sınavı için başvuru yapmam gerekiyor mu?",
+   "old_question_sha256": "41cd2797f55ca7d930a03e1febbaf6d04899d0de139a8c3b114af92c97ffd0fe",
+   "reviewed_question_sha256": "8890f00f0d299f277c47f6fc4d9c798a86cdf5530909740f006861b943cb2c87"
+  },
+  {
+   "excel_row": 214,
+   "db_id": 539,
+   "old_question": "Final ve Bütünleme (Telafi) sınavında hangi ünitelerden sorumlu oluruz?",
+   "reviewed_question": "Bitirme (Final) ve Bütünleme (Telafi) sınavında hangi ünitelerden sorumlu oluruz?",
+   "old_question_sha256": "0e65ad9bcba6affc12403393d6f80495aef8aa9db31b5bdb7ede8df70dd95db4",
+   "reviewed_question_sha256": "da8f561541d0fb4c374462268916d30124f25199a40acfc127fe481d4ada553a"
+  },
+  {
+   "excel_row": 237,
+   "db_id": 562,
+   "old_question": "Telafi sınavında DD DC harf notlu derslerimden sınava girdim düşük aldım hangi notum geçerli olur?",
+   "reviewed_question": "Bütünleme sınavında DD, DC harf notlu derslerimden sınava girdim düşük aldım hangi notum geçerli olur?",
+   "old_question_sha256": "6320e0cc4c208af33bce1dc8d44d01d2b57d5857a8d2d925c3294b8540cba575",
+   "reviewed_question_sha256": "f630a1c83bcf4220ffe3e789b5b3baed414d2c59217258a0b6dd4faa95118c12"
+  },
+  {
+   "excel_row": 272,
+   "db_id": 597,
+   "old_question": "Kayıt tarihleri ne zamandır?",
+   "reviewed_question": "Kayıt tarihleri ne zaman?",
+   "old_question_sha256": "5c9e8e15c9b8e27a7796e8b848f39f28f6b0186e754d572fe63bc9473ceb4497",
+   "reviewed_question_sha256": "1dbdf121b09883679875f4ec6cc7fc56f81d1c72c7d9777e63876a7be1632126"
+  }
+ ]
+}
