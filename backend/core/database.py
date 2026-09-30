@@ -320,6 +320,8 @@ class AIModelRegistry(Base):
     supports_structured_output = Column(SmallInteger, nullable=False, default=0, server_default="0")
     supports_reasoning_effort = Column(SmallInteger, nullable=False, default=0, server_default="0")
     allowed_reasoning_efforts = Column(Text, nullable=False, default="[]", server_default="[]")  # JSON list
+    # 0 = the model does not accept a sampling temperature (the adapter omits it).
+    supports_temperature = Column(SmallInteger, nullable=False, default=1, server_default="1")
     # UNTESTED | QUALIFIED | LEGACY_APPROVED | BLOCKED
     qualification_status = Column(String(30), nullable=False, default="UNTESTED", server_default="UNTESTED")
     qualified_at = Column(DateTime, nullable=True)
@@ -492,6 +494,8 @@ ADMIN_DDL = (
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS academic_year VARCHAR(9)",
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS term VARCHAR(16)",
     "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS aliases TEXT NOT NULL DEFAULT '[]'",
+    # Model capability: temperature support (default 1 keeps existing models unchanged).
+    "ALTER TABLE ai_model_registry ADD COLUMN IF NOT EXISTS supports_temperature SMALLINT NOT NULL DEFAULT 1",
     # Phase 6: AI config history and audit are append-only at the DB level.
     *AI_APPEND_ONLY_DDL,
 )

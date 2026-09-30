@@ -377,6 +377,7 @@ def retrieve_calendar_candidates(
         "calendar_year_eligible_count": 0,
         "calendar_term_eligible_count": 0,
         "calendar_event_match_count": 0,
+        "calendar_other_term_suppressed_count": 0,
         "calendar_candidates_returned": 0,
         "calendar_candidate_ids": [],
         "calendar_candidate_terms": [],
@@ -451,6 +452,16 @@ def retrieve_calendar_candidates(
     snapshot["calendar_event_match_count"] = len(scored)
     if not scored:
         return finish(CalendarNoMatchReason.NO_EVENT_MATCH)
+    if explicit_term is None and config.current_term is not None:
+        # No term in the question: the current term answers it. Another
+        # term's row is only a fallback when no current-term or GENERAL row
+        # matches the event; otherwise the selector would see e.g. both the
+        # GUZ and the BAHAR final and could answer with the wrong term's date.
+        preferred = [item for item in scored
+                     if term_from_row(item[0]) in (config.current_term, CalendarTerm.GENERAL)]
+        if preferred:
+            snapshot["calendar_other_term_suppressed_count"] = len(scored) - len(preferred)
+            scored = preferred
 
     scored.sort(key=lambda item: (
         -item[1], -item[2], -item[3], -item[4],

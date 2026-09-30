@@ -376,8 +376,11 @@ class _OpenAICompatibleProvider(BaseLLMProvider):
                     {"role": "user", "content": user},
                 ],
                 "max_tokens": config.max_tokens,
-                "temperature": config.temperature,
             }
+            # Capability-driven: a model without temperature support has
+            # config.temperature None and gets no temperature field at all.
+            if config.temperature is not None:
+                kwargs["temperature"] = config.temperature
             kwargs.update(reasoning)
             while True:
                 remaining = deadline - time.perf_counter()
@@ -479,10 +482,9 @@ class GeminiProvider(BaseLLMProvider):
         reasoning_request_fields(self.provider_name, config.reasoning_effort)
         started = time.perf_counter()
         try:
-            generate_config_kwargs = {
-                "max_output_tokens": config.max_tokens,
-                "temperature": config.temperature,
-            }
+            generate_config_kwargs = {"max_output_tokens": config.max_tokens}
+            if config.temperature is not None:
+                generate_config_kwargs["temperature"] = config.temperature
             client = self._client_for_config(config)
             with Timer("llm_provider"):
                 response = client.models.generate_content(

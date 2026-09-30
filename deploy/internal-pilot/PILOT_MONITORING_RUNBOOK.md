@@ -1,24 +1,27 @@
 # Internal pilot monitoring runbook (A-08)
 
 Use this from the final preflight and smoke through every pilot day. It uses the
-always-on `decision_trace` v7 log; it does not require the load-test-only
-`AUZEF_LOAD_METRICS` instrumentation. The current pilot candidate is not yet
-approved: final KB, Selector, freeze and pilot environment must be recorded
-before release. See the [master inventory](../../outputs/performance-readiness/PRODUCTION_READINESS_MASTER_INVENTORY.md)
+always-on `decision_trace` log (schema v8 since amendment 6: adds
+`request.user_message_id` and per-selector `prompt_version`/`prompt_fingerprint`);
+it does not require the load-test-only `AUZEF_LOAD_METRICS` instrumentation.
+The pilot candidate is freeze amendment 6 (INTERNAL_PILOT_CANDIDATE, not
+production-qualified): Luna analyzer + Luna selector with `variant_a_v3_contract`.
+Pilot evaluation export: `backend/scripts/pilot_evaluation_export.py` (read-only,
+masked, review hints only); DB/config check: `backend/scripts/pilot_db_validation.py`. See the [master inventory](../../outputs/performance-readiness/PRODUCTION_READINESS_MASTER_INVENTORY.md)
 and [final reacceptance watchlist](../../docs/answer-pipeline-v2/INTERNAL_PILOT_FINAL_REACCEPTANCE_REPORT.md).
 
 ## Fill before the first pilot request
 
 | Item | Pilot value |
 |---|---|
-| Pilot backend host and topology (A-03) | **TBD by release owner** |
-| Backend log source: Compose, journald, or institution collector | **TBD by operator** |
-| Edge/LB/Nginx access and error log source, including 429 and 5xx | **TBD by operator** |
+| Pilot backend host and topology (A-03) | Single server, Docker Compose (`auzef_backend`, `auzef_db`, `auzef_meili`, `auzef_qdrant`, frontend/Nginx), intranet-only access for AUZEF staff, low traffic; no multi-node/LB. **Host name/IP: TBD by release owner** |
+| Backend log source: Compose, journald, or institution collector | Docker json-file log of `auzef_backend` (rotates at 5 × 20 MB; lost when the container is recreated) + daily archive `deploy/internal-pilot/pilot_log_archive.sh` → `/var/log/auzef-pilot/decision-trace-YYYY-MM-DD.log.gz` (decision_trace lines only). **Archive host path owner: TBD by operator** |
+| Edge/LB/Nginx access and error log source, including 429 and 5xx | Frontend/Nginx container logs (`docker compose logs frontend`) on the same host; confirm `/widget-chat` access logging is enabled. **Exact location: TBD by operator** |
 | Operator who checks twice daily | **TBD by release owner** |
 | Backend/AI responder | **TBD by release owner** |
 | AUZEF content reviewer and decision channel | **TBD by release owner** |
 | Release owner who can pause/resume the pilot | **TBD by release owner** |
-| Final KB fingerprint, Selector prompt/model and pilot commit | **TBD after freeze** |
+| Final KB fingerprint, Selector prompt/model and pilot commit | KB `b53e0458…`; Selector `openai/gpt-6-luna` + `variant_a_v3_contract` (`cdeea795…`), config `f6fcb614…`; analyzer config `e74b94a3…`; amendment 6 `ac6cd24f…`; **pilot commit TBD (A-09)** |
 
 Do not start the pilot with an unfilled log source or responder. Confirm that
 the edge access log actually records `/widget-chat` status codes; some Nginx
@@ -27,6 +30,29 @@ cannot establish the edge 429 rate. Keep provider and model unchanged during
 the pilot. After any approved AI config or provider change, rerun the final
 candidate preflight and short smoke before admitting pilot traffic.
 
+## Daily log archive (required during the pilot)
+
+Traces live only in the rotated container log. Schedule the archive once a
+day shortly after 00:00 UTC and run it manually **before every backend
+container recreate** (with today's date) so no pilot day is lost:
+
+```bash
+# cron on the pilot host (single server, Docker)
+15 0 * * *  /opt/auzef/deploy/internal-pilot/pilot_log_archive.sh >> /var/log/auzef-pilot/archive.log 2>&1
+# before `docker compose up -d backend` / image rollout:
+deploy/internal-pilot/pilot_log_archive.sh "$(date -u +%F)"
+```
+
+The script keeps only `decision_trace` lines (no raw message text, tokens,
+IPs, TC/SMS details or keys), never overwrites an existing day, writes 0640
+files with a `.sha256` sidecar and deletes archives older than
+`PILOT_LOG_RETENTION_DAYS` (default 120). Evaluation export later:
+
+```bash
+zcat /var/log/auzef-pilot/decision-trace-2026-10-*.log.gz | docker exec -i auzef_backend \
+  python -m scripts.pilot_evaluation_export --from 2026-10-01 --to 2026-10-31 --output-dir /tmp/pilot-export
+```
+
 ## Start of shift and after each deployment
 
 1. Record UTC time, deployed commit, KB fingerprint and effective AI config.
@@ -34,22 +60,24 @@ candidate preflight and short smoke before admitting pilot traffic.
    candidate preflight from `backend`:
 
    ```bash
-   python -m scripts.internal_pilot_preflight candidate --json
+   python -m scripts.internal_pilot_preflight pilot --scope live --json   # amendment 6, in the backend container
+   python -m scripts.internal_pilot_preflight pilot --scope static --json # amendment 6, in a repo checkout
    ```
 
-   A nonzero exit means **no pilot activation or expansion**. This command
-   reads the active DB config; it does not change it. The candidate contract
-   currently points to an unsuccessful Selector variant and must be finalized
-   after Selector selection. A passing config preflight does **not** override
-   a failed Selector gate: the release owner must also check the final gate
-   evidence and KB freeze record before activation.
+   A nonzero exit means **no pilot activation or expansion**. These commands
+   read the active DB config, KB fingerprint and search counts; they change
+   nothing. The candidate is freeze amendment 6 (INTERNAL_PILOT_CANDIDATE:
+   Luna + `variant_a_v3_contract`), a product decision without an independent
+   fresh-holdout qualification; the release owner accepts that explicitly.
+   Also run `python -m scripts.pilot_db_validation` (calendar year/term,
+   LLM_ENABLED, super_admin, managed config).
 2. Run the short E2E smoke from a machine that can reach the pilot's public
    Nginx/LB endpoint and its backend logs. Compose does not publish backend
    port 8000 to the host. Set `PILOT_BASE_URL` to the actual pilot URL. For
    local Compose logs:
 
    ```bash
-   python tests/e2e/internal_pilot/run.py --base-url "$PILOT_BASE_URL" --suite smoke --preflight candidate --preflight-via compose --trace-source compose
+   python tests/e2e/internal_pilot/run.py --base-url "$PILOT_BASE_URL" --suite smoke --preflight pilot --preflight-via compose --trace-source compose
    ```
 
    Use `--trace-source journal` on the production app host, or `--trace-log`

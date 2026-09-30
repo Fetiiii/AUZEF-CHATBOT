@@ -111,7 +111,9 @@ class EffectiveLLMConfig:
     provider: str
     model: str
     reasoning_effort: Optional[ReasoningEffort] = None
-    temperature: float = 0.0
+    # None = the model does not accept a temperature (registry
+    # supports_temperature=False); the adapter then omits the request field.
+    temperature: Optional[float] = 0.0
     max_tokens: int = 5
     timeout_seconds: Optional[float] = None
     max_retries: Optional[int] = None

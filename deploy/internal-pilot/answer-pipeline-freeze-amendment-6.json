@@ -1,0 +1,164 @@
+{
+  "amendment_fingerprint": "ac6cd24f5cd3c01c8a35f996dc71552ad9c73508a56dffdc83c318a026c6b2cf",
+  "amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_6",
+  "answer_pipeline": {
+    "candidate_order": "production",
+    "decision_trace_schema_version": 8
+  },
+  "calendar": {
+    "explicit_term_policy": "unchanged (named term + GENERAL)",
+    "implicit_term_policy": "question without a term: current-term and GENERAL rows only; another term's row is a fallback only when neither matches the event",
+    "reference": "P-01 (smoke 2026-09-29: GUZ current, 'Final sınavları ne zaman?' offered the BAHAR final)",
+    "trace_field": "calendar_other_term_suppressed_count"
+  },
+  "classification": {
+    "calendar_candidate_policy_change": true,
+    "candidate_budget_change": false,
+    "decision_trace_schema_change": true,
+    "eligibility_or_threshold_change": false,
+    "input_policy_change": false,
+    "intent_analyzer_budget_change": false,
+    "intent_analyzer_model_change": false,
+    "intent_analyzer_prompt_change": false,
+    "intent_analyzer_transport_change": true,
+    "kb_or_search_pin_added": true,
+    "parser_contract_change": false,
+    "provider_retry_or_deadline_change": false,
+    "registry_capability_change": true,
+    "retrieval_change": false,
+    "selector_config_change": true,
+    "selector_model_change": true,
+    "selector_prompt_change": true
+  },
+  "created_at": "2026-09-29T12:32:56Z",
+  "deadlines": {
+    "attempt_timeout_seconds": {
+      "intent_analyzer": 20.0,
+      "selector": 10.0
+    },
+    "logical_deadline_seconds": {
+      "intent_analyzer": 30.0,
+      "selector": 15.0
+    }
+  },
+  "gate_evidence": null,
+  "git_commit": "840f2718844d15dbab11d8e10c8dc416783f38df",
+  "historical_parent_freeze_fingerprint": "c7081ff54d959d183e7964498720dce7866461e72c3fa407c7346ea3cf32c5c6",
+  "input_policy": {
+    "backend_max_chars": 500,
+    "widget_max_chars": 500
+  },
+  "intent_analyzer": {
+    "config_fingerprint": "e74b94a3bf521115c98018e1ec6519a906eba157ded0f47928969c21cc95df23",
+    "config_fingerprint_amendment_5": "0181aa63cac4912085dff1934c09674c59d80815cdfdefc8a2f5c2d4a279e835",
+    "identity_change": "transport only: temperature field no longer sent (never applied by the model)",
+    "max_retries": null,
+    "max_tokens": 600,
+    "model": "openai/gpt-6-luna",
+    "prompt_fingerprint": "0d2c008633c854995580966b40970062963d5e79fc1491eb1270d2ea1ced9936",
+    "provider": "openrouter",
+    "qualification_reference": "LUNA_QUALIFICATION_REPORT 2026-09-25 + PILOT_CANDIDATE_VALIDATION 2026-09-27",
+    "reasoning_effort": "none",
+    "temperature": null,
+    "temperature_sent": false,
+    "timeout_seconds": null
+  },
+  "knowledge_base": {
+    "active_qna": 322,
+    "active_queries": 2667,
+    "dataset_fingerprint": "b53e0458a0baec83518a989a1515f197ce83568f939ec43c8a3d2e861bf903ab",
+    "source": "KB_FREEZE_V1.md (local/dev); pilot DB needs the same dataset"
+  },
+  "milestone": "INTERNAL_PILOT",
+  "not_qualified_as": [
+    "PRODUCTION_QUALIFIED",
+    "FINAL_SELECTOR_QUALIFIED"
+  ],
+  "parent_amendment_fingerprint": "2e991cbae613f92b72f874a4c413c53553dc825993ed38b03cf562d3a11575de",
+  "parent_amendment_id": "INTERNAL_PILOT_FREEZE_AMENDMENT_5",
+  "parents_are_immutable": true,
+  "parser": {
+    "contract_fingerprint": "1ab2f476efa039392815b3db8bb12cb5570ebe9d898f0884e38ff4dd24b584bc",
+    "parser_v3": false,
+    "strictness": "strict=True, extra=forbid, Literal[1, 2]"
+  },
+  "pilot_watchlist": [
+    "premise_correction",
+    "wrong_specific_general_to_specific",
+    "false_none",
+    "unsafe_select",
+    "semantic_instability_reask",
+    "selector_latency_tail",
+    "provider_retry_deadline_proximity"
+  ],
+  "provider_policy": {
+    "applies_to": [
+      "selector",
+      "intent_analyzer"
+    ],
+    "direct_gemini_calls_allowed": false,
+    "direct_openai_calls_allowed": false,
+    "inference_provider": "openrouter",
+    "openrouter_only": true
+  },
+  "rationale": "User product decision 2026-09-29: internal pilot selector = variant_a_v3_contract + openai/gpt-6-luna (reasoning none) as INTERNAL_PILOT_CANDIDATE. Evidence: development ablation (SELECTOR_V3_MODEL_ABLATION_4OMINI_VS_LUNA.md: 111/114 vs 101/114, premise 20/21, F05 2/24 unsafe runs, heavier latency tail); independent fresh qualification blocked for insufficient fresh QnA. Luna does not accept temperature (OpenRouter supported_parameters), so the registry declares supports_temperature=false and the adapter omits the field for both capabilities; the analyzer's model, prompt, budget, reasoning and parser are unchanged (transport-only identity change).",
+  "registry_entry": {
+    "allowed_capabilities": [
+      "intent_analyzer",
+      "selector"
+    ],
+    "allowed_reasoning_efforts": [
+      "none"
+    ],
+    "display_name": "GPT-6 Luna (OpenRouter)",
+    "model_identifier": "openai/gpt-6-luna",
+    "provider": "openrouter",
+    "supports_reasoning_effort": true,
+    "supports_structured_output": true,
+    "supports_temperature": false
+  },
+  "rollback": {
+    "analyzer": {
+      "config_fingerprint": "512fe08df368e629a4960ea8f55bfa19874f49cf12f12b58ed8a681b00ab5ee3",
+      "max_tokens": 600,
+      "model": "openai/gpt-4o-mini"
+    },
+    "selector_model": {
+      "config_fingerprint": "af9eb2d0767d37cd632799cbae39e7938585b243ceb4c7a1527b8028cd489a6e",
+      "mechanism": "POST /api/ai-config/config/rollback/<PRE_ACTIVATION_VERSION> printed by deploy/internal-pilot/activate-pilot-luna-v3.py",
+      "model": "openai/gpt-4o-mini"
+    },
+    "selector_prompt": {
+      "fingerprint": "1aed568885db02f474534224695a45eb6f95835bc31f94e877af9659efe94a1e",
+      "mechanism": "SELECTOR_PROMPT_VERSION=variant_a_v1 and restart",
+      "version": "variant_a_v1"
+    }
+  },
+  "schema_version": 1,
+  "search": {
+    "meili_documents": 322,
+    "meili_index": "auzef_qna_index",
+    "qdrant_collection": "auzef_qna_vectors",
+    "qdrant_points": 2989,
+    "source": "KB_FREEZE_V1_SEARCH_REBUILD_AND_RETRIEVAL_REBASELINE.md"
+  },
+  "selector": {
+    "config_fingerprint": "f6fcb61426cf400fb7f679190480e97e3f2d0b8ea58aecfca94a3440ecb89346",
+    "evidence": [
+      "SELECTOR_V3_MODEL_ABLATION_4OMINI_VS_LUNA.md",
+      "SELECTOR_V3_LUNA_FRESH_SEALED_HOLDOUT_QUALIFICATION.md (BLOCKED)"
+    ],
+    "max_retries": null,
+    "max_tokens": 32,
+    "model": "openai/gpt-6-luna",
+    "prompt_fingerprint": "cdeea79518c6b20a26e65ac628af3a03e92a4bbd6d14802cc709e647643c46c7",
+    "prompt_version": "variant_a_v3_contract",
+    "prompt_version_env": "SELECTOR_PROMPT_VERSION",
+    "provider": "openrouter",
+    "reasoning_effort": "none",
+    "temperature": null,
+    "temperature_sent": false,
+    "timeout_seconds": null
+  },
+  "status": "INTERNAL_PILOT_CANDIDATE"
+}

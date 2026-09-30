@@ -31,7 +31,8 @@ def collect(lines, utc_day: str, sample_size: int) -> dict:
               "provider_rate_limit_requests": 0, "retry_requests": 0,
               "retry_total": 0, "calendar_relevant_requests": 0,
               "context_used_requests": 0, "multi_intent_requests": 0,
-              "latency_ms": {}, "review_queue": [], "review_queue_total": 0,
+              "latency_ms": {}, "selector_latency": {}, "selector_identity": Counter(),
+              "review_queue": [], "review_queue_total": 0,
               "quality_sample": [], "quality_sample_pool": 0}
     seen = set()
     sample_candidates = []
@@ -39,6 +40,7 @@ def collect(lines, utc_day: str, sample_size: int) -> dict:
     analyzer_ms = []
     selector_ms = []
     retrieval_ms = []
+    selector_timeouts = 0
     for line in lines:
         if "decision_trace=" not in line:
             continue
@@ -91,8 +93,16 @@ def collect(lines, utc_day: str, sample_size: int) -> dict:
                 retried = True
                 result["retry_total"] += retries
         for selector in selectors:
-            if selector.get("selector_called") and isinstance(selector.get("latency_ms"), (float, int)):
+            if not selector.get("selector_called"):
+                continue
+            if isinstance(selector.get("latency_ms"), (float, int)):
                 selector_ms.append(selector["latency_ms"])
+                if selector["latency_ms"] >= 13000:
+                    reasons.append("selector_deadline_proximity")
+            if selector.get("timeout"):
+                selector_timeouts += 1
+            identity = "|".join(str(selector.get(k) or "?") for k in ("actual_model", "prompt_version"))
+            result["selector_identity"][identity] += 1
         if limited:
             result["provider_rate_limit_requests"] += 1
             reasons.append("provider_rate_limit")
@@ -150,8 +160,15 @@ def collect(lines, utc_day: str, sample_size: int) -> dict:
         "selector_p95": percentile(selector_ms, 0.95),
         "retrieval_p95": percentile(retrieval_ms, 0.95),
     }
+    # Selector latency tail (logical invocation incl. retries; deadline 15 s).
+    result["selector_latency"] = {
+        "calls": len(selector_ms), "p50": percentile(selector_ms, 0.5), "p95": percentile(selector_ms, 0.95),
+        "max": round(max(selector_ms), 1) if selector_ms else None,
+        "ge_10s": sum(v >= 10000 for v in selector_ms), "ge_13s": sum(v >= 13000 for v in selector_ms),
+        "ge_14s": sum(v >= 14000 for v in selector_ms), "timeouts": selector_timeouts,
+    }
     for key in ("final_outcomes", "selector_decisions", "failure_categories",
-                "degraded_reasons", "source_unavailable", "circuit_states"):
+                "degraded_reasons", "source_unavailable", "circuit_states", "selector_identity"):
         result[key] = dict(sorted(result[key].items()))
     result["quality_sample_pool"] = len(sample_candidates)
     result["quality_sample"] = sorted(sample_candidates, key=lambda item: item["request_id"])[:sample_size]
@@ -166,7 +183,8 @@ def markdown(report: dict) -> str:
              f"Calendar relevant: {report['calendar_relevant_requests']} · context used: {report['context_used_requests']} · MULTI: {report['multi_intent_requests']}",
              "", "| Signal | Counts |", "|---|---|"]
     for key in ("final_outcomes", "selector_decisions", "failure_categories",
-                "degraded_reasons", "source_unavailable", "circuit_states", "latency_ms"):
+                "degraded_reasons", "source_unavailable", "circuit_states", "latency_ms",
+                "selector_latency", "selector_identity"):
         lines.append(f"| {key} | {json.dumps(report[key], ensure_ascii=False)} |")
     lines.extend(["", f"## Human review queue ({len(report['review_queue'])}/{report['review_queue_total']})", "",
                   "Review answer and user question in the approved pilot interface; trace alone cannot grade relevance.", "",

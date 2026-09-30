@@ -54,12 +54,14 @@ def choose(args):
 def preflight(mode, via):
     if mode == "none":
         return {"mode": mode, "status": "SKIPPED"}
-    command = [sys.executable, "-m", "scripts.internal_pilot_preflight", mode, "--json"]
+    # "pilot" = freeze amendment 6 (live scope); "candidate" = amendment 5 (superseded history).
+    sub = ["pilot", "--scope", "live"] if mode == "pilot" else [mode]
+    command = [sys.executable, "-m", "scripts.internal_pilot_preflight", *sub, "--json"]
     cwd = ROOT / "backend"
     if via == "compose":
         command = ["docker", "compose", "run", "--rm", "-T", "--no-deps",
                    "-v", f"{ROOT}:/workspace:ro", "-w", "/workspace/backend",
-                   "backend", "python", "-m", "scripts.internal_pilot_preflight", mode, "--json"]
+                   "backend", "python", "-m", "scripts.internal_pilot_preflight", *sub, "--json"]
         cwd = ROOT
     try:
         proc = subprocess.run(
@@ -106,7 +108,7 @@ def parse_traces(raw):
             item = json.loads(line.split("decision_trace=", 1)[1])
         except ValueError:
             continue
-        if item.get("event") == "answer_pipeline_decision_trace" and item.get("schema_version") == 7:
+        if item.get("event") == "answer_pipeline_decision_trace" and (item.get("schema_version") or 0) >= 7:
             traces.append(item)
     return traces
 
@@ -192,7 +194,7 @@ def main():
     parser.add_argument("--id", action="append")
     parser.add_argument("--category", action="append")
     parser.add_argument("--fault-ready", choices=FAULTS)
-    parser.add_argument("--preflight", choices=("none", "runtime", "candidate"), default="none")
+    parser.add_argument("--preflight", choices=("none", "runtime", "candidate", "pilot"), default="none")
     parser.add_argument("--preflight-via", choices=("host", "compose"), default="host")
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--report", type=Path, help="unique report path; defaults to a timestamped file")

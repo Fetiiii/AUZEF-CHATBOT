@@ -99,8 +99,9 @@ def _store_message(db: Session, conversation_id: int, role: str, content: str, s
     return msg
 
 
-def _persist_user_turn(body: WidgetChatRequest, ip: Optional[str], question: str) -> tuple[Optional[int], Optional[str], tuple[dict, ...]]:
-    """Own the conversation write phase and return only detached plain values."""
+def _persist_user_turn(body: WidgetChatRequest, ip: Optional[str], question: str) -> tuple[Optional[int], Optional[str], tuple[dict, ...], Optional[int]]:
+    """Own the conversation write phase and return only detached plain values
+    (conversation id, token, context, and the stored user message id)."""
     with SessionLocal() as db:
         try:
             conv = _get_or_create_conversation(
@@ -108,9 +109,9 @@ def _persist_user_turn(body: WidgetChatRequest, ip: Optional[str], question: str
             )
             conversation_id, conversation_token = int(conv.id), str(conv.client_token)
             context = _load_recent_context(db, conversation_id) if CHAT_CONTEXT_ENABLED else ()
-            _store_message(db, conversation_id, "user", question)
+            user_message_id = int(_store_message(db, conversation_id, "user", question).id)
             db.commit()
-            return conversation_id, conversation_token, context
+            return conversation_id, conversation_token, context, user_message_id
         except Exception:
             db.rollback()
             raise
@@ -213,15 +214,19 @@ def widget_chat(body: WidgetChatRequest, request: Request, background_tasks: Bac
     conversation_id = None
     conversation_token = None
     conversation_context = ()
+    user_message_id = None
     try:
         with load_metrics.Timer("db_user_write"):
-            conversation_id, conversation_token, conversation_context = _persist_user_turn(body, ip, q)
+            conversation_id, conversation_token, conversation_context, user_message_id = (
+                _persist_user_turn(body, ip, q)
+            )
     except Exception as exc:
         logger.error("Conversation kaydı yapılamadı (yanıt yolu etkilenmez): %s", type(exc).__name__)
 
     trace = DecisionTrace(
         endpoint="widget_chat",
         conversation_id=conversation_id,
+        user_message_id=user_message_id,
     )
     load_metrics.event("trace_link", trace_request_id=trace.request_id)
     trace.set_context(enabled=CHAT_CONTEXT_ENABLED, messages=conversation_context)

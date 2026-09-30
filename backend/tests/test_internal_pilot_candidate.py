@@ -167,11 +167,14 @@ def test_activation_script_constants_equal_the_contract():
     assert script.LUNA_QUALIFICATION_REFERENCE == LUNA_QUALIFICATION_REFERENCE
 
 
-def test_pilot_env_selects_v2_and_seeds_a_600_token_analyzer():
+def test_pilot_env_selects_the_current_candidate_and_seeds_a_600_token_analyzer():
+    # Amendment 5 pinned variant_a_v2 here; amendment 6 (current pilot candidate)
+    # moved the pilot prompt to variant_a_v3_contract. Amendment 5 stays history.
+    from services.internal_pilot_amendment6 import SELECTOR_PROMPT_VERSION as AM6_PROMPT
     from services.internal_pilot_runtime import PILOT_PROMPT_VERSION, load_pilot_env
 
     env = load_pilot_env()
-    assert env["SELECTOR_PROMPT_VERSION"] == PILOT_PROMPT_VERSION == VARIANT_A_V2
+    assert env["SELECTOR_PROMPT_VERSION"] == PILOT_PROMPT_VERSION == AM6_PROMPT
     assert env["LLM_INTENT_ANALYZER_MAX_TOKENS"] == "600"
     assert "LLM_INTENT_ANALYZER_REASONING_EFFORT" not in env
 

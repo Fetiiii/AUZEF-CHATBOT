@@ -25,6 +25,15 @@ Two prompt identities exist:
     candidates, relative-time answers and a safe specific-to-general fallback
     (outputs/performance-readiness/PILOT_CANDIDATE_VALIDATION.md §4).
 
+``variant_a_v3_contract``
+    Development candidate written from a model-independent decision contract
+    (answer-first, scope compatibility, answer sufficiency incl. premise
+    correction, safe NONE; outputs/performance-readiness/
+    SELECTOR_DECISION_CONTRACT_V2.md). Not a rule accumulation on v2, contains
+    no topic, case or record examples. Internal pilot selector prompt
+    (INTERNAL_PILOT_CANDIDATE, freeze amendment 6, with openai/gpt-6-luna);
+    selectable only explicitly and never the default.
+
 Why the Variant A text exists twice
 -----------------------------------
 ``benchmarks/selector_v2/prompts/variant_a_v1.md`` is a *historical*
@@ -54,6 +63,7 @@ PRODUCTION_V2 = "production_v2"
 VARIANT_A_V1 = "variant_a_v1"
 VARIANT_A_V2 = "variant_a_v2"
 VARIANT_A_V2_1 = "variant_a_v2_1"
+VARIANT_A_V3_CONTRACT = "variant_a_v3_contract"
 
 #: The version served when nothing is configured. Changing this would change
 #: public production behaviour, so the internal pilot overrides it by config
@@ -68,9 +78,10 @@ _FILE_PROMPTS = {
     VARIANT_A_V1: "variant_a_v1.md",
     VARIANT_A_V2: "variant_a_v2.md",
     VARIANT_A_V2_1: "variant_a_v2_1.md",
+    VARIANT_A_V3_CONTRACT: "variant_a_v3_contract.md",
 }
 
-PROMPT_VERSIONS = (PRODUCTION_V2, VARIANT_A_V1, VARIANT_A_V2, VARIANT_A_V2_1)
+PROMPT_VERSIONS = (PRODUCTION_V2, VARIANT_A_V1, VARIANT_A_V2, VARIANT_A_V2_1, VARIANT_A_V3_CONTRACT)
 
 
 class UnknownSelectorPromptVersion(ValueError):

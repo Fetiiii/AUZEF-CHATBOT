@@ -55,6 +55,7 @@ class ModelCreateRequest(BaseModel):
     supports_structured_output: bool
     supports_reasoning_effort: bool = False
     allowed_reasoning_efforts: list[Effort] = []
+    supports_temperature: bool = True
 
 
 class ModelUpdateRequest(BaseModel):
@@ -65,6 +66,7 @@ class ModelUpdateRequest(BaseModel):
     supports_structured_output: Optional[bool] = None
     supports_reasoning_effort: Optional[bool] = None
     allowed_reasoning_efforts: Optional[list[Effort]] = None
+    supports_temperature: Optional[bool] = None
     qualification_status: Optional[Literal["UNTESTED", "QUALIFIED", "BLOCKED"]] = None
     qualification_reference: Optional[str] = Field(default=None, max_length=255)
 

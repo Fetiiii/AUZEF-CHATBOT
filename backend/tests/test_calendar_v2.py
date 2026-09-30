@@ -83,13 +83,53 @@ def test_current_term_is_preferred_but_explicit_term_overrides(db):
     db.commit()
 
     implicit = retrieve_calendar_candidates("Bütünleme ne zaman?", db)
-    assert implicit.candidates[0].term == "BAHAR"
-    assert len(implicit.candidates) == 2
+    # No term in the question: only the current term's event (P-01).
+    assert [row.term for row in implicit.candidates] == ["BAHAR"]
+    assert implicit.trace_snapshot["calendar_other_term_suppressed_count"] == 1
 
     explicit_guz = retrieve_calendar_candidates("Güz bütünleme ne zaman?", db)
     assert [row.term for row in explicit_guz.candidates] == ["GUZ"]
     explicit_bahar = retrieve_calendar_candidates("Bahar bütünleme ne zaman?", db)
     assert [row.term for row in explicit_bahar.candidates] == ["BAHAR"]
+
+
+def test_p01_final_without_term_returns_only_the_current_term_final(db):
+    """Regression P-01: in GUZ, "Final sınavları ne zaman?" must not offer the BAHAR final."""
+    _configure(db, term="GUZ")
+    db.add_all([
+        _calendar("Bitirme Sınavı (Final)", term="GUZ", start="02.01.2027"),
+        _calendar("Bitirme Sınavı (Final)", term="BAHAR", start="12.06.2027"),
+    ])
+    db.commit()
+    result = retrieve_calendar_candidates("Final sınavları ne zaman?", db)
+    assert [row.term for row in result.candidates] == ["GUZ"]
+    assert result.trace_snapshot["calendar_candidate_terms"] == ["GUZ"]
+    # An explicitly named other term keeps working.
+    bahar = retrieve_calendar_candidates("Bahar dönemi final sınavı ne zaman?", db)
+    assert [row.term for row in bahar.candidates] == ["BAHAR"]
+
+
+def test_other_term_event_is_a_fallback_when_current_term_has_no_match(db):
+    _configure(db, term="GUZ")
+    db.add_all([
+        _calendar("Mezuniyete Üç Ders Sınavı", term="BAHAR", start="10.07.2027"),
+        _calendar("Bitirme Sınavı (Final)", term="GUZ", start="02.01.2027"),
+    ])
+    db.commit()
+    result = retrieve_calendar_candidates("Üç ders sınavı ne zaman?", db)
+    assert [row.term for row in result.candidates] == ["BAHAR"]
+    assert result.trace_snapshot["calendar_other_term_suppressed_count"] == 0
+
+
+def test_general_row_still_accompanies_the_current_term(db):
+    _configure(db, term="GUZ")
+    db.add_all([
+        _calendar("Kayıt Yenileme", term="GENERAL"),
+        _calendar("Kayıt Yenileme", term="BAHAR", start="01.02.2027"),
+    ])
+    db.commit()
+    result = retrieve_calendar_candidates("Kayıt yenileme ne zaman?", db)
+    assert [row.term for row in result.candidates] == ["GENERAL"]
 
 
 def test_general_is_eligible_but_unrelated_general_event_is_not(db):
@@ -233,9 +273,10 @@ def test_calendar_candidate_flood_evaluation_matrix(db):
         "Bahar dönemi ne zaman başlıyor?",
     )
     counts = [len(retrieve_calendar_candidates(query, db).candidates) for query in queries]
-    assert counts == [2, 1, 1, 1, 2, 0, 0, 1]
-    assert sum(counts) / len(counts) == 1.0
-    assert max(counts) == 2
+    # P-01: questions without a term no longer carry the other term's row.
+    assert counts == [1, 1, 1, 1, 1, 0, 0, 1]
+    assert sum(counts) / len(counts) == 0.75
+    assert max(counts) == 1
 
 
 class _Provider:

@@ -112,6 +112,11 @@ class ModelDefinition:
     qualified_at: Optional[str] = None
     qualified_by: Optional[str] = None
     qualification_reference: Optional[str] = None
+    # Whether the model accepts a sampling ``temperature``. When False the
+    # effective config carries temperature=None and the adapter omits the
+    # request field (e.g. OpenRouter lists no ``temperature`` in the model's
+    # supported_parameters). Default True keeps every existing model unchanged.
+    supports_temperature: bool = True
 
     @classmethod
     def from_row(cls, row: AIModelRegistry) -> "ModelDefinition":
@@ -129,6 +134,9 @@ class ModelDefinition:
             qualified_at=row.qualified_at.isoformat() if row.qualified_at else None,
             qualified_by=row.qualified_by,
             qualification_reference=row.qualification_reference,
+            supports_temperature=(
+                True if row.supports_temperature is None else bool(row.supports_temperature)
+            ),
         )
 
     def to_dict(self) -> dict:
@@ -142,6 +150,7 @@ class ModelDefinition:
             "supports_structured_output": self.supports_structured_output,
             "supports_reasoning_effort": self.supports_reasoning_effort,
             "allowed_reasoning_efforts": list(self.allowed_reasoning_efforts),
+            "supports_temperature": self.supports_temperature,
             "qualification_status": self.qualification_status.value,
             "qualified_at": self.qualified_at,
             "qualified_by": self.qualified_by,
@@ -195,7 +204,9 @@ class CapabilityAssignment:
                 ReasoningEffort(self.params.reasoning_effort)
                 if self.params.reasoning_effort else None
             ),
-            temperature=self.params.temperature,
+            # A model without temperature support gets None: the adapter then
+            # sends no temperature field (the stored value is kept at 0).
+            temperature=self.params.temperature if self.model.supports_temperature else None,
             max_tokens=self.params.max_tokens,
             timeout_seconds=self.params.timeout_seconds,
             max_retries=self.params.max_retries,
@@ -366,6 +377,13 @@ def validate_assignment(capability: LLMCapability, model: ModelDefinition,
         or not TEMPERATURE_RANGE[0] <= temperature <= TEMPERATURE_RANGE[1]
     ):
         raise AIConfigError("invalid_temperature", "Temperature 0 ile 1 arasında olmalı.")
+    if not model.supports_temperature and temperature != 0:
+        # The value would never reach the provider; do not store a setting
+        # that looks effective but is not.
+        raise AIConfigError(
+            "temperature_unsupported",
+            "Model temperature parametresini desteklemiyor; temperature 0 bırakılmalı (gönderilmez).",
+        )
     low, high = MAX_TOKENS_RANGE[capability]
     if isinstance(params.max_tokens, bool) or not isinstance(params.max_tokens, int) \
             or not low <= params.max_tokens <= high:
@@ -648,6 +666,7 @@ def register_model(db: Session, payload: dict, *, actor) -> ModelDefinition:
         supports_structured_output=1 if payload.get("supports_structured_output") else 0,
         supports_reasoning_effort=1 if payload.get("supports_reasoning_effort") else 0,
         allowed_reasoning_efforts=_dump(list(efforts)),
+        supports_temperature=0 if payload.get("supports_temperature") is False else 1,
         # A new model is never self-approved.
         qualification_status=QualificationStatus.UNTESTED.value,
         created_by=actor,
@@ -714,6 +733,10 @@ def update_model(db: Session, model_id: int, patch: dict, *, actor) -> ModelDefi
         supports_reasoning_effort=bool(patch.get(
             "supports_reasoning_effort", old.supports_reasoning_effort)),
         allowed_reasoning_efforts=efforts,
+        supports_temperature=(
+            old.supports_temperature if patch.get("supports_temperature") is None
+            else bool(patch["supports_temperature"])
+        ),
         qualification_status=status,
     )
     for cap in _active_uses(db, old.id):
@@ -733,6 +756,7 @@ def update_model(db: Session, model_id: int, patch: dict, *, actor) -> ModelDefi
     row.supports_structured_output = 1 if candidate.supports_structured_output else 0
     row.supports_reasoning_effort = 1 if candidate.supports_reasoning_effort else 0
     row.allowed_reasoning_efforts = _dump(list(candidate.allowed_reasoning_efforts))
+    row.supports_temperature = 1 if candidate.supports_temperature else 0
     if status is not old.qualification_status or reference != old.qualification_reference:
         row.qualification_status = status.value
         row.qualification_reference = reference if status is QualificationStatus.QUALIFIED else None
@@ -774,6 +798,7 @@ def _seed_model(db: Session, provider: str, identifier: str, display_name: str) 
         # declared per model by an operator, never assumed by the bootstrap.
         supports_reasoning_effort=0,
         allowed_reasoning_efforts="[]",
+        supports_temperature=1,
         qualification_status=QualificationStatus.LEGACY_APPROVED.value,
         created_by=BOOTSTRAP_ACTOR,
         updated_by=BOOTSTRAP_ACTOR,

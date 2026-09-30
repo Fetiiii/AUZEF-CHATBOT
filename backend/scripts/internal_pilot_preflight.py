@@ -6,6 +6,8 @@ Usage (from ``backend/``)::
     python -m scripts.internal_pilot_preflight preflight [--json]
     python -m scripts.internal_pilot_preflight amendment5 [--write] [--gate-evidence FILE]
     python -m scripts.internal_pilot_preflight candidate [--json]
+    python -m scripts.internal_pilot_preflight amendment6 [--write] [--gate-evidence FILE]
+    python -m scripts.internal_pilot_preflight pilot --scope live|static [--json]
 
 ``manifest`` regenerates ``deploy/internal-pilot/answer-pipeline-freeze.json``.
 Regeneration is deterministic apart from ``created_at``, which is excluded
@@ -19,6 +21,13 @@ amendment 5). Unlike ``preflight``/``runtime`` it reads the **DB active
 managed config** the runtime actually serves, so it must run where the
 backend's database is reachable (inside the backend container). It never modifies configuration: a mismatch is an
 operator decision, not something this tool silently repairs.
+
+``pilot`` is the preflight for the current INTERNAL_PILOT_CANDIDATE (freeze
+amendment 6: Luna + variant_a_v3_contract selector). ``--scope live`` runs in
+the backend container (DB managed config, served prompt, KB fingerprint,
+Meili/Qdrant counts); ``--scope static`` runs in a repository checkout
+(committed amendment-6 artifact, widget limit, pilot.env.example). Both scopes
+must PASS. Neither modifies configuration.
 """
 from __future__ import annotations
 
@@ -45,6 +54,7 @@ from services.internal_pilot_candidate import (  # noqa: E402
     run_candidate_preflight,
 )
 from services.internal_pilot_runtime import run_runtime_preflight  # noqa: E402
+from services import internal_pilot_amendment6 as am6  # noqa: E402
 
 MANIFEST_PATH = Path("deploy/internal-pilot/answer-pipeline-freeze.json")
 AMENDMENT_5_FILE = Path(*AMENDMENT_5_PATH)
@@ -201,6 +211,49 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_amendment6(args: argparse.Namespace) -> int:
+    """Generate freeze amendment 6 (never rewrites the base freeze or amendments 1-5)."""
+    target = repo_root().joinpath(*am6.AMENDMENT_6_REL)
+    created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if target.exists():
+        try:
+            created_at = json.loads(target.read_text(encoding="utf-8"))["created_at"]
+        except (ValueError, KeyError):
+            pass
+    evidence = None
+    if args.gate_evidence:
+        evidence = json.loads(Path(args.gate_evidence).read_text(encoding="utf-8"))
+    amendment = am6.build_freeze_amendment_6(
+        git_commit=args.git_commit or _git_commit(), created_at=created_at, gate_evidence=evidence)
+    payload = json.dumps(amendment, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    if args.write:
+        target.write_text(payload, encoding="utf-8")
+        print(f"wrote {'/'.join(am6.AMENDMENT_6_REL)}")
+        print(f"INTERNAL_PILOT_AMENDMENT_6_FINGERPRINT = {amendment['amendment_fingerprint']}")
+    else:
+        print(payload, end="")
+    return 0
+
+
+def cmd_pilot(args: argparse.Namespace) -> int:
+    """Validate the INTERNAL_PILOT_CANDIDATE (amendment 6) in one scope."""
+    if args.scope == "live":
+        from core.database import SessionLocal
+
+        with SessionLocal() as db:
+            report = am6.run_live_preflight(am6.collect_live_state(db))
+    else:
+        report = am6.run_static_preflight()
+    if args.json:
+        print(json.dumps({"scope": args.scope, **report.to_dict()}, indent=2, ensure_ascii=False))
+    else:
+        _print_report(f"INTERNAL_PILOT candidate preflight (amendment 6, scope {args.scope})", report)
+        print(f"\nINTERNAL_PILOT_AMENDMENT_6_PREFLIGHT[{args.scope}] = {report.status}")
+        if report.failures:
+            print("Configuration was NOT modified. Resolve each mismatch explicitly.")
+    return 0 if report.passed else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -235,6 +288,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     candidate.add_argument("--json", action="store_true")
     candidate.set_defaults(func=cmd_candidate)
+
+    amendment6 = sub.add_parser("amendment6", help="generate freeze amendment 6")
+    amendment6.add_argument("--write", action="store_true")
+    amendment6.add_argument("--git-commit", default=None)
+    amendment6.add_argument("--gate-evidence", default=None)
+    amendment6.set_defaults(func=cmd_amendment6)
+
+    pilot = sub.add_parser("pilot", help="validate the amendment-6 pilot candidate (live or static scope)")
+    pilot.add_argument("--scope", choices=("live", "static"), required=True)
+    pilot.add_argument("--json", action="store_true")
+    pilot.set_defaults(func=cmd_pilot)
 
     args = parser.parse_args(argv)
     return args.func(args)

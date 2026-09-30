@@ -1,0 +1,593 @@
+{
+ "package": "kb-freeze-v1-content",
+ "package_version": 1,
+ "source_document": {
+  "file_name": "AUZEF_Bilgi_Tabani_Icerik_Dogrulama_Karar_Formu(1).docx",
+  "sha256": "990b04d077eb767e67723ed3d82bdacb02774c4133134271b5eb3eee5d1223f1",
+  "form_date": "2026-09-27"
+ },
+ "decision_owner": {
+  "unit": "KİB",
+  "person": "Ramazan Baykuş"
+ },
+ "decision_date": "2026-09-28",
+ "baseline_reference": {
+  "active_dataset_sha256": "742d320c8cda0625188ea638ac6ab0d755dd2823914cb03f5859b8287d7d6c17",
+  "note": "informational; every mutation carries its own old-state hash guard"
+ },
+ "rules": [
+  "exact hash guards, no fuzzy matching",
+  "soft delete only (status=0)",
+  "no new tags",
+  "no institutional fact outside the form; reused KB wording is cited per item"
+ ],
+ "updates": [
+  {
+   "db_id": 584,
+   "expected_old_question_sha256": "ca8c37e731315955fdb2c19393a7ff74153d7d082ca1d53535994cf580823835",
+   "expected_old_answer_sha256": "7011f7adbd98586a5e9bdb8941a7ff9e679f12a0224139e444ed4e7d96d259a4",
+   "source_section": "A1-1, A1-2, A1-3, A1-4 (Birleştirilmeli); DQ-3",
+   "reason": "Genel staj QnA'sı revize edildi (form aksiyonu). 396/397/400/401/406 birleştirildi: cevapları birebir aynı genel yönlendirmeydi; 406'daki benzersiz cümleler (duyuru takibi, üstten staj, kılavuz/takvim bağlantısı) 584'e taşındı.",
+   "new_question": null,
+   "new_answer": "Staj süresi Fakülte genelinde tek bir süre değildir; programa göre değişiklik göstermektedir. Kayıtlı olduğunuz programın staj süresi ve uygulama detayları için auzef.istanbul.edu.tr adresinde “Programlar” bölümünden ilgili programı seçerek “Staj” sekmesini inceleyebilirsiniz.\n\nStaj uygulaması programa göre zorunlu veya isteğe bağlı olarak değişebilmektedir. Hangi programlarda staj bulunduğunu ve zorunlu staj bulunan programların güncel listesini auzef.istanbul.edu.tr adresindeki “Kayıtlı Öğrenci > Staj” bölümünden kontrol edebilirsiniz; staj uygulamaları programlara göre değişebildiği için güncel resmî liste için bu sayfanın kontrol edilmesi gerekmektedir.\n\nStaj kılavuzu ve staj takvimine https://auzef.istanbul.edu.tr/tr/content/ogrenci-islemleri/staj adresinden ulaşabilirsiniz. Stajlarla ilgili duyuruların web sayfasından takip edilmesi gerekmektedir. Üstten ders alma koşullarını sağlayan öğrenciler stajlarını üstten alabilir.",
+   "add_queries": [
+    "Staj kaç gün sürüyor?",
+    "Staj süresi ne kadar?",
+    "Staj süresi kaç gündür?",
+    "Staj süresi programa göre değişiyor mu?",
+    "Stajım kaç iş günü sürecek?",
+    "Hangi programlarda zorunlu staj bulunuyor?",
+    "Zorunlu staj olan programların listesine nereden ulaşabilirim?",
+    "Staj isteğe bağlı mı zorunlu mu?",
+    "Coğrafi Bilgi Sistemleri programı öğrencisiyim zorunlu staj hakkında bilgi almak istiyorum.",
+    "Coğrafi Bilgi Sistemleri programında zorunlu staj gereksinimleri nelerdir?",
+    "Coğrafi Bilgi Sistemleri bölümünde zorunlu staj var mı, detayları nelerdir?",
+    "Coğrafi Bilgi Sistemleri programı için zorunlu staj uygulaması hakkında bilgi verebilir misiniz?",
+    "Coğrafi Bilgi Sistemleri öğrencisi olarak zorunlu stajım hakkında bilgi alabilir miyim?",
+    "Coğrafi Bilgi Sistemleri programında zorunlu staj şartları nedir?",
+    "Coğrafi Bilgi Sistemleri bölümünde zorunlu stajımı nerede ve nasıl yapabilirim?",
+    "Coğrafi Bilgi Sistemleri öğrencileri için zorunlu staj koşulları nelerdir?",
+    "Coğrafi Bilgi Sistemleri bölümü zorunlu staj bilgileri nelerdir ve nasıl yerine getirilir?",
+    "Hemşirelik programı öğrencisiyim programımızda staj ya da uygulama dersi var mı?",
+    "Hemşirelik programında staj veya uygulama dersi gerekliliği mevcut mu?",
+    "Hemşirelik öğrencisi olarak staj ya da uygulama derslerine katılmam gerekir mi?",
+    "Hemşirelik programında yer alan staj veya pratik ders varlığı nedir?",
+    "Hemşirelik bölümünde staj veya uygulama dersi zorunluluğu var mı?",
+    "Hemşirelik kursunda staj veya pratik uygulama dersleri bulunuyor mu?",
+    "Programımda uygulamalı eğitim veya staj dersi olup olmadığını öğrenmek istiyorum.",
+    "Hemşirelik eğitimimde pratik veya staj dersleri yer alıyor mu?",
+    "Hemşirelik öğrencisi olarak hangi uygulama veya staj derslerini almalıyım?",
+    "Bankacılık ve Sigortacılık programı stajı hakkında bilgi alabilir miyim?",
+    "Bankacılık ve Sigortacılık programında staj koşulları nelerdir?",
+    "Bankacılık ve Sigortacılık öğrencisi olarak staj yapma şartları nedir?",
+    "Bankacılık ve Sigortacılık bölümü staj uygulamaları hakkında bilgi istiyorum.",
+    "Bankacılık ve Sigortacılık programındaki staj süreci nasıl işler?",
+    "Bankacılık ve Sigortacılık bölümü için staj gereklilikleri nelerdir?",
+    "Bankacılık ve Sigortacılık stajı hakkında detaylı bilgi alabilir miyim?",
+    "Bankacılık ve Sigortacılık programında staj dönemi nasıl düzenleniyor?",
+    "Bankacılık ve Sigortacılık alanında staj yapma zorunluluğu ve şartları nelerdir?",
+    "Dış Ticaret stajı hakkında bilgi alabilir miyim?",
+    "Dış Ticaret programında staj gereklilikleri nelerdir?",
+    "Dış Ticaret öğrencisi olarak hangi staj koşullarını sağlamalıyım?",
+    "Dış Ticaret bölümü staj uygulamaları hakkında detaylar nedir?",
+    "Dış Ticaret programındaki staj süreci hakkında bilgi verebilir misiniz?",
+    "Dış Ticaret bölümü için zorunlu staj var mı ve nasıl yapılır?",
+    "Dış Ticaret stajı ile ilgili genel bilgiler nelerdir?",
+    "Dış Ticaret programında staj yapma düzenlemesi nasıldır?",
+    "Dış Ticaret bölümünde staj şartları ve süreci hakkında bilgi almak istiyorum.",
+    "Hangi programlarda staj uygulaması bulunmaktadır?",
+    "Staj uygulaması olan programlar hangileridir?",
+    "Hangi bölümlerde staj yapmak gerekiyor?",
+    "Staj uygulaması gerektiren programlar nelerdir?",
+    "Staj zorunluluğu olan akademik programlar hangileridir?",
+    "Staj gerekliliği bulunan bölümler hangileridir?",
+    "Hangi programlar staj uygulamasını içerir?",
+    "Staj yapılması gereken öğrenim programları hangileridir?",
+    "Stajın bir parçası olduğu akademik programlar nelerdir?",
+    "zorunlu staj bulunan programlar hangileri?"
+   ],
+   "remove_queries": []
+  },
+  {
+   "db_id": 552,
+   "expected_old_question_sha256": "53c6be0083d33a99e188c0b803ebaa918b132af85d2261729dead91da8f1f956",
+   "expected_old_answer_sha256": "b115864c2c994f5f769501eb34e1c21313825b1d527bcc41e6bc1ed30f6551df",
+   "source_section": "A2-1, A2-2 (Evet), A2-4 (Evet), A2-5; DQ-6",
+   "reason": "Kanonik soru formdaki onaylı metne çevrildi; resmî kaynak 'Aday Öğrenci > Ücretler'. Eski materyal-ücretleri bağlantısı form A2-1'e göre resmî kaynak olarak adlandırılmadığı için cevaptan çıkarıldı. Sabit tutar yok.",
+   "new_question": "Harç ve materyal ücreti tutarlarına nereden ulaşabilirim?",
+   "new_answer": "Güncel harç ve materyal ücreti tutarlarına auzef.istanbul.edu.tr adresindeki “Aday Öğrenci > Ücretler” bölümünden ulaşabilirsiniz. Programların dönemlik ücreti materyal ücreti ile aynı kapsamdadır. Yatay geçiş, lisans tamamlama ve DGS kapsamında programa yerleşme şekli ücret tutarını değiştirmemektedir.",
+   "add_queries": [
+    "Ödeyeceğim harç miktarına nereden ulaşabilirim?",
+    "Harç ve materyal ücretleri ne kadar?",
+    "Materyal ücreti ne kadar?",
+    "Programın dönemlik ücreti ne kadar?",
+    "Güncel ücret tutarları nerede yayınlanıyor?",
+    "DGS ile kayıt olanların ücreti farklı mı?",
+    "Yatay geçişle gelen öğrencilerin ücreti farklı mı?",
+    "Lisans tamamlama öğrencilerinin ücreti farklı mı?",
+    "Kayıt türüne göre materyal ücreti değişir mi?"
+   ],
+   "remove_queries": []
+  },
+  {
+   "db_id": 429,
+   "expected_old_question_sha256": "bb1997c0d55ff4c5fd2e424f7b97d7c259f977d6060490b4e75f6b97b2e924aa",
+   "expected_old_answer_sha256": "9659a5d8cab82e97ee72506f44db979be896b9ce3e368579916762f0de71aea3",
+   "source_section": "A2-3; form aksiyonu 'Ödeme dönemi QnA'sı revize edilip güncel tutar bağlantısı eklensin'",
+   "reason": "Mevcut reviewed cevap korunarak formdaki güncel tutar cümlesi eklendi.",
+   "new_question": null,
+   "new_answer": "Merhaba,\n\nMateryal ücreti dönemlik olarak, güz ve bahar dönemlerinde olmak üzere yılda iki kez ödenmektedir. Hangi eğitim-öğretim döneminde bulunuyorsanız, ilgili döneme ait materyal ücretini ödeyerek öğreniminize devam edebilirsiniz. Aynı dönem için ayrıca başka bir borçlandırma yapılmaz. Güncel ücret tutarlarına auzef.istanbul.edu.tr adresindeki “Aday Öğrenci > Ücretler” bölümünden ulaşabilirsiniz.",
+   "add_queries": [
+    "Materyal ücreti tutarını nereden öğrenebilirim?"
+   ],
+   "remove_queries": []
+  },
+  {
+   "db_id": 455,
+   "expected_old_question_sha256": "db217313129fcac7a039f1f05d8e81518e31d041e6ae627761ca7fa48b8fa22d",
+   "expected_old_answer_sha256": "cf8c4c425a924eea04713634b78e5330f8c014b2c7ac1670395839b5b5c9b6fc",
+   "source_section": "A3-4 (genel cevap), A3-3 (AUZEF duyuruları)",
+   "reason": "Genel yatay geçiş kaydı korunup tür belirtilmeyen belge sorusunun cevabı eklendi; tür varsayılmaz.",
+   "new_question": null,
+   "new_answer": "Yatay geçiş ile Fakültemize kayıt olmak isteyen öğrencilerin istenilen koşulları sağlayıp başvuruda bulunmaları gerekmektedir. Detaylı bilgi için üniversitenin resmi web sayfası ve \"https://ogrenci.istanbul.edu.tr/\" https://ogrenci.istanbul.edu.tr/ adresinden başvuru koşullarını inceleyiniz. Başka bir üniversiteye ya da fakülteye yatay geçiş yapmak isteyen öğrencilerin başvuracakları birimin şartlarını yerine getirmesi gerekmektedir. Sınavsız ikinci üniversite kapsamında kayıt olan öğrencilerin yatay geçiş yapma hakkı bulunmamaktadır.\n\nYatay geçiş başvurularında istenen belgeler başvuru türüne göre değişebilmektedir. Kurum içi, kurumlar arası veya merkezi yatay geçiş türünüzü belirtmeniz hâlinde daha doğru yönlendirme yapılabilir. Güncel belge listeleri ve başvuru koşulları için İstanbul Üniversitesi Öğrenci İşleri Daire Başkanlığının https://ogrenci.istanbul.edu.tr/tr/_ adresindeki duyurularını inceleyebilirsiniz. AUZEF’e yatay geçiş hakkı kazanan öğrencilerin kesin kayıt ve muafiyet süreçleri için auzef.istanbul.edu.tr adresinde yayımlanan güncel yatay geçiş duyuruları takip edilmelidir.",
+   "add_queries": [
+    "Yatay geçiş için gerekli evraklar nelerdir?",
+    "Yatay geçiş belge listesine nereden ulaşabilirim?",
+    "Yatay geçiş başvurusunda istenen evraklar nelerdir?",
+    "Yatay geçişte belge listesi türe göre değişir mi?",
+    "Yatay geçiş",
+    "Yatay geçiş nasıl yaparım",
+    "Yatay geçiş yapmak istiyorum",
+    "merhaba yatay geçiş bitti mi"
+   ],
+   "remove_queries": []
+  },
+  {
+   "db_id": 629,
+   "expected_old_question_sha256": "9da2667418f121f98850e01a86eb13c8ef90a77e098306dfb203627bb6747d3f",
+   "expected_old_answer_sha256": "c8a4876007a6556fccf0ee23728732fddf6d894fd4f73b9eeb9ecdd272bec4a7",
+   "source_section": "A3-1, A3-2, A3-3 (merkezi tür; mevcut kayıt, duplicate yok)",
+   "reason": "Merkezi yatay geçiş kaydına resmî belge/koşul bağlantısı ve AUZEF kesin kayıt/muafiyet notu eklendi. Tür belirtmeyen genel alias'lar 455'e taşındı (form: merkezi kayıt genel sorulara cevap olmamalı).",
+   "new_question": null,
+   "new_answer": "Merkezi yatay geçiş (Ek Madde 1) başvuruları İstanbul Üniversitesi Öğrenci İşleri Daire Başkanlığı tarafından yürütülmektedir. Başvuru tarihleri, kontenjanlar, gerekli belgeler ve başvuru koşulları için Öğrenci İşleri Daire Başkanlığının güncel duyurularını takip etmeniz gerekmektedir. Güncel bilgi ve belge listelerine https://ogrenci.istanbul.edu.tr/tr/_ adresinden ulaşabilirsiniz. AUZEF’e yatay geçiş hakkı kazanan öğrencilerin kesin kayıt ve muafiyet süreçleri için auzef.istanbul.edu.tr adresinde yayımlanan güncel yatay geçiş duyuruları takip edilmelidir.",
+   "add_queries": [
+    "Merkezi yatay geçiş için hangi belgeler gerekiyor?",
+    "Ek Madde 1 yatay geçiş belgeleri nelerdir?"
+   ],
+   "remove_queries": [
+    {
+     "text": "Yatay geçiş",
+     "sha256": "427eadfe5844e57373c7ae4f21378bc8a3f3ee09687453d2716213b66385c655"
+    },
+    {
+     "text": "Yatay geçiş nasıl yaparım",
+     "sha256": "e58783af6f1e04f859db026c4bf9d8a2dcf926f43e19c84b16f098f4332be18f"
+    },
+    {
+     "text": "Yatay geçiş yapmak istiyorum",
+     "sha256": "862835f9adbdd597c4550bd6e6c6ba2852df5208011064fc4865088ffa270b90"
+    },
+    {
+     "text": "merhaba yatay geçiş bitti mi",
+     "sha256": "ac29563cf3f2c8ffbe90637b6316741bec9fa066aaf0641ab2c9559b4c8dfc1f"
+    }
+   ]
+  },
+  {
+   "db_id": 382,
+   "expected_old_question_sha256": "2b311e176bdb947fff9227a7143c5d2819230e1ce805f0017718dd3d36fe4c42",
+   "expected_old_answer_sha256": "fc7d97fd8235d802bc87590c8f3db6332251a1f40338d3aa985a66b5fa7a13af",
+   "source_section": "A4-1, A4-2 (Hayır), A4-4",
+   "reason": "Mevcut kayda başvuru/belge gerekmediği ve AKSİS kanalı eklendi.",
+   "new_question": null,
+   "new_answer": "E-devlet sisteminden Öğrenci Belgesi, Transkript Belgesi ve Mezuniyet Belgeleri alınabilmektedir. Mezuniyet belgesi için ayrıca başvuru yapmanıza veya belge teslim etmenize gerek bulunmamaktadır; mezuniyet işlemleriniz tamamlandıktan sonra mezuniyet belgenizi e-Devlet dışında AKSİS üzerinden de talep edebilirsiniz.",
+   "add_queries": [],
+   "remove_queries": []
+  },
+  {
+   "db_id": 568,
+   "expected_old_question_sha256": "daa16cc553b916b1f0ae101512590564a2f54905c4d604fae4f173ab8f03cf51",
+   "expected_old_answer_sha256": "e25b624df131cfe5131783c45a1221f07dace2bac104b856090706cf34fe7350",
+   "source_section": "B8, B9",
+   "reason": "Kayıt dondurma ailesi audit edildi (452/567/568/569); işlem kaydı 568'e iki kurum cümlesi eklendi, süre verilmedi.",
+   "new_question": null,
+   "new_answer": "Fakültemizde kayıt dondurma başvuruları sadece kayıt yenileme tarih aralığında yapılabilmektedir. Kayıt dondurma talebinde bulunabilmek için herhangi bir neden belirtmeksizin AKSİS' e (https://aksis.istanbul.edu.tr) giriş yapılarak işleminizi başlatabilirsiniz. AKSİS \"AUZEF Öğrenme Yönetim Sistemi\" \"Başvurularım\" \"Kayıt Dondur/Sil Başvuruları\" alanına tıklanır. \"Yeni Başvuru\" dan uygun seçenekler tercih edilir. Başvuru nedeni alanı doldurulur. Doküman ekle bölümüne kayıt dondurma dilekçesi imzalı olarak yüklenir. Kaydet butonuna tıklanarak başvuru işlemi tamamlanır. Kayıt yenileme tarihleri dışında yapılan başvurular ve imzasız yüklenen dilekçeler reddedilecektir. Kayıt dondurma dilekçesine \"https://auzef.istanbul.edu.tr/tr/content/ogrenci-islemleri/dilekce-ornekleri---basvurular\" buradan ulaşabilirsiniz. Kayıt dondurma ücretli bir işlem değildir. Kayıt dondurma talebiniz ilgili birim tarafından incelenmektedir. Talebinizin uygun bulunması veya bulunmaması hâlinde tarafınıza SMS ile bilgilendirme yapılacaktır.",
+   "add_queries": [
+    "Kayıt dondurma ücretli mi?",
+    "Kayıt dondurmak için ücret ödemem gerekiyor mu?",
+    "Kayıt dondurma talebimin sonucunu nasıl öğrenirim?",
+    "Kayıt dondurma başvurum onaylandı mı nasıl anlarım?"
+   ],
+   "remove_queries": []
+  },
+  {
+   "db_id": 593,
+   "expected_old_question_sha256": "086ec65c7697e2e7b62b390d05ae5e957a74b0c7720a1efec5e3bb61de873a7a",
+   "expected_old_answer_sha256": "590111df6f0a7753550566a9d00b0fe6547cb24794fe95c08ee5a6f45f441c4a",
+   "source_section": "B10",
+   "reason": "Muafiyet sonucu bildirimi eklendi; kesin süre verilmedi.",
+   "new_question": null,
+   "new_answer": "Ders muafiyeti yalnızca Türk Dili I-II, Yabancı Dil I-II ve Atatürk İlkeleri ve İnkılap Tarihi I-II dersleri için uygulanmaktadır. Ders muafiyeti başvuruları e-posta üzerinden alınmamaktadır; başvurular https://aksis.istanbul.edu.tr adresindeki Öğrenme Yönetim Sistemi üzerinden gerçekleştirilir. Muafiyet başvuru tarihleri ve işlem adımları web sayfamızda duyurulmakta ve başvuru sürecine ilişkin kılavuz yayımlanmaktadır. Muafiyet başvuru sürecinin sonucu hakkında SMS ile bilgilendirme yapılmaktadır.",
+   "add_queries": [
+    "Muafiyet başvurumun sonucunu nasıl öğrenirim?",
+    "Muafiyet sonuçları nasıl bildiriliyor?"
+   ],
+   "remove_queries": []
+  },
+  {
+   "db_id": 585,
+   "expected_old_question_sha256": "3fd3572b795bd1abf88128db901a521ae6794d939ea47ea99d2b189ac3de0aed",
+   "expected_old_answer_sha256": "966a821a931ef3663d4a96c4887872bc68b48ef7ce474aa0db7d3d707241db30",
+   "source_section": "B11 (Hayır, ücretsiz)",
+   "reason": "İtiraz ücreti bilgisi mevcut itiraz kaydına eklendi.",
+   "new_question": null,
+   "new_answer": "Sonuç itirazları, sınava ait sonuçların açıklanmasının ardından 2 iş günü içerisinde auzefsinav.istanbul.edu.tr adresi üzerinden gerçekleştirebilirsiniz. Bu sistemin haricinde bildirilen soru itirazları dikkate alınmayacaktır. Sınav sonucuna itiraz ücretsizdir.",
+   "add_queries": [
+    "Sonuç itirazı için ücret ödenir mi?",
+    "Sınav sonucu itirazı ücretsiz mi?"
+   ],
+   "remove_queries": []
+  }
+ ],
+ "new_qna": [
+  {
+   "key": "yg-kurum-ici",
+   "source_section": "A3-1, A3-3; aksiyon 'Yatay geçiş türleri için ayrı QnA'lar oluşturulsun'",
+   "reason": "Kurum içi yatay geçiş için mevcut kayıt yok (audit: 426/455/456/457/461/462/561/629).",
+   "question": "Kurum içi yatay geçiş başvurusu için hangi belgeler gerekiyor?",
+   "answer": "Kurum içi yatay geçiş başvurularında istenen belgeler, başvuru koşulları ve ilgili yönergeler için İstanbul Üniversitesi Öğrenci İşleri Daire Başkanlığının güncel duyurularını incelemeniz gerekmektedir. Güncel bilgi ve belge listelerine https://ogrenci.istanbul.edu.tr/tr/_ adresinden ulaşabilirsiniz. AUZEF’e yatay geçiş hakkı kazanan öğrencilerin kesin kayıt ve muafiyet süreçleri için auzef.istanbul.edu.tr adresinde yayımlanan güncel yatay geçiş duyuruları takip edilmelidir.",
+   "tags": [
+    "YENI_KAYIT-YATAY_GECIS-BILGI"
+   ],
+   "tag_source": "455/456/457 ile aynı etiket",
+   "queries": [
+    "Kurum içi yatay geçiş belgeleri nelerdir?",
+    "Kurum içi yatay geçiş başvuru koşulları nelerdir?",
+    "Kurum içi yatay geçiş için hangi evraklar isteniyor?",
+    "Kurum içi yatay geçiş başvurusu nasıl yapılır?"
+   ]
+  },
+  {
+   "key": "yg-kurumlar-arasi",
+   "source_section": "A3-1, A3-3; aksiyon 'Yatay geçiş türleri için ayrı QnA'lar oluşturulsun'",
+   "reason": "Kurumlar arası yatay geçiş için mevcut kayıt yok (audit: 426/455/456/457/461/462/561/629).",
+   "question": "Kurumlar arası yatay geçiş başvurusu için hangi belgeler gerekiyor?",
+   "answer": "Kurumlar arası yatay geçiş başvurularında istenen belgeler, başvuru koşulları ve ilgili yönergeler için İstanbul Üniversitesi Öğrenci İşleri Daire Başkanlığının güncel duyurularını incelemeniz gerekmektedir. Güncel bilgi ve belge listelerine https://ogrenci.istanbul.edu.tr/tr/_ adresinden ulaşabilirsiniz. AUZEF’e yatay geçiş hakkı kazanan öğrencilerin kesin kayıt ve muafiyet süreçleri için auzef.istanbul.edu.tr adresinde yayımlanan güncel yatay geçiş duyuruları takip edilmelidir.",
+   "tags": [
+    "YENI_KAYIT-YATAY_GECIS-BILGI"
+   ],
+   "tag_source": "455/456/457 ile aynı etiket",
+   "queries": [
+    "Kurumlar arası yatay geçiş belgeleri nelerdir?",
+    "Kurumlar arası yatay geçiş başvuru koşulları nelerdir?",
+    "Kurumlar arası yatay geçiş için hangi evraklar isteniyor?",
+    "Kurumlar arası yatay geçiş başvurusu nasıl yapılır?"
+   ]
+  },
+  {
+   "key": "mezuniyet-belgesi-basvuru",
+   "source_section": "A4-1, A4-2, A4-3, A4-4; aksiyon 'Ayrı ... QnA eklensin'",
+   "reason": "Form aksiyonu (işaretli).",
+   "question": "Mezuniyet belgesi almak için başvuru yapmam veya belge teslim etmem gerekiyor mu?",
+   "answer": "Mezuniyet belgesi almak için ayrıca AUZEF’e başvuru yapmanıza gerek bulunmamaktadır. Mezuniyet şartlarını sağladığınızda mezuniyet işlemleriniz sistem üzerinden otomatik olarak başlatılır. Herhangi bir belge yüklemeniz veya teslim etmeniz gerekmez. Mezuniyet işlemleriniz tamamlandıktan sonra belgenizi AKSİS üzerinden talep edebilir veya e-Devlet üzerinden alabilirsiniz.",
+   "tags": [
+    "BELGE_TALEBI-DIGER-DESTEK"
+   ],
+   "tag_source": "382 ile aynı etiket",
+   "queries": [
+    "Mezuniyet belgesi için başvuru yapmam gerekiyor mu?",
+    "Mezuniyet belgesi için hangi evrakları vermeliyim?",
+    "Mezuniyet için belge yüklemem gerekiyor mu?",
+    "Mezuniyet belgemi nasıl alabilirim?",
+    "Mezun olmak için ayrıca başvuru yapmam gerekir mi?",
+    "Mezuniyet belgesi için belge teslim etmem gerekir mi?"
+   ]
+  },
+  {
+   "key": "cift-anadal",
+   "source_section": "A5-1 (Hayır), A5-2, A5-3 (Mevcut değil)",
+   "reason": "Öncül düzeltme; başvuru şartı yok.",
+   "question": "AUZEF'te çift anadal programı var mı?",
+   "answer": "AUZEF programlarında çift anadal uygulaması bulunmamaktadır.",
+   "tags": [
+    "YENI_KAYIT-KAYIT_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "411 (aynı anda iki program) ile aynı etiket",
+   "queries": [
+    "Çift anadal yapabilir miyim?",
+    "ÇAP var mı?",
+    "Çift anadal başvurusu nasıl yapılır?",
+    "Çift anadal şartları nelerdir?",
+    "AUZEF'te çift ana dal yapılabiliyor mu?"
+   ]
+  },
+  {
+   "key": "p1-yurt",
+   "source_section": "B1",
+   "reason": "Kurum cevabı formda; mevcut KB'de aynı semantiği taşıyan kayıt yok (audit).",
+   "question": "AUZEF öğrencileri yurttan yararlanabiliyor mu?",
+   "answer": "Gençlik ve Spor Bakanlığı yurtlarından yararlanabilmek için örgün öğretim programına kayıtlı olma şartı bulunmaktadır. Bu nedenle AUZEF öğrencileri normal yurt başvurusu kapsamında bu imkândan yararlanamamaktadır. Ayrıntılı bilgi için: https://kygm.gsb.gov.tr/Sayfalar/2438/2389/Barinma",
+   "tags": [
+    "YENI_KAYIT-KAYIT_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "en yakın mevcut kayıtla aynı etiket (416 / 578)",
+   "queries": [
+    "KYK yurduna başvurabilir miyim?",
+    "AUZEF öğrencisi olarak devlet yurdunda kalabilir miyim?",
+    "Açıköğretim öğrencileri yurt imkânından yararlanabilir mi?",
+    "Yurt başvurusu yapabilir miyim?"
+   ]
+  },
+  {
+   "key": "p1-spor",
+   "source_section": "B2",
+   "reason": "Kurum cevabı formda; mevcut KB'de aynı semantiği taşıyan kayıt yok (audit).",
+   "question": "Üniversitenin spor salonunu kullanabilir miyim?",
+   "answer": "Spor tesislerinden yararlanma ile ilgili talepleriniz için AUZEF Çözüm Merkezi üzerinden (https://auzefcozum.istanbul.edu.tr) talep oluşturabilirsiniz.",
+   "tags": [
+    "YENI_KAYIT-KAYIT_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "en yakın mevcut kayıtla aynı etiket (416 / 578)",
+   "queries": [
+    "Spor tesislerinden yararlanabilir miyim?",
+    "AUZEF öğrencileri spor salonuna girebilir mi?",
+    "Üniversitenin spor imkânlarından faydalanabilir miyim?"
+   ]
+  },
+  {
+   "key": "p1-kulup",
+   "source_section": "B3",
+   "reason": "Kurum cevabı formda; mevcut KB'de aynı semantiği taşıyan kayıt yok (audit).",
+   "question": "Öğrenci kulüplerine nasıl üye olabilirim?",
+   "answer": "Öğrenci kulüplerine üyelik ile ilgili talepleriniz için AUZEF Çözüm Merkezi üzerinden (https://auzefcozum.istanbul.edu.tr) talep oluşturabilirsiniz.",
+   "tags": [
+    "YENI_KAYIT-KAYIT_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "en yakın mevcut kayıtla aynı etiket (416 / 578)",
+   "queries": [
+    "Öğrenci kulübüne katılabilir miyim?",
+    "AUZEF öğrencileri kulüplere üye olabilir mi?",
+    "Kulüp üyeliği için nereye başvurmalıyım?"
+   ]
+  },
+  {
+   "key": "p1-psikolojik",
+   "source_section": "B4",
+   "reason": "Kurum cevabı formda; mevcut KB'de aynı semantiği taşıyan kayıt yok (audit).",
+   "question": "Psikolojik danışmanlık hizmeti alabilir miyim?",
+   "answer": "AUZEF öğrencilerine psikolojik danışmanlık hizmeti verilmemektedir.",
+   "tags": [
+    "YENI_KAYIT-KAYIT_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "en yakın mevcut kayıtla aynı etiket (416 / 578)",
+   "queries": [
+    "Psikolojik destek alabilir miyim?",
+    "Psikolojik danışmanlık hizmeti var mı?",
+    "AUZEF'te psikolojik danışman var mı?"
+   ]
+  },
+  {
+   "key": "p1-erasmus",
+   "source_section": "B5",
+   "reason": "Kurum cevabı formda; mevcut KB'de aynı semantiği taşıyan kayıt yok (audit).",
+   "question": "Erasmus programına başvurabilir miyim?",
+   "answer": "AUZEF bünyesinde Erasmus imkânı bulunmamaktadır.",
+   "tags": [
+    "YENI_KAYIT-KAYIT_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "en yakın mevcut kayıtla aynı etiket (416 / 578)",
+   "queries": [
+    "AUZEF'te Erasmus var mı?",
+    "Erasmus başvurusu nasıl yapılır?",
+    "Erasmus'a katılabilir miyim?"
+   ]
+  },
+  {
+   "key": "p1-burs",
+   "source_section": "B6",
+   "reason": "Kurum cevabı formda; mevcut KB'de aynı semantiği taşıyan kayıt yok (audit).",
+   "question": "Burs başvurusu nasıl yapılır?",
+   "answer": "AUZEF bünyesinde burs imkânı bulunmamaktadır.",
+   "tags": [
+    "YENI_KAYIT-KAYIT_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "en yakın mevcut kayıtla aynı etiket (416 / 578)",
+   "queries": [
+    "AUZEF burs veriyor mu?",
+    "Burs imkânı var mı?",
+    "Burs almak için nereye başvurmalıyım?"
+   ]
+  },
+  {
+   "key": "p1-toren",
+   "source_section": "B7",
+   "reason": "Kurum cevabı formda; mevcut KB'de aynı semantiği taşıyan kayıt yok (audit).",
+   "question": "Mezuniyet töreni ne zaman yapılacak?",
+   "answer": "AUZEF bünyesinde mezuniyet töreni yapılmamaktadır.",
+   "tags": [
+    "MEZUNIYET_STAJ_YAZ_OKULU-MEZUNIYET_BILGILENDIRMESI-BILGI"
+   ],
+   "tag_source": "en yakın mevcut kayıtla aynı etiket (416 / 578)",
+   "queries": [
+    "Mezuniyet töreni yapılıyor mu?",
+    "AUZEF'te mezuniyet töreni var mı?",
+    "Mezuniyet törenine katılabilir miyim?"
+   ]
+  }
+ ],
+ "deactivate_qna": [
+  {
+   "db_id": 396,
+   "expected_old_question_sha256": "e96579360f5b8e98a5272fac134351f5b1d8ae3737c4633c00cbbc162e2f17b8",
+   "expected_old_answer_sha256": "4201bff569476ad0dd731478a87156485d056a03dcb4b2cdc41bb14b2a5ad089",
+   "merge_into": 584,
+   "source_section": "A1-4 (Birleştirilmeli); DQ-3",
+   "reason": "Programa özel ya da liste sorusu, cevabı genel staj yönlendirmesiyle birebir aynı (answer sha256 4201bff56947); içerik ve alias'lar 584'te. Benzersiz bilgi yok."
+  },
+  {
+   "db_id": 397,
+   "expected_old_question_sha256": "3644d6e4304582ed683d95efdaca047fb4a2ec7c6fdaec52a183fcca7c26d5cf",
+   "expected_old_answer_sha256": "4201bff569476ad0dd731478a87156485d056a03dcb4b2cdc41bb14b2a5ad089",
+   "merge_into": 584,
+   "source_section": "A1-4 (Birleştirilmeli); DQ-3",
+   "reason": "Programa özel ya da liste sorusu, cevabı genel staj yönlendirmesiyle birebir aynı (answer sha256 4201bff56947); içerik ve alias'lar 584'te. Benzersiz bilgi yok."
+  },
+  {
+   "db_id": 400,
+   "expected_old_question_sha256": "f5f92a6674283d0ce11333600f0cf58a85514063cdcc2e16e68a1c9d75e50d08",
+   "expected_old_answer_sha256": "4201bff569476ad0dd731478a87156485d056a03dcb4b2cdc41bb14b2a5ad089",
+   "merge_into": 584,
+   "source_section": "A1-4 (Birleştirilmeli); DQ-3",
+   "reason": "Programa özel ya da liste sorusu, cevabı genel staj yönlendirmesiyle birebir aynı (answer sha256 4201bff56947); içerik ve alias'lar 584'te. Benzersiz bilgi yok."
+  },
+  {
+   "db_id": 401,
+   "expected_old_question_sha256": "774a63b5a78b28dc60ca00af38cd00c8352ebb5381e1f41aa72f8dd477f6f1ee",
+   "expected_old_answer_sha256": "4201bff569476ad0dd731478a87156485d056a03dcb4b2cdc41bb14b2a5ad089",
+   "merge_into": 584,
+   "source_section": "A1-4 (Birleştirilmeli); DQ-3",
+   "reason": "Programa özel ya da liste sorusu, cevabı genel staj yönlendirmesiyle birebir aynı (answer sha256 4201bff56947); içerik ve alias'lar 584'te. Benzersiz bilgi yok."
+  },
+  {
+   "db_id": 406,
+   "expected_old_question_sha256": "c754d78a3e72d24e5ce6dcc2a3a8493143e59f078b2b57a755eaff880dbb20ee",
+   "expected_old_answer_sha256": "4201bff569476ad0dd731478a87156485d056a03dcb4b2cdc41bb14b2a5ad089",
+   "merge_into": 584,
+   "source_section": "A1-4 (Birleştirilmeli); DQ-3",
+   "reason": "Programa özel ya da liste sorusu, cevabı genel staj yönlendirmesiyle birebir aynı (answer sha256 4201bff56947); içerik ve alias'lar 584'te. Benzersiz bilgi yok."
+  }
+ ],
+ "query_changes": [
+  {
+   "from_db_id": 629,
+   "to_db_id": 455,
+   "text": "Yatay geçiş",
+   "text_sha256": "427eadfe5844e57373c7ae4f21378bc8a3f3ee09687453d2716213b66385c655",
+   "source_section": "A3 (mevcut durum + aksiyon)",
+   "reason": "tür belirtmeyen genel yatay geçiş alias'ı merkezi kayıttan genel kayda"
+  },
+  {
+   "from_db_id": 629,
+   "to_db_id": 455,
+   "text": "Yatay geçiş nasıl yaparım",
+   "text_sha256": "e58783af6f1e04f859db026c4bf9d8a2dcf926f43e19c84b16f098f4332be18f",
+   "source_section": "A3 (mevcut durum + aksiyon)",
+   "reason": "tür belirtmeyen genel yatay geçiş alias'ı merkezi kayıttan genel kayda"
+  },
+  {
+   "from_db_id": 629,
+   "to_db_id": 455,
+   "text": "Yatay geçiş yapmak istiyorum",
+   "text_sha256": "862835f9adbdd597c4550bd6e6c6ba2852df5208011064fc4865088ffa270b90",
+   "source_section": "A3 (mevcut durum + aksiyon)",
+   "reason": "tür belirtmeyen genel yatay geçiş alias'ı merkezi kayıttan genel kayda"
+  },
+  {
+   "from_db_id": 629,
+   "to_db_id": 455,
+   "text": "merhaba yatay geçiş bitti mi",
+   "text_sha256": "ac29563cf3f2c8ffbe90637b6316741bec9fa066aaf0641ab2c9559b4c8dfc1f",
+   "source_section": "A3 (mevcut durum + aksiyon)",
+   "reason": "tür belirtmeyen genel yatay geçiş alias'ı merkezi kayıttan genel kayda"
+  }
+ ],
+ "data_quality": [],
+ "data_quality_closed": [
+  {
+   "id": "DQ-3",
+   "closed_by": "A1-4 'Birleştirilmeli'",
+   "mutation": "396/397/400/401/406 → 584"
+  },
+  {
+   "id": "DQ-6",
+   "closed_by": "A2-1, A2-2",
+   "mutation": "552 question + answer"
+  }
+ ],
+ "conscious_backlog": [
+  {
+   "id": "P2-C1",
+   "topic": "Kampüste otopark var mı?",
+   "status": "CONSCIOUS_PILOT_NONE",
+   "benchmark": [
+    "C13"
+   ],
+   "reason": "Formda kurum cevabı yok; yeni cevap/QnA eklenmedi. Pilotu bloke etmez."
+  },
+  {
+   "id": "P2-C2",
+   "topic": "Diploma ekini İngilizce alabilir miyim?",
+   "status": "CONSCIOUS_PILOT_NONE",
+   "benchmark": [
+    "C05"
+   ],
+   "reason": "Formda kurum cevabı yok."
+  },
+  {
+   "id": "P2-C3",
+   "topic": "Sınavda sözlük kullanabilir miyim?",
+   "status": "CONSCIOUS_PILOT_NONE",
+   "benchmark": [
+    "C06"
+   ],
+   "reason": "Formda kurum cevabı yok."
+  },
+  {
+   "id": "P2-C4",
+   "topic": "Yatay geçiş kontenjanları ne kadar?",
+   "status": "CONSCIOUS_PILOT_NONE",
+   "benchmark": [
+    "F05"
+   ],
+   "reason": "Formda kurum cevabı yok; mevcut 457/455/629 duyuru yönlendirmeleri değiştirilmedi."
+  },
+  {
+   "id": "DQ-1",
+   "topic": "Sınav merkezi sayısı: 468 '112' vs 331 '130'",
+   "status": "CONSCIOUS_BACKLOG",
+   "benchmark": [
+    "A05",
+    "A06"
+   ],
+   "reason": "Formda karar yok; tahmin edilmedi. Çelişki DB'de görünür kalıyor."
+  },
+  {
+   "id": "DQ-2",
+   "topic": "Öğrenci Durum Belgesi tanımı: 337 vs 438",
+   "status": "CONSCIOUS_BACKLOG",
+   "benchmark": [],
+   "reason": "Formda karar yok."
+  },
+  {
+   "id": "DQ-5",
+   "topic": "636 kayıt yenileme / harç tarihi kapsamı",
+   "status": "CONSCIOUS_BACKLOG",
+   "benchmark": [
+    "A18"
+   ],
+   "reason": "Formda karar yok."
+  },
+  {
+   "id": "DQ-4",
+   "topic": "586 tekrar eden paragraf",
+   "status": "CONSCIOUS_BACKLOG",
+   "benchmark": [],
+   "reason": "586'da ilk paragraf tırnak içinde ikinci kez tekrar ediyor; kopya birebir değil (tek fark: 'Detaylı bilgiler' yerine 'Detaylı ilgiler' yazım hatası) ve bağlantı iki kez yazılmış. Temizlik yalnız birebir tekrar için yetkilendirildiği için uygulanmadı.",
+   "db_ids": [
+    586
+   ]
+  },
+  {
+   "id": "DQ-7",
+   "topic": "Eski ücret bağlantısı: 345 (SSİÜ harç) hâlâ donem-baslangici/materyal-ucretleri",
+   "status": "CONSCIOUS_BACKLOG",
+   "benchmark": [
+    "E06"
+   ],
+   "db_ids": [
+    345
+   ],
+   "reason": "Bu apply ile 552 resmî kaynağı 'Aday Öğrenci > Ücretler' olarak adlandırıyor; 345 eski bağlantıyı koruyor. Form 345'i kapsamadığı için değiştirilmedi (aktif KB taraması: eski ücret sayfasını yalnız 345 kullanıyor; 360'taki donem-baslangici bağlantısı farklı bir sayfa)."
+  }
+ ]
+}

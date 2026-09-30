@@ -73,9 +73,13 @@ class DecisionTrace:
     # availability (available/unavailable/skipped, distinct from result
     # count) and retrieval_ms on every retrieval entry. Additive only: no v6
     # field was removed or re-interpreted.
-    schema_version: int = field(default=7, init=False)
+    # v8: pilot evaluation join + selector prompt identity: request.user_message_id
+    # (the stored conversation_messages row of this turn) and per-selector
+    # prompt_version / prompt_fingerprint. Additive only.
+    schema_version: int = field(default=8, init=False)
     endpoint: str
     conversation_id: Optional[int] = None
+    user_message_id: Optional[int] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: str = field(default_factory=utc_now_iso)
     started_at: float = field(default_factory=time.perf_counter, repr=False)
@@ -300,6 +304,7 @@ class DecisionTrace:
                 "model_error": outcome == "model_error",
                 "timeout": outcome == "timeout",
                 "failure_category": invocation.failure_category if invocation else None,
+                **_selector_prompt_identity(),
                 "latency_ms": invocation.latency_ms if invocation else None,
                 "provider_metadata": (
                     invocation.metadata.to_trace_dict() if invocation else None
@@ -413,6 +418,7 @@ class DecisionTrace:
                 "request": {
                     "request_id": self.request_id,
                     "conversation_id": self.conversation_id,
+                    "user_message_id": self.user_message_id,
                     "timestamp": self.timestamp,
                     "endpoint": self.endpoint,
                     "llm_enabled": self.llm_enabled,
@@ -460,6 +466,17 @@ def _not_called_entry(purpose: str, outcome: str) -> dict:
         "latency_ms": None,
         "usage": None,
     }
+
+
+def _selector_prompt_identity() -> dict:
+    """The selector prompt this runtime serves (same resolver the selector uses)."""
+    try:
+        from services.selector_prompt_catalog import resolve_selector_prompt
+
+        prompt = resolve_selector_prompt()
+        return {"prompt_version": prompt.version, "prompt_fingerprint": prompt.fingerprint}
+    except Exception:
+        return {"prompt_version": "unresolved", "prompt_fingerprint": None}
 
 
 def _usage(invocation) -> Optional[dict]:

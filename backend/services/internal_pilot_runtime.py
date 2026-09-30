@@ -27,7 +27,8 @@ import ast
 from pathlib import Path
 from typing import Mapping, Optional
 
-from services.internal_pilot_candidate import (
+# The served pilot prompt follows the current pilot candidate (amendment 6).
+from services.internal_pilot_amendment6 import (
     SELECTOR_PROMPT_FINGERPRINT,
     SELECTOR_PROMPT_VERSION as PILOT_PROMPT_VERSION,
 )
@@ -56,8 +57,8 @@ from services.selector_prompt_catalog import (
 #: pilot stack will resolve, not whatever happens to be in the caller's shell.
 PILOT_ENV_FILE = Path("deploy") / "internal-pilot" / "pilot.env.example"
 
-# The pilot serves the amendment-5 candidate prompt (variant_a_v2). The
-# original freeze and amendments 1-4 keep recording variant_a_v1 as history.
+# The pilot serves the amendment-6 candidate prompt (variant_a_v3_contract).
+# The original freeze and amendments 1-5 keep recording older prompts as history.
 REQUIRED_TRACE_REQUEST_FIELDS = ("request_id", "conversation_id", "timestamp")
 REQUIRED_TRACE_SOURCES = ("calendar", "meili", "qdrant")
 
